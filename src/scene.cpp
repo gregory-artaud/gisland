@@ -36,13 +36,13 @@ public:
 
     return std::visit(
         [this, depth, &path](const auto &primitive) {
-          return validate_primitive(primitive, depth, path);
+          return this->validate_primitive(primitive, depth, path);
         },
         node.value);
   }
 
 private:
-  [[nodiscard]] static SceneValidation validate_primitive(const Text &text, std::size_t,
+  [[nodiscard]] static SceneValidation validate_primitive(const Text &text, std::size_t /*depth*/,
                                                           const std::string &path) {
     if (text.value.size() > maximum_text_bytes) {
       return std::unexpected(SceneError{SceneErrorCode::text_too_long, path + "/value"});
@@ -50,18 +50,19 @@ private:
     return {};
   }
 
-  [[nodiscard]] static SceneValidation validate_primitive(const Icon &, std::size_t,
-                                                          const std::string &) {
+  [[nodiscard]] static SceneValidation
+  validate_primitive(const Icon & /*icon*/, std::size_t /*depth*/, const std::string & /*path*/) {
     return {};
   }
 
-  [[nodiscard]] static SceneValidation validate_primitive(const Spacer &, std::size_t,
-                                                          const std::string &) {
+  [[nodiscard]] static SceneValidation validate_primitive(const Spacer & /*spacer*/,
+                                                          std::size_t /*depth*/,
+                                                          const std::string & /*path*/) {
     return {};
   }
 
-  [[nodiscard]] static SceneValidation validate_primitive(const Progress &progress, std::size_t,
-                                                          const std::string &path) {
+  [[nodiscard]] static SceneValidation
+  validate_primitive(const Progress &progress, std::size_t /*depth*/, const std::string &path) {
     if (!std::isfinite(progress.value) || progress.value < 0.0 || progress.value > 1.0) {
       return std::unexpected(SceneError{SceneErrorCode::invalid_progress, path + "/value"});
     }

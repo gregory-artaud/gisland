@@ -20,6 +20,9 @@ using Json = nlohmann::json;
   return ProtocolError{std::move(path), std::move(message)};
 }
 
+// The two arguments intentionally share a type: one is the existing JSON pointer and the other
+// is the statically selected child field.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 [[nodiscard]] std::string field_path(std::string_view parent, std::string_view field) {
   std::string path{parent};
   path += '/';

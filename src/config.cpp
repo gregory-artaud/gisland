@@ -55,7 +55,10 @@ convert_option_table(const toml::table &table, const std::string &path,
   ConfigValue::Table result;
   for (const auto &[key, node] : table) {
     const std::string key_string{key.str()};
-    auto value = convert_option(node, path + "." + key_string, source_name);
+    std::string option_path{path};
+    option_path += '.';
+    option_path += key_string;
+    auto value = convert_option(node, option_path, source_name);
     if (!value.has_value()) {
       return std::unexpected(value.error());
     }
@@ -98,13 +101,13 @@ convert_option(const toml::node &node, const std::string &path, std::string_view
     return ConfigValue{std::move(*value)};
   }
   case toml::node_type::string:
-    return ConfigValue{*node.value_exact<std::string>()};
+    return ConfigValue{node.ref<std::string>()};
   case toml::node_type::integer:
-    return ConfigValue{*node.value_exact<std::int64_t>()};
+    return ConfigValue{node.ref<std::int64_t>()};
   case toml::node_type::floating_point:
-    return ConfigValue{*node.value_exact<double>()};
+    return ConfigValue{node.ref<double>()};
   case toml::node_type::boolean:
-    return ConfigValue{*node.value_exact<bool>()};
+    return ConfigValue{node.ref<bool>()};
   case toml::node_type::date:
   case toml::node_type::time:
   case toml::node_type::date_time:

@@ -42,8 +42,8 @@ TEST_CASE("scene node count is bounded") {
   for (int index = 0; index < 255; ++index) {
     maximum_children.emplace_back(gisland::Spacer{});
   }
-  CHECK(gisland::validate_scene(gisland::SceneNode{gisland::Row{std::move(maximum_children)}})
-            .has_value());
+  const gisland::SceneNode maximum_scene{gisland::Row{std::move(maximum_children)}};
+  CHECK(gisland::validate_scene(maximum_scene).has_value());
 
   std::vector<gisland::SceneNode> too_many_children;
   too_many_children.reserve(256);

@@ -36,7 +36,8 @@ TEST_CASE("a publish line is parsed into typed scenes") {
   CHECK(publish->context_id == "clock");
   CHECK(publish->priority == 7);
   REQUIRE(publish->expires_in.has_value());
-  CHECK(*publish->expires_in == std::chrono::milliseconds{1500});
+  CHECK(publish->expires_in.value_or(std::chrono::milliseconds{-1}) ==
+        std::chrono::milliseconds{1500});
 
   const auto *compact = std::get_if<gisland::Text>(&publish->compact.value);
   REQUIRE(compact != nullptr);
@@ -45,7 +46,9 @@ TEST_CASE("a publish line is parsed into typed scenes") {
   CHECK(compact->truncation == "end");
 
   REQUIRE(publish->expanded.has_value());
-  const auto *expanded = std::get_if<gisland::Column>(&publish->expanded->value);
+  const auto expanded_scene =
+      publish->expanded.value_or(gisland::SceneNode{gisland::Text{"missing", "body"}});
+  const auto *expanded = std::get_if<gisland::Column>(&expanded_scene.value);
   REQUIRE(expanded != nullptr);
   REQUIRE(expanded->children.size() == 1);
   CHECK(std::holds_alternative<gisland::Text>(expanded->children.front()->value));
