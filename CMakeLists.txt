@@ -60,6 +60,7 @@ endif()
 add_library(
   gisland_app STATIC
   src/application.cpp
+  src/context.cpp
   src/protocol.cpp
   src/scene.cpp
 )
@@ -82,6 +83,7 @@ if(BUILD_TESTING)
   add_executable(
     gisland_tests
     tests/application_config_test.cpp
+    tests/context_test.cpp
     tests/protocol_test.cpp
     tests/scene_test.cpp
   )
@@ -96,13 +98,16 @@ endif()
 set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
+  include/gisland/context.hpp
   include/gisland/protocol.hpp
   include/gisland/scene.hpp
   src/application.cpp
+  src/context.cpp
   src/main.cpp
   src/protocol.cpp
   src/scene.cpp
   tests/application_config_test.cpp
+  tests/context_test.cpp
   tests/protocol_test.cpp
   tests/scene_test.cpp
 )
