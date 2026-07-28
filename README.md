@@ -108,6 +108,15 @@ ctest --preset tidy
 
 clang-tidy is opt-in and is not required for normal builds.
 
+## Foundation Architecture
+
+External TOML configuration and JSONL module messages stop at explicit parser boundaries. Valid
+input becomes typed configuration, protocol, and scene values before later process, layout, or
+rendering layers consume it. Scene validation enforces bounded depth, node count, text size,
+progress values, and action IDs. Context selection is independent of raylib and uses an injected
+monotonic time point for deterministic priority, recency, expiration, dismissal, and default
+fallback behavior.
+
 ## Repository Layout
 
 ```text

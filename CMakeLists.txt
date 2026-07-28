@@ -25,9 +25,46 @@ FetchContent_Declare(
   SYSTEM
   EXCLUDE_FROM_ALL
 )
-FetchContent_MakeAvailable(raylib)
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.12.0
+  GIT_SHALLOW TRUE
+  SYSTEM
+  EXCLUDE_FROM_ALL
+)
+FetchContent_Declare(
+  tomlplusplus
+  GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+  GIT_TAG v3.4.0
+  GIT_SHALLOW TRUE
+  SYSTEM
+  EXCLUDE_FROM_ALL
+)
+if(BUILD_TESTING)
+  FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.8.1
+    GIT_SHALLOW TRUE
+    SYSTEM
+    EXCLUDE_FROM_ALL
+  )
+endif()
 
-add_library(gisland_app STATIC src/application.cpp)
+FetchContent_MakeAvailable(raylib nlohmann_json tomlplusplus)
+if(BUILD_TESTING)
+  FetchContent_MakeAvailable(Catch2)
+endif()
+
+add_library(
+  gisland_app STATIC
+  src/application.cpp
+  src/config.cpp
+  src/context.cpp
+  src/protocol.cpp
+  src/scene.cpp
+)
 add_library(gisland::app ALIAS gisland_app)
 target_compile_features(gisland_app PUBLIC cxx_std_23)
 target_include_directories(
@@ -35,7 +72,13 @@ target_include_directories(
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
-target_link_libraries(gisland_app PRIVATE raylib)
+target_link_libraries(
+  gisland_app
+  PRIVATE
+    raylib
+    nlohmann_json::nlohmann_json
+    tomlplusplus::tomlplusplus
+)
 gisland_set_project_options(gisland_app)
 
 add_executable(gisland src/main.cpp)
@@ -44,19 +87,40 @@ target_link_libraries(gisland PRIVATE gisland::app)
 gisland_set_project_options(gisland)
 
 if(BUILD_TESTING)
-  add_executable(gisland_tests tests/application_test.cpp)
+  add_executable(
+    gisland_tests
+    tests/application_config_test.cpp
+    tests/config_test.cpp
+    tests/context_test.cpp
+    tests/protocol_test.cpp
+    tests/scene_test.cpp
+  )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
-  target_link_libraries(gisland_tests PRIVATE gisland::app)
+  target_link_libraries(gisland_tests PRIVATE gisland::app Catch2::Catch2WithMain)
   gisland_set_project_options(gisland_tests)
-  add_test(NAME application_config COMMAND gisland_tests)
+  list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+  include(Catch)
+  catch_discover_tests(gisland_tests DISCOVERY_MODE PRE_TEST)
 endif()
 
 set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
+  include/gisland/config.hpp
+  include/gisland/context.hpp
+  include/gisland/protocol.hpp
+  include/gisland/scene.hpp
   src/application.cpp
+  src/config.cpp
+  src/context.cpp
   src/main.cpp
-  tests/application_test.cpp
+  src/protocol.cpp
+  src/scene.cpp
+  tests/application_config_test.cpp
+  tests/config_test.cpp
+  tests/context_test.cpp
+  tests/protocol_test.cpp
+  tests/scene_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)
