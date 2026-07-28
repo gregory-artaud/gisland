@@ -60,6 +60,7 @@ endif()
 add_library(
   gisland_app STATIC
   src/application.cpp
+  src/config.cpp
   src/context.cpp
   src/protocol.cpp
   src/scene.cpp
@@ -71,7 +72,13 @@ target_include_directories(
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
-target_link_libraries(gisland_app PRIVATE raylib nlohmann_json::nlohmann_json)
+target_link_libraries(
+  gisland_app
+  PRIVATE
+    raylib
+    nlohmann_json::nlohmann_json
+    tomlplusplus::tomlplusplus
+)
 gisland_set_project_options(gisland_app)
 
 add_executable(gisland src/main.cpp)
@@ -83,6 +90,7 @@ if(BUILD_TESTING)
   add_executable(
     gisland_tests
     tests/application_config_test.cpp
+    tests/config_test.cpp
     tests/context_test.cpp
     tests/protocol_test.cpp
     tests/scene_test.cpp
@@ -98,15 +106,18 @@ endif()
 set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
+  include/gisland/config.hpp
   include/gisland/context.hpp
   include/gisland/protocol.hpp
   include/gisland/scene.hpp
   src/application.cpp
+  src/config.cpp
   src/context.cpp
   src/main.cpp
   src/protocol.cpp
   src/scene.cpp
   tests/application_config_test.cpp
+  tests/config_test.cpp
   tests/context_test.cpp
   tests/protocol_test.cpp
   tests/scene_test.cpp
