@@ -57,7 +57,11 @@ if(BUILD_TESTING)
   FetchContent_MakeAvailable(Catch2)
 endif()
 
-add_library(gisland_app STATIC src/application.cpp)
+add_library(
+  gisland_app STATIC
+  src/application.cpp
+  src/scene.cpp
+)
 add_library(gisland::app ALIAS gisland_app)
 target_compile_features(gisland_app PUBLIC cxx_std_23)
 target_include_directories(
@@ -74,7 +78,11 @@ target_link_libraries(gisland PRIVATE gisland::app)
 gisland_set_project_options(gisland)
 
 if(BUILD_TESTING)
-  add_executable(gisland_tests tests/application_config_test.cpp)
+  add_executable(
+    gisland_tests
+    tests/application_config_test.cpp
+    tests/scene_test.cpp
+  )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(gisland_tests PRIVATE gisland::app Catch2::Catch2WithMain)
   gisland_set_project_options(gisland_tests)
@@ -86,9 +94,12 @@ endif()
 set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
+  include/gisland/scene.hpp
   src/application.cpp
   src/main.cpp
+  src/scene.cpp
   tests/application_config_test.cpp
+  tests/scene_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)
