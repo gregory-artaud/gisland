@@ -15,6 +15,7 @@ using SceneChild = std::shared_ptr<const SceneNode>;
 struct Text {
   std::string value;
   std::string role;
+  std::string truncation{"end"};
 };
 
 struct Icon {
