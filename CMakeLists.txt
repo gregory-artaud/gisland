@@ -74,9 +74,10 @@ target_include_directories(
 )
 target_link_libraries(
   gisland_app
+  PUBLIC
+    nlohmann_json::nlohmann_json
   PRIVATE
     raylib
-    nlohmann_json::nlohmann_json
     tomlplusplus::tomlplusplus
 )
 gisland_set_project_options(gisland_app)
@@ -92,6 +93,7 @@ if(BUILD_TESTING)
     tests/application_config_test.cpp
     tests/config_test.cpp
     tests/context_test.cpp
+    tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/scene_test.cpp
   )
@@ -119,6 +121,7 @@ set(
   tests/application_config_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
+  tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/scene_test.cpp
 )

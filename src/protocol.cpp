@@ -8,7 +8,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace gisland {
@@ -432,6 +434,57 @@ std::expected<ModuleMessage, ProtocolError> parse_module_message(std::string_vie
     return parse_dismiss(object);
   }
   return std::unexpected(error_at("/type", "unknown message type"));
+}
+
+std::string serialize_core_message(const CoreMessage &message) {
+  const auto object = std::visit(
+      [](const auto &typed_message) -> Json {
+        using Message = std::remove_cvref_t<decltype(typed_message)>;
+        if constexpr (std::is_same_v<Message, InitMessage>) {
+          return Json{
+              {"type", "init"},
+              {"protocol",
+               {{"minimum",
+                 {{"major", typed_message.minimum.major}, {"minor", typed_message.minimum.minor}}},
+                {"maximum",
+                 {{"major", typed_message.maximum.major}, {"minor", typed_message.maximum.minor}}}}},
+              {"instance_id", typed_message.instance_id},
+              {"capabilities", typed_message.capabilities},
+              {"configuration", typed_message.configuration},
+              {"locale", typed_message.locale},
+              {"timezone", typed_message.timezone},
+          };
+        } else if constexpr (std::is_same_v<Message, ActionMessage>) {
+          Json action{{"type", "action"}, {"action_id", typed_message.action_id}};
+          if (typed_message.value.has_value()) {
+            action["value"] = *typed_message.value;
+          }
+          return action;
+        } else if constexpr (std::is_same_v<Message, VisibilityMessage>) {
+          std::string_view value;
+          switch (typed_message.value) {
+          case Visibility::hidden:
+            value = "hidden";
+            break;
+          case Visibility::compact_active:
+            value = "compact-active";
+            break;
+          case Visibility::expanded_active:
+            value = "expanded-active";
+            break;
+          }
+          return Json{{"type", "visibility"}, {"visibility", value}};
+        } else {
+          static_assert(std::is_same_v<Message, ShutdownMessage>);
+          return Json{
+              {"type", "shutdown"},
+              {"reason", typed_message.reason},
+              {"deadline_ms", typed_message.deadline.count()},
+          };
+        }
+      },
+      message);
+  return object.dump() + '\n';
 }
 
 } // namespace gisland
