@@ -62,8 +62,11 @@ add_library(
   src/application.cpp
   src/config.cpp
   src/context.cpp
+  src/line_buffer.cpp
+  src/module_lifecycle.cpp
   src/protocol.cpp
   src/scene.cpp
+  src/write_queue.cpp
 )
 add_library(gisland::app ALIAS gisland_app)
 target_compile_features(gisland_app PUBLIC cxx_std_23)
@@ -93,9 +96,12 @@ if(BUILD_TESTING)
     tests/application_config_test.cpp
     tests/config_test.cpp
     tests/context_test.cpp
+    tests/line_buffer_test.cpp
+    tests/module_lifecycle_test.cpp
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/scene_test.cpp
+    tests/write_queue_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(gisland_tests PRIVATE gisland::app Catch2::Catch2WithMain)
@@ -110,20 +116,29 @@ set(
   include/gisland/application.hpp
   include/gisland/config.hpp
   include/gisland/context.hpp
+  include/gisland/line_buffer.hpp
+  include/gisland/module_lifecycle.hpp
   include/gisland/protocol.hpp
   include/gisland/scene.hpp
+  include/gisland/write_queue.hpp
   src/application.cpp
   src/config.cpp
   src/context.cpp
+  src/line_buffer.cpp
   src/main.cpp
+  src/module_lifecycle.cpp
   src/protocol.cpp
   src/scene.cpp
+  src/write_queue.cpp
   tests/application_config_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
+  tests/line_buffer_test.cpp
+  tests/module_lifecycle_test.cpp
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/scene_test.cpp
+  tests/write_queue_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)
