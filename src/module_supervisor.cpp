@@ -3,7 +3,7 @@
 #include "gisland/line_buffer.hpp"
 #include "gisland/write_queue.hpp"
 
-#include <signal.h>
+#include <csignal>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
@@ -45,6 +45,7 @@ constexpr std::size_t violation_limit = 10;
 constexpr std::size_t consecutive_violation_limit = 3;
 constexpr auto violation_window = 60s;
 constexpr auto maximum_poll_interval = 20ms;
+constexpr std::size_t io_buffer_bytes = std::size_t{16} * 1024U;
 
 struct StartCommand {
   ModuleStartRequest request;
@@ -172,7 +173,7 @@ public:
     {
       const std::lock_guard command_lock{command_mutex_};
       accepting_commands_ = false;
-      commands_.push_back(ShutdownCommand{});
+      commands_.emplace_back(ShutdownCommand{});
     }
     wake();
     thread_.join();
@@ -184,13 +185,22 @@ private:
     try {
       run();
     } catch (const std::exception &error) {
-      emit(SupervisorErrorEvent{"", std::string{"supervisor thread failed: "} + error.what(),
-                                std::chrono::steady_clock::now()});
+      report_thread_failure(error.what());
       instances_.clear();
     } catch (...) {
-      emit(SupervisorErrorEvent{"", "supervisor thread failed with an unknown exception",
-                                std::chrono::steady_clock::now()});
+      report_thread_failure("unknown exception");
       instances_.clear();
+    }
+  }
+
+  void report_thread_failure(std::string_view detail) noexcept {
+    try {
+      std::string message{"supervisor thread failed: "};
+      message.append(detail);
+      emit(SupervisorErrorEvent{"", std::move(message), std::chrono::steady_clock::now()});
+    } catch (...) {
+      constexpr std::string_view fallback = "gisland supervisor failure could not be queued\n";
+      static_cast<void>(::write(STDERR_FILENO, fallback.data(), fallback.size()));
     }
   }
 
@@ -252,7 +262,7 @@ private:
             } else if constexpr (std::is_same_v<Type, RestartCommand>) {
               handle_restart(typed_command.instance_id, now);
             } else if constexpr (std::is_same_v<Type, SendCommand>) {
-              handle_send(typed_command.instance_id, std::move(typed_command.message), now);
+              handle_send(typed_command.instance_id, typed_command.message, now);
             } else {
               begin_global_shutdown(now);
             }
@@ -363,7 +373,7 @@ private:
     handle_stop(instance_id, now, true);
   }
 
-  void handle_send(const std::string &instance_id, CoreMessage message, MonotonicTime now) {
+  void handle_send(const std::string &instance_id, const CoreMessage &message, MonotonicTime now) {
     const auto iterator = instances_.find(instance_id);
     if (iterator == instances_.end()) {
       emit_error(instance_id, "message targeted an unknown module instance", now);
@@ -471,34 +481,42 @@ private:
   void advance_lifecycles(MonotonicTime now) {
     for (auto &[instance_id, instance_pointer] : instances_) {
       static_cast<void>(instance_id);
-      auto &instance = *instance_pointer;
-      const auto transitions = instance.lifecycle.tick(now);
-      for (const auto &transition : transitions) {
-        if (transition.to == ModuleState::stopping) {
-          emit_context_removal(instance, now);
-        }
-        emit_transition(instance, transition);
-        if (transition.to == ModuleState::starting && !instance.process.has_value()) {
-          spawn_instance(instance, now);
-        }
-      }
+      advance_lifecycle(*instance_pointer, now);
+    }
+  }
 
-      if (instance.process.has_value()) {
-        const auto signal = instance.lifecycle.due_signal(now);
-        if (signal.has_value()) {
-          const int native_signal = *signal == ShutdownSignal::terminate ? SIGTERM : SIGKILL;
-          const auto signaled = backend_.signal_group(*instance.process, native_signal);
-          if (!signaled.has_value()) {
-            emit_error(instance.request.instance_id,
-                       "process-group signal failed: " + signaled.error().message, now);
-          }
-          const auto recorded = instance.lifecycle.signal_sent(*signal, now);
-          if (!recorded.has_value()) {
-            emit_error(instance.request.instance_id, "module lifecycle rejected signal progress",
-                       now);
-          }
-        }
+  void advance_lifecycle(Instance &instance, MonotonicTime now) {
+    const auto transitions = instance.lifecycle.tick(now);
+    for (const auto &transition : transitions) {
+      if (transition.to == ModuleState::stopping) {
+        emit_context_removal(instance, now);
       }
+      emit_transition(instance, transition);
+      if (transition.to == ModuleState::starting && !instance.process.has_value()) {
+        spawn_instance(instance, now);
+      }
+    }
+    send_due_signal(instance, now);
+  }
+
+  void send_due_signal(Instance &instance, MonotonicTime now) {
+    if (!instance.process.has_value()) {
+      return;
+    }
+    const auto signal = instance.lifecycle.due_signal(now);
+    if (!signal.has_value()) {
+      return;
+    }
+
+    const int native_signal = signal.value() == ShutdownSignal::terminate ? SIGTERM : SIGKILL;
+    const auto signaled = backend_.signal_group(instance.process.value(), native_signal);
+    if (!signaled.has_value()) {
+      emit_error(instance.request.instance_id,
+                 "process-group signal failed: " + signaled.error().message, now);
+    }
+    const auto recorded = instance.lifecycle.signal_sent(signal.value(), now);
+    if (!recorded.has_value()) {
+      emit_error(instance.request.instance_id, "module lifecycle rejected signal progress", now);
     }
   }
 
@@ -519,7 +537,7 @@ private:
     if (instance.stdout_eof || !instance.process.has_value()) {
       return;
     }
-    std::array<std::byte, 16U * 1024U> buffer{};
+    std::array<std::byte, io_buffer_bytes> buffer{};
     for (int read_attempt = 0; read_attempt < 64; ++read_attempt) {
       const auto read = backend_.read_stdout(*instance.process, buffer);
       if (!read.has_value()) {
@@ -529,27 +547,13 @@ private:
         return;
       }
       if (read->transferred > 0) {
-        const auto lines = instance.stdout_buffer.append(
-            std::span<const std::byte>{buffer.data(), read->transferred});
-        if (!lines.has_value()) {
-          record_violation(instance, ProtocolError{"", line_buffer_message(lines.error().code)},
-                           now);
+        if (!consume_stdout(instance, std::span<const std::byte>{buffer.data(), read->transferred},
+                            now)) {
           return;
-        }
-        for (const auto &line : *lines) {
-          handle_protocol_line(instance, line.text, now);
-          if (instance.lifecycle.state() == ModuleState::stopping) {
-            return;
-          }
         }
       }
       if (read->eof) {
-        instance.stdout_eof = true;
-        instance.stdout_eof_at = now;
-        const auto final_line = instance.stdout_buffer.finish();
-        if (final_line.has_value() && final_line->has_value()) {
-          handle_protocol_line(instance, (*final_line)->text, now);
-        }
+        finish_stdout(instance, now);
         return;
       }
       if (read->would_block || read->transferred == 0) {
@@ -558,11 +562,42 @@ private:
     }
   }
 
+  [[nodiscard]] bool consume_stdout(Instance &instance, std::span<const std::byte> bytes,
+                                    MonotonicTime now) {
+    const auto lines = instance.stdout_buffer.append(bytes);
+    if (!lines.has_value()) {
+      record_violation(instance, ProtocolError{"", line_buffer_message(lines.error().code)}, now);
+      return false;
+    }
+    for (const auto &line : lines.value()) {
+      handle_protocol_line(instance, line.text, now);
+      if (instance.lifecycle.state() == ModuleState::stopping) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void finish_stdout(Instance &instance, MonotonicTime now) {
+    instance.stdout_eof = true;
+    instance.stdout_eof_at = now;
+    auto final_line = instance.stdout_buffer.finish();
+    if (!final_line.has_value()) {
+      record_violation(instance, ProtocolError{"", line_buffer_message(final_line.error().code)},
+                       now);
+      return;
+    }
+    auto decoded = std::move(final_line).value();
+    if (decoded.has_value()) {
+      handle_protocol_line(instance, decoded.value().text, now);
+    }
+  }
+
   void service_stderr(Instance &instance, MonotonicTime now) {
     if (instance.stderr_eof || !instance.process.has_value()) {
       return;
     }
-    std::array<std::byte, 16U * 1024U> buffer{};
+    std::array<std::byte, io_buffer_bytes> buffer{};
     for (int read_attempt = 0; read_attempt < 64; ++read_attempt) {
       const auto read = backend_.read_stderr(*instance.process, buffer);
       if (!read.has_value()) {
@@ -584,9 +619,14 @@ private:
       }
       if (read->eof) {
         instance.stderr_eof = true;
-        const auto final_line = instance.stderr_buffer.finish();
-        if (final_line.has_value() && final_line->has_value()) {
-          emit_stderr(instance, **final_line, now);
+        auto final_line = instance.stderr_buffer.finish();
+        if (!final_line.has_value()) {
+          emit_error(instance.request.instance_id, "stderr final-line buffering failed", now);
+          return;
+        }
+        auto decoded = std::move(final_line).value();
+        if (decoded.has_value()) {
+          emit_stderr(instance, decoded.value(), now);
         }
         return;
       }
@@ -652,10 +692,12 @@ private:
       }
 
       emit_context_removal(instance, now);
-      const auto transitions = instance.lifecycle.exited(stop_cause(**status), now);
+      const ExitStatus exit_status = status.value().value();
+      const auto transitions = instance.lifecycle.exited(stop_cause(exit_status), now);
       const auto effective_cause =
-          transitions.empty() ? stop_cause(**status) : transitions.front().cause;
-      emit(ProcessExitedEvent{instance.request.instance_id, pid, **status, effective_cause, now});
+          transitions.empty() ? stop_cause(exit_status) : transitions.front().cause;
+      emit(
+          ProcessExitedEvent{instance.request.instance_id, pid, exit_status, effective_cause, now});
       emit_transitions(instance, transitions);
       instance.process.reset();
 
@@ -866,14 +908,16 @@ private:
       if (!instance->process.has_value()) {
         continue;
       }
-      if (instance->process->stdout_fd() >= 0) {
-        interests.push_back(PollInterest{instance->process->stdout_fd(), true, false, token++});
+      // Presence is established immediately above; ProcessHandle is intentionally non-copyable.
+      const auto &process = *instance->process; // NOLINT(bugprone-unchecked-optional-access)
+      if (process.stdout_fd() >= 0) {
+        interests.push_back(PollInterest{process.stdout_fd(), true, false, token++});
       }
-      if (instance->process->stderr_fd() >= 0) {
-        interests.push_back(PollInterest{instance->process->stderr_fd(), true, false, token++});
+      if (process.stderr_fd() >= 0) {
+        interests.push_back(PollInterest{process.stderr_fd(), true, false, token++});
       }
-      if (instance->process->stdin_fd() >= 0 && instance->writes.wants_write()) {
-        interests.push_back(PollInterest{instance->process->stdin_fd(), false, true, token++});
+      if (process.stdin_fd() >= 0 && instance->writes.wants_write()) {
+        interests.push_back(PollInterest{process.stdin_fd(), false, true, token++});
       }
     }
     return interests;

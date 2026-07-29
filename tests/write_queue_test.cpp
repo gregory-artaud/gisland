@@ -67,7 +67,7 @@ TEST_CASE("write queue enforces the 256-message limit") {
 }
 
 TEST_CASE("write queue enforces the one-MiB pending-byte limit") {
-  constexpr std::size_t limit = 1024U * 1024U;
+  constexpr std::size_t limit = std::size_t{1024} * 1024U;
   gisland::WriteQueue queue;
   std::string maximum_record(limit - 1, 'x');
   maximum_record.push_back('\n');

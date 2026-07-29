@@ -212,7 +212,8 @@ healthy_reset_ms = 45000
   CHECK(module.environment.at("LANG") == "en_GB.UTF-8");
   CHECK(module.environment.at("GISLAND_TEST") == "configured");
   REQUIRE(module.working_directory.has_value());
-  CHECK(*module.working_directory == std::filesystem::path{"/var/lib/gisland-clock"});
+  CHECK(module.working_directory.value_or(std::filesystem::path{}) ==
+        std::filesystem::path{"/var/lib/gisland-clock"});
 }
 
 TEST_CASE("module supervision settings have documented defaults") {

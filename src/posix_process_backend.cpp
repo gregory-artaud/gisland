@@ -1,8 +1,8 @@
 #include "gisland/process_backend.hpp"
 
+#include <csignal>
 #include <fcntl.h>
 #include <poll.h>
-#include <signal.h>
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -23,8 +23,6 @@
 #include <system_error>
 #include <utility>
 #include <vector>
-
-extern char **environ;
 
 namespace gisland {
 namespace {
@@ -198,7 +196,12 @@ build_environment(const std::map<std::string, std::string> &overrides) {
   std::vector<std::string> environment;
   environment.reserve(values.size());
   for (const auto &[key, value] : values) {
-    environment.push_back(key + '=' + value);
+    std::string entry;
+    entry.reserve(key.size() + 1 + value.size());
+    entry.append(key);
+    entry.push_back('=');
+    entry.append(value);
+    environment.push_back(std::move(entry));
   }
   return environment;
 }
@@ -215,6 +218,7 @@ build_environment(const std::map<std::string, std::string> &overrides) {
 
 } // namespace
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 ProcessHandle::ProcessHandle(pid_t pid, int stdin_descriptor, int stdout_descriptor,
                              int stderr_descriptor)
     : pid_(pid), process_group_(pid), stdin_descriptor_(stdin_descriptor),
@@ -348,16 +352,19 @@ std::expected<ProcessHandle, ProcessError> ProcessBackend::spawn(const ProcessSp
 }
 
 std::expected<IoResult, ProcessError>
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 ProcessBackend::read_stdout(ProcessHandle &process, std::span<std::byte> destination) const {
   return read_descriptor(process.stdout_descriptor_, destination, "read(stdout)");
 }
 
 std::expected<IoResult, ProcessError>
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 ProcessBackend::read_stderr(ProcessHandle &process, std::span<std::byte> destination) const {
   return read_descriptor(process.stderr_descriptor_, destination, "read(stderr)");
 }
 
 std::expected<IoResult, ProcessError>
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 ProcessBackend::write_stdin(ProcessHandle &process, std::span<const std::byte> source) const {
   if (process.stdin_descriptor_ < 0) {
     return IoResult{0, true, false};
@@ -382,11 +389,13 @@ ProcessBackend::write_stdin(ProcessHandle &process, std::span<const std::byte> s
   }
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::expected<void, ProcessError> ProcessBackend::close_stdin(ProcessHandle &process) const {
   ProcessHandle::close_descriptor(process.stdin_descriptor_);
   return {};
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::expected<void, ProcessError> ProcessBackend::signal_group(const ProcessHandle &process,
                                                                int signal) const {
   if (process.process_group_ <= 0) {
@@ -399,6 +408,7 @@ std::expected<void, ProcessError> ProcessBackend::signal_group(const ProcessHand
 }
 
 std::expected<std::vector<PollReady>, ProcessError>
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 ProcessBackend::poll(std::span<const PollInterest> interests,
                      std::chrono::milliseconds timeout) const {
   std::vector<struct pollfd> descriptors;
@@ -443,6 +453,7 @@ ProcessBackend::poll(std::span<const PollInterest> interests,
 }
 
 std::expected<std::optional<ExitStatus>, ProcessError>
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 ProcessBackend::reap(ProcessHandle &process) const {
   if (process.pid_ <= 0) {
     return std::unexpected(process_error("waitpid", ECHILD));

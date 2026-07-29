@@ -13,7 +13,7 @@ enum class WriteQueueError { invalid_record, message_limit, byte_limit, invalid_
 class WriteQueue {
 public:
   static constexpr std::size_t default_message_limit = 256;
-  static constexpr std::size_t default_byte_limit = 1024U * 1024U;
+  static constexpr std::size_t default_byte_limit = std::size_t{1024} * 1024U;
 
   explicit WriteQueue(std::size_t maximum_messages = default_message_limit,
                       std::size_t maximum_bytes = default_byte_limit);

@@ -1,7 +1,7 @@
 #include <nlohmann/json.hpp>
 
+#include <csignal>
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -116,6 +116,30 @@ void read_init() {
   return EXIT_SUCCESS;
 }
 
+[[nodiscard]] int dismiss_context() {
+  read_init();
+  write_ready();
+  write_json({{"type", "dismiss"}, {"context_id", "retired"}});
+
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    const auto message = nlohmann::json::parse(line, nullptr, false);
+    if (message.is_object() && message.value("type", "") == "shutdown") {
+      return EXIT_SUCCESS;
+    }
+  }
+  return EXIT_SUCCESS;
+}
+
+[[nodiscard]] int refuse_stdin() {
+  read_init();
+  static_cast<void>(::close(STDIN_FILENO));
+  write_ready();
+  while (true) {
+    ::pause();
+  }
+}
+
 [[nodiscard]] int spawn_descendant() {
   struct sigaction action{};
   action.sa_handler = request_termination;
@@ -149,9 +173,9 @@ void read_init() {
   return EXIT_SUCCESS;
 }
 
-} // namespace
-
-int main(int argc, char **argv) {
+// The mode dispatcher is intentionally flat so each fake behavior is explicit at the call site.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] int run_mode(int argc, char **argv) {
   if (argc < 2) {
     return 2;
   }
@@ -165,6 +189,9 @@ int main(int argc, char **argv) {
   }
   if (mode == "publish") {
     return protocol_loop(true, false, false);
+  }
+  if (mode == "dismiss") {
+    return dismiss_context();
   }
   if (mode == "stderr") {
     return protocol_loop(false, true, false);
@@ -180,8 +207,7 @@ int main(int argc, char **argv) {
     return 7;
   }
   if (mode == "crash") {
-    ::raise(SIGSEGV);
-    return 8;
+    std::abort();
   }
   if (mode == "silent") {
     return silent();
@@ -197,6 +223,9 @@ int main(int argc, char **argv) {
     while (true) {
       ::pause();
     }
+  }
+  if (mode == "refuse-stdin") {
+    return refuse_stdin();
   }
   if (mode == "spawn-descendant") {
     return spawn_descendant();
@@ -237,8 +266,7 @@ int main(int argc, char **argv) {
         {"priority", 7},
         {"compact", {{"type", "text"}, {"value", "fake"}, {"role", "body"}}},
     });
-    ::raise(SIGSEGV);
-    return 8;
+    std::abort();
   }
   if (mode == "incompatible-ready") {
     read_init();
@@ -267,8 +295,9 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS;
   }
   if (mode == "stderr-long") {
+    constexpr std::size_t stderr_bytes = (std::size_t{64} * 1024U) + 128U;
     read_init();
-    std::cerr << std::string((64U * 1024U) + 128U, 'x') << '\n' << std::flush;
+    std::cerr << std::string(stderr_bytes, 'x') << '\n' << std::flush;
     write_ready();
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -280,4 +309,14 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS;
   }
   return 2;
+}
+
+} // namespace
+
+int main(int argc, char **argv) noexcept {
+  try {
+    return run_mode(argc, argv);
+  } catch (...) {
+    return 9;
+  }
 }

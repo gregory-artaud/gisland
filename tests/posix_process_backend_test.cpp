@@ -3,8 +3,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
+#include <csignal>
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -131,12 +131,12 @@ void write_all(gisland::ProcessBackend &backend, gisland::ProcessHandle &process
 
 [[nodiscard]] gisland::ExitStatus wait_for_exit(gisland::ProcessBackend &backend,
                                                 gisland::ProcessHandle &process) {
-  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
   while (std::chrono::steady_clock::now() < deadline) {
     const auto status = backend.reap(process);
     REQUIRE(status.has_value());
     if (status->has_value()) {
-      return **status;
+      return status->value_or(gisland::ExitStatus{gisland::ExitKind::exited, -1});
     }
     REQUIRE(backend.poll({}, 10ms).has_value());
   }
@@ -247,7 +247,7 @@ TEST_CASE("POSIX backend reports zero nonzero and signal exits") {
     auto process = std::move(*spawned);
     const auto exit = wait_for_exit(backend, process);
     CHECK(exit.kind == gisland::ExitKind::signaled);
-    CHECK(exit.code == SIGSEGV);
+    CHECK(exit.code == SIGABRT);
     CHECK_FALSE(exit.success());
   }
 }

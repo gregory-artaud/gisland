@@ -5,7 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
-#include <signal.h>
+#include <csignal>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -182,7 +182,7 @@ TEST_CASE("supervisor asynchronously handshakes publishes and gracefully stops")
   });
   REQUIRE(removal.has_value());
   REQUIRE(stopped.has_value());
-  CHECK(*removal < *stopped);
+  CHECK(removal.value_or(events.size()) < stopped.value_or(events.size()));
 }
 
 TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
@@ -223,6 +223,26 @@ TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
   });
 
   stop_and_wait(supervisor, events, "interactive");
+}
+
+TEST_CASE("supervisor binds dismiss messages to the core-owned instance") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("dismiss-owner", "dismiss")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_message<gisland::DismissMessage>(observed, "dismiss-owner");
+  });
+
+  const auto dismissed = std::ranges::find_if(events, [](const auto &event) {
+    const auto *message = std::get_if<gisland::ModuleMessageEvent>(&event);
+    return message != nullptr && message->instance_id == "dismiss-owner" &&
+           std::holds_alternative<gisland::DismissMessage>(message->message);
+  });
+  REQUIRE(dismissed != events.end());
+  CHECK(std::get<gisland::DismissMessage>(std::get<gisland::ModuleMessageEvent>(*dismissed).message)
+            .context_id == "retired");
+
+  stop_and_wait(supervisor, events, "dismiss-owner");
 }
 
 TEST_CASE("handshake timeout escalates and is a logs-only module failure") {
@@ -333,7 +353,7 @@ TEST_CASE("final unterminated protocol lines and truncated stderr are retained")
       return typed != nullptr && typed->instance_id == "long-log" && typed->truncated;
     });
     REQUIRE(log != events.end());
-    CHECK(std::get<gisland::StderrLogEvent>(*log).line.size() == 64U * 1024U);
+    CHECK(std::get<gisland::StderrLogEvent>(*log).line.size() == std::size_t{64} * 1024U);
     stop_and_wait(supervisor, events, "long-log");
   }
 }
@@ -360,7 +380,8 @@ maximum_backoff_ms = 20
 
   gisland::ModuleSupervisor supervisor;
   EventLog events;
-  REQUIRE(supervisor.start(std::move(request)).has_value());
+  const auto started = supervisor.start(std::move(request));
+  REQUIRE(started.has_value());
   collect_until(supervisor, events, [](const auto &observed) {
     return count_events<gisland::ProcessStartedEvent>(observed, "fake") >= 2 &&
            has_message<gisland::PublishMessage>(observed, "fake") &&
@@ -451,7 +472,7 @@ TEST_CASE("outbound saturation terminates an unresponsive module without blockin
     return has_state(observed, "blocked", gisland::ModuleState::running);
   });
 
-  const nlohmann::json oversized_value = std::string((1024U * 1024U) + 1U, 'x');
+  const nlohmann::json oversized_value = std::string((std::size_t{1024} * 1024U) + 1U, 'x');
   REQUIRE(supervisor
               .send("blocked", gisland::CoreMessage{gisland::ActionMessage{
                                    .action_id = "oversized",
@@ -461,6 +482,26 @@ TEST_CASE("outbound saturation terminates an unresponsive module without blockin
   collect_until(supervisor, events, [](const auto &observed) {
     return has_state_cause(observed, "blocked", gisland::ModuleState::stopped,
                            gisland::StopCause::unresponsive);
+  });
+}
+
+TEST_CASE("closed child stdin is an isolated module I/O failure") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("refused", "refuse-stdin")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "refused", gisland::ModuleState::running);
+  });
+
+  REQUIRE(supervisor
+              .send("refused", gisland::CoreMessage{gisland::ActionMessage{
+                                   .action_id = "probe",
+                                   .value = std::nullopt,
+                               }})
+              .has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state_cause(observed, "refused", gisland::ModuleState::stopped,
+                           gisland::StopCause::io_error);
   });
 }
 

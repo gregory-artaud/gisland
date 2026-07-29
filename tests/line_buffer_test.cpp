@@ -32,8 +32,9 @@ TEST_CASE("line buffer supports partial, multiple, and final unterminated lines"
   const auto final = buffer.finish();
   REQUIRE(final.has_value());
   REQUIRE(final->has_value());
-  CHECK((*final)->text == "third");
-  CHECK_FALSE((*final)->truncated);
+  const auto final_line = final.value().value_or(gisland::BufferedLine{});
+  CHECK(final_line.text == "third");
+  CHECK_FALSE(final_line.truncated);
 
   const auto repeated_finish = buffer.finish();
   REQUIRE(repeated_finish.has_value());
@@ -76,7 +77,7 @@ TEST_CASE("protocol lines reject embedded NUL and overflow") {
 }
 
 TEST_CASE("stderr lines truncate explicitly at 64 KiB and continue decoding") {
-  constexpr std::size_t limit = 64U * 1024U;
+  constexpr std::size_t limit = std::size_t{64} * 1024U;
   auto buffer = gisland::LineBuffer::standard_error();
   const std::string input = std::string(limit, 'x') + std::string(128, 'y') + "\nnext\n";
 

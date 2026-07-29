@@ -8,6 +8,7 @@
 
 namespace gisland {
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 WriteQueue::WriteQueue(std::size_t maximum_messages, std::size_t maximum_bytes)
     : maximum_messages_(maximum_messages), maximum_bytes_(maximum_bytes) {}
 

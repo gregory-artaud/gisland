@@ -200,8 +200,8 @@ parse_restart_policy(const toml::table &table, std::size_t module_index,
   if (*value == "never") {
     return RestartPolicy::never;
   }
-  return std::unexpected(error_at(
-      source_name, path, "expected one of \"always\", \"on-failure\", or \"never\"", node));
+  return std::unexpected(
+      error_at(source_name, path, R"(expected one of "always", "on-failure", or "never")", node));
 }
 
 [[nodiscard]] std::expected<std::chrono::milliseconds, ConfigError>
@@ -300,7 +300,9 @@ parse_environment(const toml::table &table, std::size_t module_index,
   }
   for (const auto &[key, value_node] : *environment_table) {
     const std::string key_string{key.str()};
-    const std::string path = base_path + "." + key_string;
+    std::string path = base_path;
+    path.push_back('.');
+    path.append(key_string);
     if (key_string.empty() || key_string.contains('=')) {
       return std::unexpected(error_at(source_name, path, "invalid environment key", &value_node));
     }

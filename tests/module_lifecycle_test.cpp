@@ -4,12 +4,19 @@
 
 #include <array>
 #include <chrono>
+#include <optional>
+#include <utility>
 
 namespace {
 
 using namespace std::chrono_literals;
 
 constexpr gisland::MonotonicTime epoch{};
+
+template <typename Value> [[nodiscard]] Value required_value(std::optional<Value> value) {
+  REQUIRE(value.has_value());
+  return std::move(value).value_or(Value{});
+}
 
 void reach_running(gisland::ModuleLifecycle &lifecycle, gisland::MonotonicTime now) {
   REQUIRE(lifecycle.start(now).has_value());
@@ -61,13 +68,11 @@ TEST_CASE("handshake and shutdown deadlines use only injected monotonic time") {
   CHECK(timeout.front().from == gisland::ModuleState::starting);
   CHECK(timeout.front().to == gisland::ModuleState::stopping);
   CHECK(timeout.front().cause == gisland::StopCause::handshake_timeout);
-  REQUIRE(lifecycle.due_signal(epoch + 2s).has_value());
-  CHECK(*lifecycle.due_signal(epoch + 2s) == gisland::ShutdownSignal::terminate);
+  CHECK(required_value(lifecycle.due_signal(epoch + 2s)) == gisland::ShutdownSignal::terminate);
 
   REQUIRE(lifecycle.signal_sent(gisland::ShutdownSignal::terminate, epoch + 2s).has_value());
   CHECK_FALSE(lifecycle.due_signal(epoch + 2499ms).has_value());
-  REQUIRE(lifecycle.due_signal(epoch + 2500ms).has_value());
-  CHECK(*lifecycle.due_signal(epoch + 2500ms) == gisland::ShutdownSignal::kill);
+  CHECK(required_value(lifecycle.due_signal(epoch + 2500ms)) == gisland::ShutdownSignal::kill);
 
   REQUIRE(lifecycle.signal_sent(gisland::ShutdownSignal::kill, epoch + 2500ms).has_value());
   CHECK_FALSE(lifecycle.due_signal(epoch + 3s).has_value());
@@ -84,13 +89,11 @@ TEST_CASE("requested shutdown waits before escalating to the process group") {
 
   REQUIRE(lifecycle.stop(epoch).has_value());
   CHECK_FALSE(lifecycle.due_signal(epoch + 999ms).has_value());
-  REQUIRE(lifecycle.due_signal(epoch + 1s).has_value());
-  CHECK(*lifecycle.due_signal(epoch + 1s) == gisland::ShutdownSignal::terminate);
+  CHECK(required_value(lifecycle.due_signal(epoch + 1s)) == gisland::ShutdownSignal::terminate);
 
   REQUIRE(lifecycle.signal_sent(gisland::ShutdownSignal::terminate, epoch + 1s).has_value());
   CHECK_FALSE(lifecycle.due_signal(epoch + 1499ms).has_value());
-  REQUIRE(lifecycle.due_signal(epoch + 1500ms).has_value());
-  CHECK(*lifecycle.due_signal(epoch + 1500ms) == gisland::ShutdownSignal::kill);
+  CHECK(required_value(lifecycle.due_signal(epoch + 1500ms)) == gisland::ShutdownSignal::kill);
 
   const auto exited = lifecycle.exited(gisland::StopCause::signal, epoch + 1501ms);
   REQUIRE(exited.size() == 1);
@@ -150,7 +153,7 @@ TEST_CASE("restart backoff doubles to its cap without sleeping") {
     } else {
       REQUIRE(lifecycle.state() == gisland::ModuleState::backoff);
       REQUIRE(lifecycle.restart_at().has_value());
-      now = *lifecycle.restart_at();
+      now = required_value(lifecycle.restart_at());
       const auto restarted = lifecycle.tick(now);
       REQUIRE(restarted.size() == 1);
       CHECK(restarted.front().to == gisland::ModuleState::starting);
@@ -160,7 +163,7 @@ TEST_CASE("restart backoff doubles to its cap without sleeping") {
     const auto transitions = lifecycle.exited(gisland::StopCause::failed_exit, now);
     REQUIRE(transitions.size() == 1);
     REQUIRE(lifecycle.restart_at().has_value());
-    CHECK(*lifecycle.restart_at() - now == expected_delay);
+    CHECK(required_value(lifecycle.restart_at()) - now == expected_delay);
   }
 }
 
@@ -170,22 +173,22 @@ TEST_CASE("a healthy run resets exponential backoff") {
 
   REQUIRE(lifecycle.exited(gisland::StopCause::failed_exit, epoch).size() == 1);
   REQUIRE(lifecycle.restart_at().has_value());
-  CHECK(*lifecycle.restart_at() - epoch == 250ms);
+  CHECK(required_value(lifecycle.restart_at()) - epoch == 250ms);
 
-  auto now = *lifecycle.restart_at();
+  auto now = required_value(lifecycle.restart_at());
   REQUIRE(lifecycle.tick(now).size() == 1);
   REQUIRE(lifecycle.ready(now).has_value());
   REQUIRE(lifecycle.exited(gisland::StopCause::failed_exit, now + 1s).size() == 1);
   REQUIRE(lifecycle.restart_at().has_value());
-  CHECK(*lifecycle.restart_at() - (now + 1s) == 500ms);
+  CHECK(required_value(lifecycle.restart_at()) - (now + 1s) == 500ms);
 
-  now = *lifecycle.restart_at();
+  now = required_value(lifecycle.restart_at());
   REQUIRE(lifecycle.tick(now).size() == 1);
   REQUIRE(lifecycle.ready(now).has_value());
   CHECK(lifecycle.tick(now + 60s).empty());
   REQUIRE(lifecycle.exited(gisland::StopCause::failed_exit, now + 60s).size() == 1);
   REQUIRE(lifecycle.restart_at().has_value());
-  CHECK(*lifecycle.restart_at() - (now + 60s) == 250ms);
+  CHECK(required_value(lifecycle.restart_at()) - (now + 60s) == 250ms);
 }
 
 TEST_CASE("ten rolling failures lock the instance until explicit start") {
@@ -197,7 +200,7 @@ TEST_CASE("ten rolling failures lock the instance until explicit start") {
       reach_running(lifecycle, now);
     } else {
       REQUIRE(lifecycle.restart_at().has_value());
-      now = *lifecycle.restart_at();
+      now = required_value(lifecycle.restart_at());
       REQUIRE(lifecycle.tick(now).size() == 1);
       REQUIRE(lifecycle.ready(now).has_value());
     }
@@ -225,7 +228,7 @@ TEST_CASE("failure lockout uses a rolling five-minute window") {
       reach_running(lifecycle, now);
     } else {
       REQUIRE(lifecycle.restart_at().has_value());
-      now = *lifecycle.restart_at();
+      now = required_value(lifecycle.restart_at());
       REQUIRE(lifecycle.tick(now).size() == 1);
       REQUIRE(lifecycle.ready(now).has_value());
     }
@@ -233,7 +236,7 @@ TEST_CASE("failure lockout uses a rolling five-minute window") {
   }
 
   REQUIRE(lifecycle.restart_at().has_value());
-  now = *lifecycle.restart_at();
+  now = required_value(lifecycle.restart_at());
   REQUIRE(lifecycle.tick(now).size() == 1);
   REQUIRE(lifecycle.ready(now).has_value());
   now = epoch + 5min + 1ms;
