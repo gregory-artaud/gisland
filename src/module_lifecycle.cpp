@@ -21,8 +21,16 @@ ModuleLifecycle::ModuleLifecycle(RestartPolicy policy, ModuleTimings timings)
 
 ModuleState ModuleLifecycle::state() const noexcept { return state_; }
 
-std::optional<MonotonicTime> ModuleLifecycle::restart_at() const noexcept {
-  return restart_at_;
+std::optional<MonotonicTime> ModuleLifecycle::restart_at() const noexcept { return restart_at_; }
+
+std::optional<MonotonicTime> ModuleLifecycle::next_deadline() const noexcept {
+  std::optional<MonotonicTime> deadline;
+  for (const auto candidate : {handshake_deadline_, restart_at_, signal_at_}) {
+    if (candidate.has_value() && (!deadline.has_value() || *candidate < *deadline)) {
+      deadline = candidate;
+    }
+  }
+  return deadline;
 }
 
 std::expected<StateTransition, LifecycleError> ModuleLifecycle::start(MonotonicTime now) {
@@ -126,8 +134,7 @@ std::expected<StateTransition, LifecycleError> ModuleLifecycle::stop(MonotonicTi
 
 std::expected<StateTransition, LifecycleError> ModuleLifecycle::fail(StopCause cause,
                                                                      MonotonicTime now) {
-  if ((state_ != ModuleState::starting && state_ != ModuleState::running) ||
-      !is_failure(cause)) {
+  if ((state_ != ModuleState::starting && state_ != ModuleState::running) || !is_failure(cause)) {
     return std::unexpected(LifecycleError{state_, "fail"});
   }
   const auto transition = transition_to(ModuleState::stopping, cause, now);
@@ -136,8 +143,8 @@ std::expected<StateTransition, LifecycleError> ModuleLifecycle::fail(StopCause c
 }
 
 std::optional<ShutdownSignal> ModuleLifecycle::due_signal(MonotonicTime now) const noexcept {
-  if (state_ != ModuleState::stopping || !pending_signal_.has_value() ||
-      !signal_at_.has_value() || now < *signal_at_) {
+  if (state_ != ModuleState::stopping || !pending_signal_.has_value() || !signal_at_.has_value() ||
+      now < *signal_at_) {
     return std::nullopt;
   }
   return pending_signal_;
@@ -161,7 +168,7 @@ std::expected<void, LifecycleError> ModuleLifecycle::signal_sent(ShutdownSignal 
 }
 
 StateTransition ModuleLifecycle::transition_to(ModuleState next, StopCause cause,
-                                                MonotonicTime now) {
+                                               MonotonicTime now) {
   const auto previous = std::exchange(state_, next);
   return StateTransition{previous, next, cause, now};
 }

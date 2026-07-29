@@ -100,9 +100,8 @@ TEST_CASE("requested shutdown waits before escalating to the process group") {
 
 TEST_CASE("restart policies distinguish clean and failed exits") {
   SECTION("always restarts every unexpected exit") {
-    for (const auto cause :
-         {gisland::StopCause::clean_exit, gisland::StopCause::failed_exit,
-          gisland::StopCause::signal}) {
+    for (const auto cause : {gisland::StopCause::clean_exit, gisland::StopCause::failed_exit,
+                             gisland::StopCause::signal}) {
       gisland::ModuleLifecycle lifecycle{gisland::RestartPolicy::always, {}};
       reach_running(lifecycle, epoch);
       const auto transitions = lifecycle.exited(cause, epoch + 1ms);
@@ -117,10 +116,10 @@ TEST_CASE("restart policies distinguish clean and failed exits") {
     REQUIRE(clean.exited(gisland::StopCause::clean_exit, epoch + 1ms).size() == 1);
     CHECK(clean.state() == gisland::ModuleState::stopped);
 
-    for (const auto cause : {gisland::StopCause::failed_exit, gisland::StopCause::signal,
-                             gisland::StopCause::spawn_error,
-                             gisland::StopCause::protocol_violation,
-                             gisland::StopCause::io_error, gisland::StopCause::unresponsive}) {
+    for (const auto cause :
+         {gisland::StopCause::failed_exit, gisland::StopCause::signal,
+          gisland::StopCause::spawn_error, gisland::StopCause::protocol_violation,
+          gisland::StopCause::io_error, gisland::StopCause::unresponsive}) {
       gisland::ModuleLifecycle failed{gisland::RestartPolicy::on_failure, {}};
       reach_running(failed, epoch);
       REQUIRE(failed.exited(cause, epoch + 1ms).size() == 1);
@@ -129,9 +128,8 @@ TEST_CASE("restart policies distinguish clean and failed exits") {
   }
 
   SECTION("never stops after every exit") {
-    for (const auto cause :
-         {gisland::StopCause::clean_exit, gisland::StopCause::failed_exit,
-          gisland::StopCause::signal}) {
+    for (const auto cause : {gisland::StopCause::clean_exit, gisland::StopCause::failed_exit,
+                             gisland::StopCause::signal}) {
       gisland::ModuleLifecycle lifecycle{gisland::RestartPolicy::never, {}};
       reach_running(lifecycle, epoch);
       REQUIRE(lifecycle.exited(cause, epoch + 1ms).size() == 1);
@@ -142,7 +140,7 @@ TEST_CASE("restart policies distinguish clean and failed exits") {
 
 TEST_CASE("restart backoff doubles to its cap without sleeping") {
   gisland::ModuleLifecycle lifecycle{gisland::RestartPolicy::on_failure, {}};
-  constexpr std::array expected_delays{250ms, 500ms, 1000ms, 2000ms, 4000ms,
+  constexpr std::array expected_delays{250ms,  500ms,   1000ms,  2000ms, 4000ms,
                                        8000ms, 16000ms, 30000ms, 30000ms};
   auto now = epoch;
 

@@ -38,9 +38,7 @@ struct ExitStatus {
   ExitKind kind;
   int code;
 
-  [[nodiscard]] bool success() const noexcept {
-    return kind == ExitKind::exited && code == 0;
-  }
+  [[nodiscard]] bool success() const noexcept { return kind == ExitKind::exited && code == 0; }
 };
 
 struct PollInterest {

@@ -64,9 +64,24 @@ struct DismissMessage {
 struct ReadyMessage {
   int protocol_major;
   int protocol_minor;
+  std::vector<std::string> capabilities;
 };
 
-using ModuleMessage = std::variant<ReadyMessage, PublishMessage, DismissMessage>;
+struct ActionResultMessage {
+  std::string action_id;
+  bool accepted;
+  std::optional<std::string> message;
+};
+
+enum class LogLevel { debug, info, warning, error };
+
+struct LogMessage {
+  LogLevel level;
+  std::string message;
+};
+
+using ModuleMessage =
+    std::variant<ReadyMessage, PublishMessage, DismissMessage, ActionResultMessage, LogMessage>;
 
 struct ProtocolError {
   std::string path;

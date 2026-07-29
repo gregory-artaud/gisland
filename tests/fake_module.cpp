@@ -20,9 +20,7 @@ volatile sig_atomic_t termination_requested = 0;
 
 extern "C" void request_termination(int /*signal*/) { termination_requested = 1; }
 
-void write_json(const nlohmann::json &object) {
-  std::cout << object.dump() << '\n' << std::flush;
-}
+void write_json(const nlohmann::json &object) { std::cout << object.dump() << '\n' << std::flush; }
 
 void write_ready() {
   write_json({
@@ -30,6 +28,11 @@ void write_ready() {
       {"protocol_major", 1},
       {"protocol_minor", 0},
   });
+}
+
+void read_init() {
+  std::string line;
+  static_cast<void>(std::getline(std::cin, line));
 }
 
 [[nodiscard]] int inspect(int argc, char **argv) {
@@ -114,7 +117,7 @@ void write_ready() {
 }
 
 [[nodiscard]] int spawn_descendant() {
-  struct sigaction action {};
+  struct sigaction action{};
   action.sa_handler = request_termination;
   ::sigemptyset(&action.sa_mask);
   if (::sigaction(SIGTERM, &action, nullptr) != 0) {
@@ -126,7 +129,7 @@ void write_ready() {
     return 5;
   }
   if (child == 0) {
-    struct sigaction default_action {};
+    struct sigaction default_action{};
     default_action.sa_handler = SIG_DFL;
     ::sigemptyset(&default_action.sa_mask);
     static_cast<void>(::sigaction(SIGTERM, &default_action, nullptr));
@@ -167,6 +170,7 @@ int main(int argc, char **argv) {
     return protocol_loop(false, true, false);
   }
   if (mode == "ignore-shutdown") {
+    ::signal(SIGTERM, SIG_IGN);
     return protocol_loop(false, false, true);
   }
   if (mode == "exit-zero") {
@@ -187,27 +191,93 @@ int main(int argc, char **argv) {
       ::pause();
     }
   }
+  if (mode == "ready-ignore-stdin") {
+    read_init();
+    write_ready();
+    while (true) {
+      ::pause();
+    }
+  }
   if (mode == "spawn-descendant") {
     return spawn_descendant();
   }
   if (mode == "malformed") {
-    std::string line;
-    static_cast<void>(std::getline(std::cin, line));
+    read_init();
     std::cout << "{not-json}\n" << std::flush;
     return silent();
   }
   if (mode == "duplicate-ready") {
-    std::string line;
-    static_cast<void>(std::getline(std::cin, line));
-    write_ready();
-    write_ready();
+    read_init();
+    for (int count = 0; count < 4; ++count) {
+      write_ready();
+    }
     return silent();
   }
   if (mode == "business-before-ready") {
-    std::string line;
-    static_cast<void>(std::getline(std::cin, line));
+    read_init();
     write_json({{"type", "dismiss"}, {"context_id", "foreign"}});
     return silent();
+  }
+  if (mode == "rolling-violations") {
+    read_init();
+    write_ready();
+    for (int count = 0; count < 10; ++count) {
+      std::cout << "{bad-json}\n";
+      write_json({{"type", "log"}, {"level", "info"}, {"message", "reset"}});
+    }
+    std::cout << std::flush;
+    return silent();
+  }
+  if (mode == "publish-crash") {
+    read_init();
+    write_ready();
+    write_json({
+        {"type", "publish"},
+        {"context_id", "fake"},
+        {"priority", 7},
+        {"compact", {{"type", "text"}, {"value", "fake"}, {"role", "body"}}},
+    });
+    ::raise(SIGSEGV);
+    return 8;
+  }
+  if (mode == "incompatible-ready") {
+    read_init();
+    write_json({{"type", "ready"}, {"protocol_major", 2}, {"protocol_minor", 0}});
+    return silent();
+  }
+  if (mode == "unsupported-capability") {
+    read_init();
+    write_json({
+        {"type", "ready"},
+        {"protocol_major", 1},
+        {"protocol_minor", 0},
+        {"capabilities", {"not-offered"}},
+    });
+    return silent();
+  }
+  if (mode == "final-line") {
+    read_init();
+    write_ready();
+    std::cout << nlohmann::json{
+        {"type", "publish"},
+        {"context_id", "final"},
+        {"priority", 1},
+        {"compact", {{"type", "text"}, {"value", "final"}, {"role", "body"}}},
+    }.dump() << std::flush;
+    return EXIT_SUCCESS;
+  }
+  if (mode == "stderr-long") {
+    read_init();
+    std::cerr << std::string((64U * 1024U) + 128U, 'x') << '\n' << std::flush;
+    write_ready();
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
   }
   return 2;
 }

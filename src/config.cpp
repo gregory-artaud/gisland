@@ -242,12 +242,10 @@ parse_timings(const toml::table &table, std::size_t module_index, std::string_vi
 
   auto handshake = parse_duration(*timing_table, "handshake_ms", timings.handshake,
                                   base_path + ".handshake_ms", source_name);
-  auto graceful = parse_duration(*timing_table, "graceful_shutdown_ms",
-                                 timings.graceful_shutdown,
+  auto graceful = parse_duration(*timing_table, "graceful_shutdown_ms", timings.graceful_shutdown,
                                  base_path + ".graceful_shutdown_ms", source_name);
-  auto terminate =
-      parse_duration(*timing_table, "terminate_grace_ms", timings.terminate_grace,
-                     base_path + ".terminate_grace_ms", source_name);
+  auto terminate = parse_duration(*timing_table, "terminate_grace_ms", timings.terminate_grace,
+                                  base_path + ".terminate_grace_ms", source_name);
   auto initial = parse_duration(*timing_table, "initial_backoff_ms", timings.initial_backoff,
                                 base_path + ".initial_backoff_ms", source_name);
   auto maximum = parse_duration(*timing_table, "maximum_backoff_ms", timings.maximum_backoff,
@@ -330,8 +328,7 @@ parse_working_directory(const toml::table &table, std::size_t module_index,
   }
   std::filesystem::path working_directory{*value};
   if (!working_directory.is_absolute()) {
-    return std::unexpected(
-        error_at(source_name, path, "working directory must be absolute", node));
+    return std::unexpected(error_at(source_name, path, "working directory must be absolute", node));
   }
   return std::optional<std::filesystem::path>{std::move(working_directory)};
 }

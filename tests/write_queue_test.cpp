@@ -9,8 +9,10 @@
 
 TEST_CASE("write queue preserves FIFO records across partial writes") {
   gisland::WriteQueue queue;
-  const std::string first = R"({"sequence":1})" "\n";
-  const std::string second = R"({"sequence":2})" "\n";
+  const std::string first = R"({"sequence":1})"
+                            "\n";
+  const std::string second = R"({"sequence":2})"
+                             "\n";
 
   REQUIRE(queue.push(first).has_value());
   REQUIRE(queue.push(second).has_value());

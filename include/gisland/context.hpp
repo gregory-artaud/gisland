@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace gisland {
 
@@ -34,6 +35,7 @@ public:
 
   void publish(PublishedContext context, MonotonicTime now);
   void dismiss(const ContextKey &key);
+  void dismiss_instance(std::string_view instance_id);
   [[nodiscard]] const PublishedContext *active(MonotonicTime now);
 
 private:

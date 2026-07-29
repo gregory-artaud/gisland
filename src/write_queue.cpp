@@ -12,8 +12,8 @@ WriteQueue::WriteQueue(std::size_t maximum_messages, std::size_t maximum_bytes)
     : maximum_messages_(maximum_messages), maximum_bytes_(maximum_bytes) {}
 
 std::expected<void, WriteQueueError> WriteQueue::push(std::string record) {
-  if (record.empty() || !record.ends_with('\n') ||
-      record.find('\n') != record.size() - 1 || record.contains('\0')) {
+  if (record.empty() || !record.ends_with('\n') || record.find('\n') != record.size() - 1 ||
+      record.contains('\0')) {
     return std::unexpected(WriteQueueError::invalid_record);
   }
   if (records_.size() >= maximum_messages_) {

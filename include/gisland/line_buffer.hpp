@@ -25,10 +25,9 @@ public:
   static constexpr std::size_t default_protocol_limit = 1024U * 1024U;
   static constexpr std::size_t default_stderr_limit = 64U * 1024U;
 
-  [[nodiscard]] static LineBuffer protocol(std::size_t maximum_line_bytes =
-                                               default_protocol_limit);
-  [[nodiscard]] static LineBuffer standard_error(std::size_t maximum_line_bytes =
-                                                     default_stderr_limit);
+  [[nodiscard]] static LineBuffer protocol(std::size_t maximum_line_bytes = default_protocol_limit);
+  [[nodiscard]] static LineBuffer
+  standard_error(std::size_t maximum_line_bytes = default_stderr_limit);
 
   [[nodiscard]] std::expected<std::vector<BufferedLine>, LineBufferError>
   append(std::span<const std::byte> bytes);

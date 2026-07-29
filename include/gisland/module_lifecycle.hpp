@@ -45,6 +45,7 @@ public:
 
   [[nodiscard]] ModuleState state() const noexcept;
   [[nodiscard]] std::optional<MonotonicTime> restart_at() const noexcept;
+  [[nodiscard]] std::optional<MonotonicTime> next_deadline() const noexcept;
 
   [[nodiscard]] std::expected<StateTransition, LifecycleError> start(MonotonicTime now);
   [[nodiscard]] std::expected<StateTransition, LifecycleError> ready(MonotonicTime now);
@@ -59,8 +60,7 @@ public:
                                                                 MonotonicTime now);
 
 private:
-  [[nodiscard]] StateTransition transition_to(ModuleState next, StopCause cause,
-                                              MonotonicTime now);
+  [[nodiscard]] StateTransition transition_to(ModuleState next, StopCause cause, MonotonicTime now);
   void begin_stopping(StopCause cause, MonotonicTime signal_at);
   void clear_process_state();
   void reset_backoff_if_healthy(MonotonicTime now);

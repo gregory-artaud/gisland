@@ -153,9 +153,8 @@ void write_all(gisland::ProcessBackend &backend, gisland::ProcessHandle &process
 }
 
 [[nodiscard]] std::size_t open_descriptor_count() {
-  return static_cast<std::size_t>(
-      std::distance(std::filesystem::directory_iterator{"/proc/self/fd"},
-                    std::filesystem::directory_iterator{}));
+  return static_cast<std::size_t>(std::distance(
+      std::filesystem::directory_iterator{"/proc/self/fd"}, std::filesystem::directory_iterator{}));
 }
 
 } // namespace
@@ -263,8 +262,7 @@ TEST_CASE("POSIX backend exposes independent nonblocking stdin stdout and stderr
   write_all(backend, process, "\n");
   CHECK(nlohmann::json::parse(read_stdout_line(backend, process)).at("type") == "ready");
   REQUIRE(backend.close_stdin(process).has_value());
-  CHECK(read_stderr_to_eof(backend, process) ==
-        "fake diagnostic one\nfake diagnostic two\n");
+  CHECK(read_stderr_to_eof(backend, process) == "fake diagnostic one\nfake diagnostic two\n");
 
   const auto exit = wait_for_exit(backend, process);
   CHECK(exit.success());

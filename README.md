@@ -117,6 +117,17 @@ progress values, and action IDs. Context selection is independent of raylib and 
 monotonic time point for deterministic priority, recency, expiration, dismissal, and default
 fallback behavior.
 
+## External Modules
+
+gisland can supervise up to 32 trusted external module processes. Commands are launched as explicit
+argument vectors without an implicit shell. Each module communicates through versioned JSONL on
+stdin and stdout; stderr is captured as tagged, bounded log events. Module instances support
+`always`, `on-failure`, and `never` restart policies with bounded exponential backoff, failure
+lockout, and graceful shutdown escalation to process-group signals.
+
+Rendering and layout integration, X11 overlay behavior, control IPC, hot reload orchestration, and
+the shipped clock/calendar module remain future delivery increments.
+
 ## Repository Layout
 
 ```text

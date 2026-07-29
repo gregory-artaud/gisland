@@ -32,18 +32,17 @@ TEST_CASE("init messages serialize as one deterministic JSONL record") {
   const auto second = gisland::serialize_core_message(gisland::CoreMessage{message});
 
   CHECK(first == second);
-  CHECK(parse_record(first) ==
-        nlohmann::json{
-            {"type", "init"},
-            {"protocol",
-             {{"minimum", {{"major", 1}, {"minor", 0}}},
-              {"maximum", {{"major", 1}, {"minor", 3}}}}},
-            {"instance_id", "clock.primary"},
-            {"capabilities", {"actions", "visibility"}},
-            {"configuration", {{"format", "24h"}, {"show_date", true}}},
-            {"locale", "en_GB.UTF-8"},
-            {"timezone", "Europe/London"},
-        });
+  CHECK(parse_record(first) == nlohmann::json{
+                                   {"type", "init"},
+                                   {"protocol",
+                                    {{"minimum", {{"major", 1}, {"minor", 0}}},
+                                     {"maximum", {{"major", 1}, {"minor", 3}}}}},
+                                   {"instance_id", "clock.primary"},
+                                   {"capabilities", {"actions", "visibility"}},
+                                   {"configuration", {{"format", "24h"}, {"show_date", true}}},
+                                   {"locale", "en_GB.UTF-8"},
+                                   {"timezone", "Europe/London"},
+                               });
 }
 
 TEST_CASE("action messages preserve an optional typed value") {
@@ -71,8 +70,7 @@ TEST_CASE("visibility states have stable wire names") {
   const auto expanded = gisland::serialize_core_message(
       gisland::CoreMessage{gisland::VisibilityMessage{gisland::Visibility::expanded_active}});
 
-  CHECK(parse_record(hidden) ==
-        nlohmann::json{{"type", "visibility"}, {"visibility", "hidden"}});
+  CHECK(parse_record(hidden) == nlohmann::json{{"type", "visibility"}, {"visibility", "hidden"}});
   CHECK(parse_record(compact) ==
         nlohmann::json{{"type", "visibility"}, {"visibility", "compact-active"}});
   CHECK(parse_record(expanded) ==

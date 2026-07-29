@@ -92,8 +92,7 @@ private:
   return {};
 }
 
-[[nodiscard]] std::expected<void, ProcessError>
-add_file_action(int result, std::string operation) {
+[[nodiscard]] std::expected<void, ProcessError> add_file_action(int result, std::string operation) {
   if (result != 0) {
     return std::unexpected(process_error(std::move(operation), result));
   }
@@ -105,18 +104,17 @@ configure_file_actions(posix_spawn_file_actions_t &actions, const PipeSet &pipes
                        const std::optional<std::filesystem::path> &working_directory) {
   if (working_directory.has_value()) {
     const auto directory = working_directory->string();
-    auto result = add_file_action(
-        ::posix_spawn_file_actions_addchdir_np(&actions, directory.c_str()),
-        "posix_spawn_file_actions_addchdir_np");
+    auto result =
+        add_file_action(::posix_spawn_file_actions_addchdir_np(&actions, directory.c_str()),
+                        "posix_spawn_file_actions_addchdir_np");
     if (!result.has_value()) {
       return result;
     }
   }
 
-  for (const auto &[source, destination] :
-       {std::pair{pipes.child_stdin(), STDIN_FILENO},
-        std::pair{pipes.child_stdout(), STDOUT_FILENO},
-        std::pair{pipes.child_stderr(), STDERR_FILENO}}) {
+  for (const auto &[source, destination] : {std::pair{pipes.child_stdin(), STDIN_FILENO},
+                                            std::pair{pipes.child_stdout(), STDOUT_FILENO},
+                                            std::pair{pipes.child_stderr(), STDERR_FILENO}}) {
     auto result = add_file_action(::posix_spawn_file_actions_adddup2(&actions, source, destination),
                                   "posix_spawn_file_actions_adddup2");
     if (!result.has_value()) {
@@ -223,8 +221,7 @@ ProcessHandle::ProcessHandle(pid_t pid, int stdin_descriptor, int stdout_descrip
       stdout_descriptor_(stdout_descriptor), stderr_descriptor_(stderr_descriptor) {}
 
 ProcessHandle::ProcessHandle(ProcessHandle &&other) noexcept
-    : pid_(std::exchange(other.pid_, -1)),
-      process_group_(std::exchange(other.process_group_, -1)),
+    : pid_(std::exchange(other.pid_, -1)), process_group_(std::exchange(other.process_group_, -1)),
       stdin_descriptor_(std::exchange(other.stdin_descriptor_, -1)),
       stdout_descriptor_(std::exchange(other.stdout_descriptor_, -1)),
       stderr_descriptor_(std::exchange(other.stderr_descriptor_, -1)) {}
@@ -278,7 +275,7 @@ void ProcessHandle::close_descriptor(int &descriptor) noexcept {
 }
 
 ProcessBackend::ProcessBackend() {
-  struct sigaction action {};
+  struct sigaction action{};
   action.sa_handler = SIG_IGN;
   if (::sigemptyset(&action.sa_mask) != 0 || ::sigaction(SIGPIPE, &action, nullptr) != 0) {
     initialization_error_ = process_error("sigaction(SIGPIPE)", errno);
@@ -417,9 +414,8 @@ ProcessBackend::poll(std::span<const PollInterest> interests,
     descriptors.push_back(pollfd{interest.descriptor, events, 0});
   }
 
-  const auto clamped_timeout =
-      std::clamp(timeout.count(), std::int64_t{0},
-                 static_cast<std::int64_t>(std::numeric_limits<int>::max()));
+  const auto clamped_timeout = std::clamp(
+      timeout.count(), std::int64_t{0}, static_cast<std::int64_t>(std::numeric_limits<int>::max()));
   int result = 0;
   do {
     result = ::poll(descriptors.data(), descriptors.size(), static_cast<int>(clamped_timeout));
