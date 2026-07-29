@@ -11,3 +11,5 @@ Checks: >-
 WarningsAsErrors: ''
 HeaderFilterRegex: '^(include|src|tests)/'
 FormatStyle: file
+CheckOptions:
+  readability-function-cognitive-complexity.IgnoreMacros: true

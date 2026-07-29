@@ -111,3 +111,20 @@ TEST_CASE("publishing an already-expired replacement removes the old context") {
   REQUIRE(arbiter.active(epoch + 1ms) != nullptr);
   CHECK((arbiter.active(epoch + 1ms)->key == gisland::ContextKey{"clock", "default"}));
 }
+
+TEST_CASE("all contexts owned by a stopped instance are removed together") {
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  publish_default(arbiter);
+  arbiter.publish(context("music", "playing", 10), epoch + 1ms);
+  arbiter.publish(context("music", "paused", 20), epoch + 2ms);
+  arbiter.publish(context("timer", "running", 15), epoch + 3ms);
+
+  arbiter.dismiss_instance("music");
+
+  REQUIRE(arbiter.active(epoch + 3ms) != nullptr);
+  CHECK((arbiter.active(epoch + 3ms)->key == gisland::ContextKey{"timer", "running"}));
+
+  arbiter.dismiss_instance("timer");
+  REQUIRE(arbiter.active(epoch + 3ms) != nullptr);
+  CHECK((arbiter.active(epoch + 3ms)->key == gisland::ContextKey{"clock", "default"}));
+}

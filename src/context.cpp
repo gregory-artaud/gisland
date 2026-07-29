@@ -20,6 +20,16 @@ void ContextArbiter::publish(PublishedContext context, MonotonicTime now) {
 
 void ContextArbiter::dismiss(const ContextKey &key) { contexts_.erase(key); }
 
+void ContextArbiter::dismiss_instance(std::string_view instance_id) {
+  for (auto iterator = contexts_.begin(); iterator != contexts_.end();) {
+    if (iterator->first.instance_id == instance_id) {
+      iterator = contexts_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+}
+
 const PublishedContext *ContextArbiter::active(MonotonicTime now) {
   for (auto iterator = contexts_.begin(); iterator != contexts_.end();) {
     const auto &expiration = iterator->second.context.expires_at;

@@ -2,7 +2,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <variant>
 
@@ -166,4 +168,143 @@ day = 2026-07-28
 
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().path == "modules[0].options.day");
+}
+
+TEST_CASE("module supervision settings parse into bounded typed values") {
+  using namespace std::chrono_literals;
+
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+
+[[modules]]
+id = "clock"
+command = ["/usr/bin/clock", "--jsonl"]
+restart = "always"
+working_directory = "/var/lib/gisland-clock"
+
+[modules.environment]
+LANG = "en_GB.UTF-8"
+GISLAND_TEST = "configured"
+
+[modules.timings]
+handshake_ms = 1500
+graceful_shutdown_ms = 900
+terminate_grace_ms = 400
+initial_backoff_ms = 100
+maximum_backoff_ms = 5000
+healthy_reset_ms = 45000
+)";
+
+  const auto result = gisland::parse_config(source, "supervision.toml");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->modules.size() == 1);
+  const auto &module = result->modules.front();
+  CHECK(module.restart == gisland::RestartPolicy::always);
+  CHECK(module.timings.handshake == 1500ms);
+  CHECK(module.timings.graceful_shutdown == 900ms);
+  CHECK(module.timings.terminate_grace == 400ms);
+  CHECK(module.timings.initial_backoff == 100ms);
+  CHECK(module.timings.maximum_backoff == 5000ms);
+  CHECK(module.timings.healthy_reset == 45000ms);
+  CHECK(module.environment.at("LANG") == "en_GB.UTF-8");
+  CHECK(module.environment.at("GISLAND_TEST") == "configured");
+  REQUIRE(module.working_directory.has_value());
+  CHECK(module.working_directory.value_or(std::filesystem::path{}) ==
+        std::filesystem::path{"/var/lib/gisland-clock"});
+}
+
+TEST_CASE("module supervision settings have documented defaults") {
+  using namespace std::chrono_literals;
+
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+
+[[modules]]
+id = "clock"
+command = ["clock"]
+)";
+
+  const auto result = gisland::parse_config(source, "defaults.toml");
+
+  REQUIRE(result.has_value());
+  const auto &module = result->modules.front();
+  CHECK(module.restart == gisland::RestartPolicy::on_failure);
+  CHECK(module.timings.handshake == 2s);
+  CHECK(module.timings.graceful_shutdown == 1s);
+  CHECK(module.timings.terminate_grace == 500ms);
+  CHECK(module.timings.initial_backoff == 250ms);
+  CHECK(module.timings.maximum_backoff == 30s);
+  CHECK(module.timings.healthy_reset == 60s);
+  CHECK(module.environment.empty());
+  CHECK_FALSE(module.working_directory.has_value());
+}
+
+TEST_CASE("invalid module supervision settings are rejected at the TOML boundary") {
+  SECTION("unknown restart policy") {
+    constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+restart = "sometimes"
+)";
+    const auto result = gisland::parse_config(source, "restart.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "modules[0].restart");
+  }
+
+  SECTION("negative duration") {
+    constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+[modules.timings]
+handshake_ms = -1
+)";
+    const auto result = gisland::parse_config(source, "duration.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "modules[0].timings.handshake_ms");
+  }
+
+  SECTION("initial backoff above maximum") {
+    constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+[modules.timings]
+initial_backoff_ms = 2000
+maximum_backoff_ms = 1000
+)";
+    const auto result = gisland::parse_config(source, "backoff.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "modules[0].timings.initial_backoff_ms");
+  }
+
+  SECTION("working directory is relative") {
+    constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+working_directory = "relative/path"
+)";
+    const auto result = gisland::parse_config(source, "cwd.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "modules[0].working_directory");
+  }
 }

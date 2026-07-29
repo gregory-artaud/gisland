@@ -6,9 +6,12 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace gisland {
@@ -113,6 +116,18 @@ required_number(const Json &object, std::string_view key, std::string_view paren
     return std::unexpected(error_at(field_path(parent_path, key), "expected a boolean"));
   }
   return iterator->get<bool>();
+}
+
+[[nodiscard]] std::expected<bool, ProtocolError>
+required_bool(const Json &object, std::string_view key, std::string_view parent_path) {
+  auto field = required_field(object, key, parent_path);
+  if (!field.has_value()) {
+    return std::unexpected(field.error());
+  }
+  if (!(*field)->is_boolean()) {
+    return std::unexpected(error_at(field_path(parent_path, key), "expected a boolean"));
+  }
+  return (*field)->get<bool>();
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_scene(const Json &object,
@@ -334,7 +349,32 @@ parse_children(const Json &object, const std::string &path) {
   if (*protocol_minor < 0) {
     return std::unexpected(error_at("/protocol_minor", "protocol version must be non-negative"));
   }
-  return ModuleMessage{ReadyMessage{*protocol_major, *protocol_minor}};
+
+  std::vector<std::string> capabilities;
+  const auto capabilities_iterator = object.find("capabilities");
+  if (capabilities_iterator != object.end()) {
+    if (!capabilities_iterator->is_array()) {
+      return std::unexpected(error_at("/capabilities", "expected an array"));
+    }
+    std::set<std::string> unique_capabilities;
+    capabilities.reserve(capabilities_iterator->size());
+    for (std::size_t index = 0; index < capabilities_iterator->size(); ++index) {
+      const auto &entry = capabilities_iterator->at(index);
+      const auto path = "/capabilities/" + std::to_string(index);
+      if (!entry.is_string()) {
+        return std::unexpected(error_at(path, "expected a string"));
+      }
+      auto capability = entry.get<std::string>();
+      if (capability.empty()) {
+        return std::unexpected(error_at(path, "capability must not be empty"));
+      }
+      if (!unique_capabilities.insert(capability).second) {
+        return std::unexpected(error_at(path, "capability must be unique"));
+      }
+      capabilities.push_back(std::move(capability));
+    }
+  }
+  return ModuleMessage{ReadyMessage{*protocol_major, *protocol_minor, std::move(capabilities)}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_dismiss(const Json &object) {
@@ -404,6 +444,58 @@ parse_children(const Json &object, const std::string &path) {
                                       std::move(*compact), std::move(expanded)}};
 }
 
+[[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_action_result(const Json &object) {
+  auto action_id = required_string(object, "action_id", "");
+  auto accepted = required_bool(object, "accepted", "");
+  if (!action_id.has_value()) {
+    return std::unexpected(action_id.error());
+  }
+  if (action_id->empty()) {
+    return std::unexpected(error_at("/action_id", "action ID must not be empty"));
+  }
+  if (!accepted.has_value()) {
+    return std::unexpected(accepted.error());
+  }
+
+  std::optional<std::string> message;
+  const auto iterator = object.find("message");
+  if (iterator != object.end() && !iterator->is_null()) {
+    if (!iterator->is_string()) {
+      return std::unexpected(error_at("/message", "expected a string"));
+    }
+    message = iterator->get<std::string>();
+  }
+  return ModuleMessage{ActionResultMessage{std::move(*action_id), *accepted, std::move(message)}};
+}
+
+[[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_log(const Json &object) {
+  auto level = required_string(object, "level", "");
+  auto message = required_string(object, "message", "");
+  if (!level.has_value()) {
+    return std::unexpected(level.error());
+  }
+  if (!message.has_value()) {
+    return std::unexpected(message.error());
+  }
+  if (message->size() > 4096) {
+    return std::unexpected(error_at("/message", "log message exceeds maximum byte count"));
+  }
+
+  LogLevel typed_level;
+  if (*level == "debug") {
+    typed_level = LogLevel::debug;
+  } else if (*level == "info") {
+    typed_level = LogLevel::info;
+  } else if (*level == "warning") {
+    typed_level = LogLevel::warning;
+  } else if (*level == "error") {
+    typed_level = LogLevel::error;
+  } else {
+    return std::unexpected(error_at("/level", "unknown log level"));
+  }
+  return ModuleMessage{LogMessage{typed_level, std::move(*message)}};
+}
+
 } // namespace
 
 std::expected<ModuleMessage, ProtocolError> parse_module_message(std::string_view line) {
@@ -431,7 +523,65 @@ std::expected<ModuleMessage, ProtocolError> parse_module_message(std::string_vie
   if (*type == "dismiss") {
     return parse_dismiss(object);
   }
+  if (*type == "action_result") {
+    return parse_action_result(object);
+  }
+  if (*type == "log") {
+    return parse_log(object);
+  }
   return std::unexpected(error_at("/type", "unknown message type"));
+}
+
+std::string serialize_core_message(const CoreMessage &message) {
+  const auto object = std::visit(
+      [](const auto &typed_message) -> Json {
+        using Message = std::remove_cvref_t<decltype(typed_message)>;
+        if constexpr (std::is_same_v<Message, InitMessage>) {
+          return Json{
+              {"type", "init"},
+              {"protocol",
+               {{"minimum",
+                 {{"major", typed_message.minimum.major}, {"minor", typed_message.minimum.minor}}},
+                {"maximum",
+                 {{"major", typed_message.maximum.major},
+                  {"minor", typed_message.maximum.minor}}}}},
+              {"instance_id", typed_message.instance_id},
+              {"capabilities", typed_message.capabilities},
+              {"configuration", typed_message.configuration},
+              {"locale", typed_message.locale},
+              {"timezone", typed_message.timezone},
+          };
+        } else if constexpr (std::is_same_v<Message, ActionMessage>) {
+          Json action{{"type", "action"}, {"action_id", typed_message.action_id}};
+          if (typed_message.value.has_value()) {
+            action["value"] = *typed_message.value;
+          }
+          return action;
+        } else if constexpr (std::is_same_v<Message, VisibilityMessage>) {
+          std::string_view value;
+          switch (typed_message.value) {
+          case Visibility::hidden:
+            value = "hidden";
+            break;
+          case Visibility::compact_active:
+            value = "compact-active";
+            break;
+          case Visibility::expanded_active:
+            value = "expanded-active";
+            break;
+          }
+          return Json{{"type", "visibility"}, {"visibility", value}};
+        } else {
+          static_assert(std::is_same_v<Message, ShutdownMessage>);
+          return Json{
+              {"type", "shutdown"},
+              {"reason", typed_message.reason},
+              {"deadline_ms", typed_message.deadline.count()},
+          };
+        }
+      },
+      message);
+  return object.dump() + '\n';
 }
 
 } // namespace gisland

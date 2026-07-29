@@ -62,8 +62,13 @@ add_library(
   src/application.cpp
   src/config.cpp
   src/context.cpp
+  src/line_buffer.cpp
+  src/module_lifecycle.cpp
+  src/module_supervisor.cpp
+  src/posix_process_backend.cpp
   src/protocol.cpp
   src/scene.cpp
+  src/write_queue.cpp
 )
 add_library(gisland::app ALIAS gisland_app)
 target_compile_features(gisland_app PUBLIC cxx_std_23)
@@ -74,9 +79,10 @@ target_include_directories(
 )
 target_link_libraries(
   gisland_app
+  PUBLIC
+    nlohmann_json::nlohmann_json
   PRIVATE
     raylib
-    nlohmann_json::nlohmann_json
     tomlplusplus::tomlplusplus
 )
 gisland_set_project_options(gisland_app)
@@ -87,16 +93,32 @@ target_link_libraries(gisland PRIVATE gisland::app)
 gisland_set_project_options(gisland)
 
 if(BUILD_TESTING)
+  add_executable(fake_module tests/fake_module.cpp)
+  target_compile_features(fake_module PRIVATE cxx_std_23)
+  target_link_libraries(fake_module PRIVATE nlohmann_json::nlohmann_json)
+  gisland_set_project_options(fake_module)
+
   add_executable(
     gisland_tests
     tests/application_config_test.cpp
     tests/config_test.cpp
     tests/context_test.cpp
+    tests/line_buffer_test.cpp
+    tests/module_lifecycle_test.cpp
+    tests/module_supervisor_test.cpp
+    tests/posix_process_backend_test.cpp
+    tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/scene_test.cpp
+    tests/write_queue_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(gisland_tests PRIVATE gisland::app Catch2::Catch2WithMain)
+  target_compile_definitions(
+    gisland_tests
+    PRIVATE GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+  )
+  add_dependencies(gisland_tests fake_module)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
@@ -108,19 +130,36 @@ set(
   include/gisland/application.hpp
   include/gisland/config.hpp
   include/gisland/context.hpp
+  include/gisland/line_buffer.hpp
+  include/gisland/module_lifecycle.hpp
+  include/gisland/module_supervisor.hpp
+  include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/scene.hpp
+  include/gisland/write_queue.hpp
   src/application.cpp
   src/config.cpp
   src/context.cpp
+  src/line_buffer.cpp
   src/main.cpp
+  src/module_lifecycle.cpp
+  src/module_supervisor.cpp
+  src/posix_process_backend.cpp
   src/protocol.cpp
   src/scene.cpp
+  src/write_queue.cpp
+  tests/fake_module.cpp
   tests/application_config_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
+  tests/line_buffer_test.cpp
+  tests/module_lifecycle_test.cpp
+  tests/module_supervisor_test.cpp
+  tests/posix_process_backend_test.cpp
+  tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/scene_test.cpp
+  tests/write_queue_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)

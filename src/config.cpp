@@ -2,6 +2,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -178,6 +179,162 @@ parse_options(const toml::table &table, std::size_t module_index, std::string_vi
   return convert_option_table(*options, path, source_name);
 }
 
+[[nodiscard]] std::expected<RestartPolicy, ConfigError>
+parse_restart_policy(const toml::table &table, std::size_t module_index,
+                     std::string_view source_name) {
+  const auto *node = table.get("restart");
+  if (node == nullptr) {
+    return RestartPolicy::on_failure;
+  }
+  const auto value = node->value_exact<std::string>();
+  const std::string path = "modules[" + std::to_string(module_index) + "].restart";
+  if (!value.has_value()) {
+    return std::unexpected(error_at(source_name, path, "expected a string", node));
+  }
+  if (*value == "always") {
+    return RestartPolicy::always;
+  }
+  if (*value == "on-failure") {
+    return RestartPolicy::on_failure;
+  }
+  if (*value == "never") {
+    return RestartPolicy::never;
+  }
+  return std::unexpected(
+      error_at(source_name, path, R"(expected one of "always", "on-failure", or "never")", node));
+}
+
+[[nodiscard]] std::expected<std::chrono::milliseconds, ConfigError>
+parse_duration(const toml::table &table, std::string_view key,
+               std::chrono::milliseconds default_value, const std::string &path,
+               std::string_view source_name) {
+  constexpr auto maximum_duration = std::chrono::hours{24};
+  const auto *node = table.get(key);
+  if (node == nullptr) {
+    return default_value;
+  }
+  const auto value = node->value_exact<std::int64_t>();
+  if (!value.has_value()) {
+    return std::unexpected(error_at(source_name, path, "expected integer milliseconds", node));
+  }
+  if (*value <= 0) {
+    return std::unexpected(error_at(source_name, path, "duration must be positive", node));
+  }
+  const auto duration = std::chrono::milliseconds{*value};
+  if (duration > maximum_duration) {
+    return std::unexpected(error_at(source_name, path, "duration exceeds 24 hours", node));
+  }
+  return duration;
+}
+
+[[nodiscard]] std::expected<ModuleTimings, ConfigError>
+parse_timings(const toml::table &table, std::size_t module_index, std::string_view source_name) {
+  ModuleTimings timings;
+  const auto *node = table.get("timings");
+  if (node == nullptr) {
+    return timings;
+  }
+  const auto *timing_table = node->as_table();
+  const std::string base_path = "modules[" + std::to_string(module_index) + "].timings";
+  if (timing_table == nullptr) {
+    return std::unexpected(error_at(source_name, base_path, "expected a table", node));
+  }
+
+  auto handshake = parse_duration(*timing_table, "handshake_ms", timings.handshake,
+                                  base_path + ".handshake_ms", source_name);
+  auto graceful = parse_duration(*timing_table, "graceful_shutdown_ms", timings.graceful_shutdown,
+                                 base_path + ".graceful_shutdown_ms", source_name);
+  auto terminate = parse_duration(*timing_table, "terminate_grace_ms", timings.terminate_grace,
+                                  base_path + ".terminate_grace_ms", source_name);
+  auto initial = parse_duration(*timing_table, "initial_backoff_ms", timings.initial_backoff,
+                                base_path + ".initial_backoff_ms", source_name);
+  auto maximum = parse_duration(*timing_table, "maximum_backoff_ms", timings.maximum_backoff,
+                                base_path + ".maximum_backoff_ms", source_name);
+  auto healthy = parse_duration(*timing_table, "healthy_reset_ms", timings.healthy_reset,
+                                base_path + ".healthy_reset_ms", source_name);
+  if (!handshake.has_value()) {
+    return std::unexpected(handshake.error());
+  }
+  if (!graceful.has_value()) {
+    return std::unexpected(graceful.error());
+  }
+  if (!terminate.has_value()) {
+    return std::unexpected(terminate.error());
+  }
+  if (!initial.has_value()) {
+    return std::unexpected(initial.error());
+  }
+  if (!maximum.has_value()) {
+    return std::unexpected(maximum.error());
+  }
+  if (!healthy.has_value()) {
+    return std::unexpected(healthy.error());
+  }
+  if (*initial > *maximum) {
+    return std::unexpected(error_at(source_name, base_path + ".initial_backoff_ms",
+                                    "initial backoff must not exceed maximum backoff",
+                                    timing_table->get("initial_backoff_ms")));
+  }
+
+  timings.handshake = *handshake;
+  timings.graceful_shutdown = *graceful;
+  timings.terminate_grace = *terminate;
+  timings.initial_backoff = *initial;
+  timings.maximum_backoff = *maximum;
+  timings.healthy_reset = *healthy;
+  return timings;
+}
+
+[[nodiscard]] std::expected<std::map<std::string, std::string>, ConfigError>
+parse_environment(const toml::table &table, std::size_t module_index,
+                  std::string_view source_name) {
+  std::map<std::string, std::string> environment;
+  const auto *node = table.get("environment");
+  if (node == nullptr) {
+    return environment;
+  }
+  const auto *environment_table = node->as_table();
+  const std::string base_path = "modules[" + std::to_string(module_index) + "].environment";
+  if (environment_table == nullptr) {
+    return std::unexpected(error_at(source_name, base_path, "expected a table", node));
+  }
+  for (const auto &[key, value_node] : *environment_table) {
+    const std::string key_string{key.str()};
+    std::string path = base_path;
+    path.push_back('.');
+    path.append(key_string);
+    if (key_string.empty() || key_string.contains('=')) {
+      return std::unexpected(error_at(source_name, path, "invalid environment key", &value_node));
+    }
+    const auto value = value_node.value_exact<std::string>();
+    if (!value.has_value()) {
+      return std::unexpected(
+          error_at(source_name, path, "expected an environment string", &value_node));
+    }
+    environment.emplace(key_string, *value);
+  }
+  return environment;
+}
+
+[[nodiscard]] std::expected<std::optional<std::filesystem::path>, ConfigError>
+parse_working_directory(const toml::table &table, std::size_t module_index,
+                        std::string_view source_name) {
+  const auto *node = table.get("working_directory");
+  if (node == nullptr) {
+    return std::optional<std::filesystem::path>{};
+  }
+  const std::string path = "modules[" + std::to_string(module_index) + "].working_directory";
+  const auto value = node->value_exact<std::string>();
+  if (!value.has_value()) {
+    return std::unexpected(error_at(source_name, path, "expected a string", node));
+  }
+  std::filesystem::path working_directory{*value};
+  if (!working_directory.is_absolute()) {
+    return std::unexpected(error_at(source_name, path, "working directory must be absolute", node));
+  }
+  return std::optional<std::filesystem::path>{std::move(working_directory)};
+}
+
 [[nodiscard]] std::expected<std::vector<ModuleInstanceConfig>, ConfigError>
 parse_modules(const toml::table &root, std::string_view source_name) {
   const auto *node = root.get("modules");
@@ -213,6 +370,10 @@ parse_modules(const toml::table &root, std::string_view source_name) {
     auto command = parse_command(*module_table, index, source_name);
     auto enabled = parse_enabled(*module_table, index, source_name);
     auto options = parse_options(*module_table, index, source_name);
+    auto restart = parse_restart_policy(*module_table, index, source_name);
+    auto timings = parse_timings(*module_table, index, source_name);
+    auto environment = parse_environment(*module_table, index, source_name);
+    auto working_directory = parse_working_directory(*module_table, index, source_name);
     if (!command.has_value()) {
       return std::unexpected(command.error());
     }
@@ -222,9 +383,29 @@ parse_modules(const toml::table &root, std::string_view source_name) {
     if (!options.has_value()) {
       return std::unexpected(options.error());
     }
+    if (!restart.has_value()) {
+      return std::unexpected(restart.error());
+    }
+    if (!timings.has_value()) {
+      return std::unexpected(timings.error());
+    }
+    if (!environment.has_value()) {
+      return std::unexpected(environment.error());
+    }
+    if (!working_directory.has_value()) {
+      return std::unexpected(working_directory.error());
+    }
 
-    modules.push_back(
-        ModuleInstanceConfig{std::move(*id), std::move(*command), *enabled, std::move(*options)});
+    modules.push_back(ModuleInstanceConfig{
+        .id = std::move(*id),
+        .command = std::move(*command),
+        .enabled = *enabled,
+        .options = std::move(*options),
+        .restart = *restart,
+        .timings = *timings,
+        .environment = std::move(*environment),
+        .working_directory = std::move(*working_directory),
+    });
   }
   return modules;
 }

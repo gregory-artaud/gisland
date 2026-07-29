@@ -1,10 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -20,11 +22,26 @@ struct ConfigValue {
   Value value;
 };
 
+enum class RestartPolicy { always, on_failure, never };
+
+struct ModuleTimings {
+  std::chrono::milliseconds handshake{2000};
+  std::chrono::milliseconds graceful_shutdown{1000};
+  std::chrono::milliseconds terminate_grace{500};
+  std::chrono::milliseconds initial_backoff{250};
+  std::chrono::milliseconds maximum_backoff{30000};
+  std::chrono::milliseconds healthy_reset{60000};
+};
+
 struct ModuleInstanceConfig {
   std::string id;
   std::vector<std::string> command;
-  bool enabled;
+  bool enabled{true};
   ConfigValue::Table options;
+  RestartPolicy restart{RestartPolicy::on_failure};
+  ModuleTimings timings;
+  std::map<std::string, std::string> environment;
+  std::optional<std::filesystem::path> working_directory;
 };
 
 struct AppConfig {
