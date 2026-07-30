@@ -18,6 +18,10 @@ gisland::SceneTemplate text_template(gisland::TemplateValue<std::string> value,
   }};
 }
 
+gisland::SceneTemplatePtr shared(gisland::SceneTemplate value) {
+  return std::make_shared<const gisland::SceneTemplate>(std::move(value));
+}
+
 } // namespace
 
 TEST_CASE("scene templates resolve literal and dotted bound values") {
@@ -87,4 +91,92 @@ TEST_CASE("instantiated templates retain scene validation bounds") {
   REQUIRE_FALSE(invalid.has_value());
   CHECK(invalid.error().code == gisland::TemplateErrorCode::invalid_scene);
   CHECK(invalid.error().template_path == "/value");
+}
+
+TEST_CASE("nested repeats expand arrays in deterministic source order") {
+  const auto day = shared(text_template(gisland::DataBinding{"day.label"},
+                                        gisland::DataBinding{"day.role"}));
+  const auto week = shared(gisland::SceneTemplate{gisland::TemplateRow{
+      .children = {gisland::TemplateRepeat{gisland::DataBinding{"week"}, "day", day}},
+  }});
+  const gisland::SceneTemplate calendar{gisland::TemplateColumn{
+      .children = {gisland::TemplateRepeat{gisland::DataBinding{"weeks"}, "week", week}},
+  }};
+  const nlohmann::json snapshot{{"weeks",
+                                 {{{{"label", "29"}, {"role", "muted"}},
+                                   {{"label", "30"}, {"role", "today"}}},
+                                  {{{"label", "1"}, {"role", "body"}}}}}};
+
+  const auto result = gisland::instantiate_template(calendar, snapshot);
+
+  REQUIRE(result.has_value());
+  const auto *column = std::get_if<gisland::Column>(&result->value);
+  REQUIRE(column != nullptr);
+  REQUIRE(column->children.size() == 2);
+  const auto *first_week = std::get_if<gisland::Row>(&column->children[0]->value);
+  REQUIRE(first_week != nullptr);
+  REQUIRE(first_week->children.size() == 2);
+  const auto *first_day = std::get_if<gisland::Text>(&first_week->children[0]->value);
+  const auto *second_day = std::get_if<gisland::Text>(&first_week->children[1]->value);
+  REQUIRE(first_day != nullptr);
+  REQUIRE(second_day != nullptr);
+  CHECK(first_day->value == "29");
+  CHECK(first_day->role == "muted");
+  CHECK(second_day->value == "30");
+  CHECK(second_day->role == "today");
+}
+
+TEST_CASE("repeat expansion accepts empty arrays and rejects non-arrays") {
+  const auto item = shared(text_template(gisland::DataBinding{"item"}));
+  const gisland::SceneTemplate list{gisland::TemplateRow{
+      .children = {gisland::TemplateRepeat{gisland::DataBinding{"items"}, "item", item}},
+  }};
+
+  const auto empty = gisland::instantiate_template(list, {{"items", nlohmann::json::array()}});
+  REQUIRE(empty.has_value());
+  const auto *row = std::get_if<gisland::Row>(&empty->value);
+  REQUIRE(row != nullptr);
+  CHECK(row->children.empty());
+
+  const auto mismatch = gisland::instantiate_template(list, {{"items", "none"}});
+  REQUIRE_FALSE(mismatch.has_value());
+  CHECK(mismatch.error().code == gisland::TemplateErrorCode::repeat_source_mismatch);
+  CHECK(mismatch.error().data_path == "/items");
+}
+
+TEST_CASE("repeat expansion remains bounded by scene node limits") {
+  const auto item = shared(text_template(std::string{"x"}));
+  const gisland::SceneTemplate list{gisland::TemplateRow{
+      .children = {gisland::TemplateRepeat{gisland::DataBinding{"items"}, "item", item}},
+  }};
+  const nlohmann::json snapshot{{"items", nlohmann::json::array()}};
+  auto oversized = snapshot;
+  for (int index = 0; index < 256; ++index) {
+    oversized["items"].push_back(index);
+  }
+
+  const auto result = gisland::instantiate_template(list, oversized);
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().code == gisland::TemplateErrorCode::invalid_scene);
+}
+
+TEST_CASE("module view state replaces compact and expanded views atomically") {
+  gisland::ModuleViewState state{text_template(gisland::DataBinding{"compact"}),
+                                 text_template(gisland::DataBinding{"expanded"})};
+  REQUIRE(state.apply({{"compact", "14:35"}, {"expanded", "July"}, {"old", true}})
+              .has_value());
+  REQUIRE(state.views().has_value());
+
+  const auto rejected = state.apply({{"compact", "14:36"}});
+  REQUIRE_FALSE(rejected.has_value());
+  const auto *preserved = std::get_if<gisland::Text>(&state.views()->compact.value);
+  REQUIRE(preserved != nullptr);
+  CHECK(preserved->value == "14:35");
+  CHECK(state.snapshot()->contains("old"));
+
+  REQUIRE(state.apply({{"compact", "14:36"}, {"expanded", "August"}}).has_value());
+  const auto *replaced = std::get_if<gisland::Text>(&state.views()->compact.value);
+  REQUIRE(replaced != nullptr);
+  CHECK(replaced->value == "14:36");
+  CHECK_FALSE(state.snapshot()->contains("old"));
 }

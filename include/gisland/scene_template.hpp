@@ -95,4 +95,24 @@ struct TemplateError {
 [[nodiscard]] std::expected<SceneNode, TemplateError>
 instantiate_template(const SceneTemplate &scene_template, const nlohmann::json &snapshot);
 
+struct InstantiatedViews {
+  SceneNode compact;
+  std::optional<SceneNode> expanded;
+};
+
+class ModuleViewState {
+public:
+  ModuleViewState(SceneTemplate compact, std::optional<SceneTemplate> expanded = std::nullopt);
+
+  [[nodiscard]] std::expected<void, TemplateError> apply(nlohmann::json snapshot);
+  [[nodiscard]] const std::optional<nlohmann::json> &snapshot() const;
+  [[nodiscard]] const std::optional<InstantiatedViews> &views() const;
+
+private:
+  SceneTemplate compact_template_;
+  std::optional<SceneTemplate> expanded_template_;
+  std::optional<nlohmann::json> snapshot_;
+  std::optional<InstantiatedViews> views_;
+};
+
 } // namespace gisland
