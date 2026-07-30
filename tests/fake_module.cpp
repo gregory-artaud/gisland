@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <filesystem>
@@ -148,18 +149,45 @@ void read_init() {
     return 4;
   }
 
-  const pid_t child = ::fork();
-  if (child < 0) {
+  std::array<int, 2> ready_pipe{};
+  if (::pipe2(ready_pipe.data(), O_CLOEXEC) != 0) {
     return 5;
   }
+
+  const pid_t child = ::fork();
+  if (child < 0) {
+    static_cast<void>(::close(ready_pipe[0]));
+    static_cast<void>(::close(ready_pipe[1]));
+    return 6;
+  }
   if (child == 0) {
+    static_cast<void>(::close(ready_pipe[0]));
     struct sigaction default_action{};
     default_action.sa_handler = SIG_DFL;
     ::sigemptyset(&default_action.sa_mask);
-    static_cast<void>(::sigaction(SIGTERM, &default_action, nullptr));
+    if (::sigaction(SIGTERM, &default_action, nullptr) != 0) {
+      _exit(7);
+    }
+    const char ready = '1';
+    if (::write(ready_pipe[1], &ready, sizeof(ready)) != sizeof(ready)) {
+      _exit(8);
+    }
+    static_cast<void>(::close(ready_pipe[1]));
     while (true) {
       ::pause();
     }
+  }
+
+  static_cast<void>(::close(ready_pipe[1]));
+  char ready = 0;
+  ssize_t ready_count = -1;
+  do {
+    ready_count = ::read(ready_pipe[0], &ready, sizeof(ready));
+  } while (ready_count < 0 && errno == EINTR);
+  static_cast<void>(::close(ready_pipe[0]));
+  if (ready_count != sizeof(ready)) {
+    static_cast<void>(::waitpid(child, nullptr, 0));
+    return 9;
   }
 
   write_json({{"descendant_pid", child}});
