@@ -35,7 +35,7 @@ struct BindingContext {
 resolve_binding(const DataBinding &binding, const BindingContext &context,
                 const std::string &template_path) {
   if (binding.path.empty() || binding.path.front() == '.' || binding.path.back() == '.' ||
-      binding.path.find("..") != std::string::npos) {
+      binding.path.contains("..")) {
     return std::unexpected(
         TemplateError{TemplateErrorCode::invalid_binding, template_path, data_path(binding.path)});
   }
@@ -45,9 +45,10 @@ resolve_binding(const DataBinding &binding, const BindingContext &context,
   std::string traversed_path;
   const auto first_end = binding.path.find('.');
   const auto first = binding.path.substr(0, first_end);
-  for (auto iterator = context.scopes.rbegin(); iterator != context.scopes.rend(); ++iterator) {
-    if (iterator->first == first) {
-      current = iterator->second;
+  for (std::size_t index = context.scopes.size(); index > 0; --index) {
+    const auto &scope = context.scopes[index - 1];
+    if (scope.first == first) {
+      current = scope.second;
       traversed_path = "/" + first;
       if (first_end == std::string::npos) {
         return current;
@@ -62,7 +63,7 @@ resolve_binding(const DataBinding &binding, const BindingContext &context,
         start, end == std::string::npos ? binding.path.size() - start : end - start);
     if (!current->is_object()) {
       return std::unexpected(TemplateError{TemplateErrorCode::wrong_type, template_path,
-                                            traversed_path.empty() ? "/" : traversed_path});
+                                           traversed_path.empty() ? "/" : traversed_path});
     }
     const auto iterator = current->find(segment);
     if (iterator == current->end()) {
@@ -120,12 +121,15 @@ public:
   explicit Instantiator(const nlohmann::json &snapshot) : context_{snapshot, {}} {}
 
   [[nodiscard]] std::expected<SceneNode, TemplateError>
+  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
   instantiate(const SceneTemplate &scene_template, const std::string &path = "") {
     ++node_count_;
     if (node_count_ > maximum_nodes) {
       return std::unexpected(TemplateError{TemplateErrorCode::invalid_scene, path, {}});
     }
     return std::visit(
+        // The variant dispatch keeps each template primitive adjacent to its scene conversion.
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         [this, &path](const auto &primitive) -> std::expected<SceneNode, TemplateError> {
           using Primitive = std::decay_t<decltype(primitive)>;
           if constexpr (std::is_same_v<Primitive, TemplateText>) {

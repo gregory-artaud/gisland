@@ -170,18 +170,25 @@ TEST_CASE("module view state replaces compact and expanded views atomically") {
   gisland::ModuleViewState state{text_template(gisland::DataBinding{"compact"}),
                                  text_template(gisland::DataBinding{"expanded"})};
   REQUIRE(state.apply({{"compact", "14:35"}, {"expanded", "July"}, {"old", true}}).has_value());
-  REQUIRE(state.views().has_value());
+  const auto *initial_views = state.views().has_value() ? &state.views().value() : nullptr;
+  REQUIRE(initial_views != nullptr);
 
   const auto rejected = state.apply({{"compact", "14:36"}});
   REQUIRE_FALSE(rejected.has_value());
-  const auto *preserved = std::get_if<gisland::Text>(&state.views()->compact.value);
+  const auto *preserved = std::get_if<gisland::Text>(&initial_views->compact.value);
   REQUIRE(preserved != nullptr);
   CHECK(preserved->value == "14:35");
-  CHECK(state.snapshot()->contains("old"));
+  const auto *initial_snapshot = state.snapshot().has_value() ? &state.snapshot().value() : nullptr;
+  REQUIRE(initial_snapshot != nullptr);
+  CHECK(initial_snapshot->contains("old"));
 
   REQUIRE(state.apply({{"compact", "14:36"}, {"expanded", "August"}}).has_value());
-  const auto *replaced = std::get_if<gisland::Text>(&state.views()->compact.value);
+  const auto *updated_views = state.views().has_value() ? &state.views().value() : nullptr;
+  REQUIRE(updated_views != nullptr);
+  const auto *replaced = std::get_if<gisland::Text>(&updated_views->compact.value);
   REQUIRE(replaced != nullptr);
   CHECK(replaced->value == "14:36");
-  CHECK_FALSE(state.snapshot()->contains("old"));
+  const auto *updated_snapshot = state.snapshot().has_value() ? &state.snapshot().value() : nullptr;
+  REQUIRE(updated_snapshot != nullptr);
+  CHECK_FALSE(updated_snapshot->contains("old"));
 }

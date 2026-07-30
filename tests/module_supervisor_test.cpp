@@ -191,8 +191,9 @@ TEST_CASE("supervisor emits data snapshots only after capability negotiation") {
     EventLog events;
     auto request = fake_request("data", "data");
     request.init.maximum = {.major = 1, .minor = 1};
-    request.init.capabilities.push_back("data-snapshots");
-    REQUIRE(supervisor.start(std::move(request)).has_value());
+    request.init.capabilities.emplace_back("data-snapshots");
+    const auto started = supervisor.start(std::move(request));
+    REQUIRE(started.has_value());
 
     collect_until(supervisor, events, [](const auto &observed) {
       return has_message<gisland::DataMessage>(observed, "data");

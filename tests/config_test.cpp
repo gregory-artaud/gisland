@@ -93,11 +93,13 @@ children = [
 
   REQUIRE(result.has_value());
   REQUIRE(result->modules.size() == 1);
-  REQUIRE(result->modules.front().view.has_value());
-  CHECK(std::holds_alternative<gisland::TemplateRow>(result->modules.front().view->compact.value));
-  REQUIRE(result->modules.front().view->expanded.has_value());
-  CHECK(std::holds_alternative<gisland::TemplateColumn>(
-      result->modules.front().view->expanded->value));
+  const auto *view =
+      result->modules.front().view.has_value() ? &result->modules.front().view.value() : nullptr;
+  REQUIRE(view != nullptr);
+  CHECK(std::holds_alternative<gisland::TemplateRow>(view->compact.value));
+  const auto *expanded = view->expanded.has_value() ? &view->expanded.value() : nullptr;
+  REQUIRE(expanded != nullptr);
+  CHECK(std::holds_alternative<gisland::TemplateColumn>(expanded->value));
 }
 
 TEST_CASE("invalid module view bindings fail at the TOML boundary") {
