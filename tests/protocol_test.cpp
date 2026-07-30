@@ -124,6 +124,34 @@ TEST_CASE("ready dismiss action-result and log lines are parsed into typed messa
   CHECK(typed_log->message == "late update");
 }
 
+TEST_CASE("a data line preserves its complete object value") {
+  const auto result = gisland::parse_module_message(
+      R"({"type":"data","value":{"temperature":21.5,"forecast":[{"day":"Tuesday","hours":[14,15,16]}]}})");
+
+  REQUIRE(result.has_value());
+  const auto *data = std::get_if<gisland::DataMessage>(&*result);
+  REQUIRE(data != nullptr);
+  CHECK(data->value == nlohmann::json{{"temperature", 21.5},
+                                      {"forecast",
+                                       {{{"day", "Tuesday"}, {"hours", {14, 15, 16}}}}}});
+}
+
+TEST_CASE("a data line requires an object value") {
+  SECTION("missing value") {
+    const auto result = gisland::parse_module_message(R"({"type":"data"})");
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "/value");
+  }
+
+  SECTION("non-object value") {
+    const auto result = gisland::parse_module_message(R"({"type":"data","value":[1,2,3]})");
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "/value");
+  }
+}
+
 TEST_CASE("protocol errors identify the failing JSON path") {
   SECTION("missing required field") {
     const auto result = gisland::parse_module_message(
