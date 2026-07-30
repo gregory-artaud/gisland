@@ -75,6 +75,84 @@ TEST_CASE("hover expands immediately and collapses after its exit tolerance") {
   CHECK(hover.mode() == gisland::IslandMode::compact);
 }
 
+TEST_CASE("content crossfade starts with only compact content visible") {
+  const gisland::ContentCrossfade crossfade;
+
+  const auto compact = crossfade.compact();
+  CHECK(compact.opacity == Approx(1.0F));
+  CHECK(compact.blur == Approx(0.0F));
+  CHECK(compact.scale == Approx(1.0F));
+
+  const auto expanded = crossfade.expanded();
+  CHECK(expanded.opacity == Approx(0.0F));
+  CHECK(expanded.blur == Approx(6.0F));
+  CHECK(expanded.scale == Approx(0.96F));
+}
+
+TEST_CASE("content crossfade delays the incoming layer while outgoing content leaves") {
+  gisland::ContentCrossfade crossfade;
+  crossfade.set_mode(gisland::IslandMode::expanded);
+  crossfade.update(0.05F);
+
+  const auto outgoing = crossfade.compact();
+  CHECK(outgoing.opacity < 1.0F);
+  CHECK(outgoing.blur > 0.0F);
+  CHECK(outgoing.scale < 1.0F);
+
+  const auto delayed = crossfade.expanded();
+  CHECK(delayed.opacity == Approx(0.0F));
+  CHECK(delayed.blur == Approx(6.0F));
+  CHECK(delayed.scale == Approx(0.96F));
+
+  crossfade.update(0.02F);
+  const auto incoming = crossfade.expanded();
+  CHECK(incoming.opacity > 0.0F);
+  CHECK(incoming.blur < 6.0F);
+  CHECK(incoming.scale > 0.96F);
+}
+
+TEST_CASE("content crossfade settles and reverses from its current values") {
+  gisland::ContentCrossfade crossfade;
+  crossfade.set_mode(gisland::IslandMode::expanded);
+  crossfade.update(0.41F);
+
+  CHECK(crossfade.compact().opacity == Approx(0.0F));
+  CHECK(crossfade.expanded().opacity == Approx(1.0F));
+  CHECK(crossfade.expanded().blur == Approx(0.0F));
+  CHECK(crossfade.expanded().scale == Approx(1.0F));
+
+  crossfade.set_mode(gisland::IslandMode::compact);
+  const auto compact_before_delay = crossfade.compact();
+  crossfade.update(0.03F);
+  CHECK(crossfade.compact().opacity == Approx(compact_before_delay.opacity));
+  CHECK(crossfade.expanded().opacity < 1.0F);
+
+  crossfade.update(0.38F);
+  CHECK(crossfade.compact().opacity == Approx(1.0F));
+  CHECK(crossfade.expanded().opacity == Approx(0.0F));
+}
+
+TEST_CASE("content crossfade preserves continuity when reversed mid-flight") {
+  gisland::ContentCrossfade crossfade;
+  crossfade.set_mode(gisland::IslandMode::expanded);
+  crossfade.update(0.15F);
+
+  const auto compact_before_reversal = crossfade.compact();
+  const auto expanded_before_reversal = crossfade.expanded();
+  crossfade.set_mode(gisland::IslandMode::compact);
+
+  CHECK(crossfade.compact().opacity == Approx(compact_before_reversal.opacity));
+  CHECK(crossfade.compact().blur == Approx(compact_before_reversal.blur));
+  CHECK(crossfade.compact().scale == Approx(compact_before_reversal.scale));
+  CHECK(crossfade.expanded().opacity == Approx(expanded_before_reversal.opacity));
+  CHECK(crossfade.expanded().blur == Approx(expanded_before_reversal.blur));
+  CHECK(crossfade.expanded().scale == Approx(expanded_before_reversal.scale));
+
+  crossfade.update(0.03F);
+  CHECK(crossfade.compact().opacity == Approx(compact_before_reversal.opacity));
+  CHECK(crossfade.expanded().opacity < expanded_before_reversal.opacity);
+}
+
 TEST_CASE("rounded mask covers the middle and insets its edges") {
   const auto mask = gisland::rounded_mask_rows(gisland::geometry_for(gisland::IslandMode::compact));
   REQUIRE(mask.size() == 44);

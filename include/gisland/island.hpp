@@ -52,6 +52,37 @@ private:
   float target_{0.0F};
 };
 
+struct ContentVisual {
+  float opacity;
+  float blur;
+  float scale;
+};
+
+class ContentCrossfade {
+public:
+  void set_mode(IslandMode mode);
+  void update(float delta_seconds);
+  [[nodiscard]] ContentVisual compact() const;
+  [[nodiscard]] ContentVisual expanded() const;
+
+private:
+  struct LayerTransition {
+    ContentVisual value;
+    ContentVisual start;
+    ContentVisual target;
+    float elapsed;
+    float delay;
+  };
+
+  static void retarget(LayerTransition &layer, bool active);
+  static void update_layer(LayerTransition &layer, float delta_seconds);
+
+  IslandMode mode_{IslandMode::compact};
+  LayerTransition compact_{{1.0F, 0.0F, 1.0F}, {1.0F, 0.0F, 1.0F}, {1.0F, 0.0F, 1.0F}, 0.0F, 0.0F};
+  LayerTransition expanded_{
+      {0.0F, 6.0F, 0.96F}, {0.0F, 6.0F, 0.96F}, {0.0F, 6.0F, 0.96F}, 0.0F, 0.0F};
+};
+
 [[nodiscard]] IslandGeometry geometry_for(IslandMode mode);
 [[nodiscard]] IslandCanvasSize island_canvas_size();
 [[nodiscard]] IslandPlacement place_at_top_center(const IslandGeometry &geometry,
