@@ -283,6 +283,33 @@ void read_init() {
     });
     return silent();
   }
+  if (mode == "data" || mode == "data-without-capability" ||
+      mode == "data-before-ready") {
+    read_init();
+    if (mode == "data-before-ready") {
+      write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});
+      return silent();
+    }
+    if (mode == "data") {
+      write_json({
+          {"type", "ready"},
+          {"protocol_major", 1},
+          {"protocol_minor", 1},
+          {"capabilities", {"data-snapshots"}},
+      });
+    } else {
+      write_ready();
+    }
+    write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
   if (mode == "final-line") {
     read_init();
     write_ready();
