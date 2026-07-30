@@ -140,7 +140,7 @@ public:
 
   [[nodiscard]] std::expected<void, SupervisorCommandError> enqueue(Command command) {
     {
-      const std::lock_guard lock{command_mutex_};
+      const std::scoped_lock lock{command_mutex_};
       if (!accepting_commands_) {
         return std::unexpected(SupervisorCommandError::shutting_down);
       }
@@ -154,7 +154,7 @@ public:
   }
 
   [[nodiscard]] std::vector<SupervisorEvent> drain_events() {
-    const std::lock_guard lock{event_mutex_};
+    const std::scoped_lock lock{event_mutex_};
     return take_events();
   }
 
@@ -166,12 +166,12 @@ public:
   }
 
   void shutdown() {
-    const std::lock_guard shutdown_lock{shutdown_mutex_};
+    const std::scoped_lock shutdown_lock{shutdown_mutex_};
     if (!thread_.joinable()) {
       return;
     }
     {
-      const std::lock_guard command_lock{command_mutex_};
+      const std::scoped_lock command_lock{command_mutex_};
       accepting_commands_ = false;
       commands_.emplace_back(ShutdownCommand{});
     }
@@ -244,7 +244,7 @@ private:
 
   [[nodiscard]] std::deque<Command> take_commands() {
     std::deque<Command> commands;
-    const std::lock_guard lock{command_mutex_};
+    const std::scoped_lock lock{command_mutex_};
     commands.swap(commands_);
     return commands;
   }
@@ -854,7 +854,7 @@ private:
 
   void emit(SupervisorEvent event) {
     {
-      const std::lock_guard lock{event_mutex_};
+      const std::scoped_lock lock{event_mutex_};
       if (auto *incoming_log = std::get_if<StderrLogEvent>(&event)) {
         if (!events_.empty()) {
           if (auto *last_log = std::get_if<StderrLogEvent>(&events_.back());
