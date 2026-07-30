@@ -203,8 +203,7 @@ TEST_CASE("supervisor emits data snapshots only after capability negotiation") {
   SECTION("data without capability is a violation") {
     gisland::ModuleSupervisor supervisor;
     EventLog events;
-    REQUIRE(supervisor.start(fake_request("unnegotiated", "data-without-capability"))
-                .has_value());
+    REQUIRE(supervisor.start(fake_request("unnegotiated", "data-without-capability")).has_value());
 
     collect_until(supervisor, events, [](const auto &observed) {
       return count_events<gisland::ProtocolViolationEvent>(observed, "unnegotiated") > 0;

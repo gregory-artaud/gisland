@@ -283,8 +283,7 @@ void read_init() {
     });
     return silent();
   }
-  if (mode == "data" || mode == "data-without-capability" ||
-      mode == "data-before-ready") {
+  if (mode == "data" || mode == "data-without-capability" || mode == "data-before-ready") {
     read_init();
     if (mode == "data-before-ready") {
       write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});

@@ -21,8 +21,8 @@ struct BindingContext {
   while (start <= binding.size()) {
     const auto end = binding.find('.', start);
     result += '/';
-    result += binding.substr(start, end == std::string_view::npos ? binding.size() - start
-                                                                  : end - start);
+    result +=
+        binding.substr(start, end == std::string_view::npos ? binding.size() - start : end - start);
     if (end == std::string_view::npos) {
       break;
     }
@@ -42,11 +42,13 @@ resolve_binding(const DataBinding &binding, const BindingContext &context,
 
   const nlohmann::json *current = &context.snapshot;
   std::size_t start = 0;
+  std::string traversed_path;
   const auto first_end = binding.path.find('.');
   const auto first = binding.path.substr(0, first_end);
   for (auto iterator = context.scopes.rbegin(); iterator != context.scopes.rend(); ++iterator) {
     if (iterator->first == first) {
       current = iterator->second;
+      traversed_path = "/" + first;
       if (first_end == std::string::npos) {
         return current;
       }
@@ -56,19 +58,19 @@ resolve_binding(const DataBinding &binding, const BindingContext &context,
   }
   while (start < binding.path.size()) {
     const auto end = binding.path.find('.', start);
-    const auto segment = binding.path.substr(start, end == std::string::npos
-                                                        ? binding.path.size() - start
-                                                        : end - start);
+    const auto segment = binding.path.substr(
+        start, end == std::string::npos ? binding.path.size() - start : end - start);
     if (!current->is_object()) {
-      return std::unexpected(TemplateError{TemplateErrorCode::missing_data, template_path,
-                                            data_path(binding.path)});
+      return std::unexpected(TemplateError{TemplateErrorCode::wrong_type, template_path,
+                                            traversed_path.empty() ? "/" : traversed_path});
     }
     const auto iterator = current->find(segment);
     if (iterator == current->end()) {
-      return std::unexpected(TemplateError{TemplateErrorCode::missing_data, template_path,
-                                            data_path(binding.path)});
+      return std::unexpected(
+          TemplateError{TemplateErrorCode::missing_data, template_path, data_path(binding.path)});
     }
     current = &*iterator;
+    traversed_path += "/" + segment;
     if (end == std::string::npos) {
       break;
     }
@@ -78,9 +80,9 @@ resolve_binding(const DataBinding &binding, const BindingContext &context,
 }
 
 template <typename T>
-[[nodiscard]] std::expected<T, TemplateError>
-resolve_value(const TemplateValue<T> &value, const BindingContext &context,
-              const std::string &template_path) {
+[[nodiscard]] std::expected<T, TemplateError> resolve_value(const TemplateValue<T> &value,
+                                                            const BindingContext &context,
+                                                            const std::string &template_path) {
   if (const auto *literal = std::get_if<T>(&value); literal != nullptr) {
     return *literal;
   }
@@ -92,18 +94,18 @@ resolve_value(const TemplateValue<T> &value, const BindingContext &context,
   const auto &json = **resolved;
   if constexpr (std::is_same_v<T, std::string>) {
     if (!json.is_string()) {
-      return std::unexpected(TemplateError{TemplateErrorCode::wrong_type, template_path,
-                                            data_path(binding.path)});
+      return std::unexpected(
+          TemplateError{TemplateErrorCode::wrong_type, template_path, data_path(binding.path)});
     }
   } else if constexpr (std::is_same_v<T, bool>) {
     if (!json.is_boolean()) {
-      return std::unexpected(TemplateError{TemplateErrorCode::wrong_type, template_path,
-                                            data_path(binding.path)});
+      return std::unexpected(
+          TemplateError{TemplateErrorCode::wrong_type, template_path, data_path(binding.path)});
     }
   } else if constexpr (std::is_same_v<T, double>) {
     if (!json.is_number() || json.is_boolean()) {
-      return std::unexpected(TemplateError{TemplateErrorCode::wrong_type, template_path,
-                                            data_path(binding.path)});
+      return std::unexpected(
+          TemplateError{TemplateErrorCode::wrong_type, template_path, data_path(binding.path)});
     }
   }
   return json.template get<T>();
@@ -124,110 +126,110 @@ public:
       return std::unexpected(TemplateError{TemplateErrorCode::invalid_scene, path, {}});
     }
     return std::visit(
-      [this, &path](const auto &primitive) -> std::expected<SceneNode, TemplateError> {
-        using Primitive = std::decay_t<decltype(primitive)>;
-        if constexpr (std::is_same_v<Primitive, TemplateText>) {
-          auto value = resolve_value(primitive.value, context_, path + "/value");
-          auto role = resolve_value(primitive.role, context_, path + "/role");
-          auto truncation = resolve_value(primitive.truncation, context_, path + "/truncation");
-          if (!value) {
-            return std::unexpected(value.error());
+        [this, &path](const auto &primitive) -> std::expected<SceneNode, TemplateError> {
+          using Primitive = std::decay_t<decltype(primitive)>;
+          if constexpr (std::is_same_v<Primitive, TemplateText>) {
+            auto value = resolve_value(primitive.value, context_, path + "/value");
+            auto role = resolve_value(primitive.role, context_, path + "/role");
+            auto truncation = resolve_value(primitive.truncation, context_, path + "/truncation");
+            if (!value) {
+              return std::unexpected(value.error());
+            }
+            if (!role) {
+              return std::unexpected(role.error());
+            }
+            if (!truncation) {
+              return std::unexpected(truncation.error());
+            }
+            return SceneNode{Text{std::move(*value), std::move(*role), std::move(*truncation)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateIcon>) {
+            auto name = resolve_value(primitive.name, context_, path + "/name");
+            auto label =
+                resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
+            if (!name) {
+              return std::unexpected(name.error());
+            }
+            if (!label) {
+              return std::unexpected(label.error());
+            }
+            return SceneNode{Icon{std::move(*name), std::move(*label)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateSpacer>) {
+            auto flexible = resolve_value(primitive.flexible, context_, path + "/flexible");
+            auto size = resolve_value(primitive.size_token, context_, path + "/size_token");
+            if (!flexible) {
+              return std::unexpected(flexible.error());
+            }
+            if (!size) {
+              return std::unexpected(size.error());
+            }
+            return SceneNode{Spacer{*flexible, std::move(*size)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateProgress>) {
+            auto value = resolve_value(primitive.value, context_, path + "/value");
+            auto label = resolve_value(primitive.label, context_, path + "/label");
+            auto state = resolve_value(primitive.state, context_, path + "/state");
+            if (!value) {
+              return std::unexpected(value.error());
+            }
+            if (!label) {
+              return std::unexpected(label.error());
+            }
+            if (!state) {
+              return std::unexpected(state.error());
+            }
+            return SceneNode{Progress{*value, std::move(*label), std::move(*state)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateRow>) {
+            auto children = instantiate_children(primitive.children, path);
+            auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");
+            auto gap = resolve_value(primitive.gap, context_, path + "/gap");
+            if (!children) {
+              return std::unexpected(children.error());
+            }
+            if (!alignment) {
+              return std::unexpected(alignment.error());
+            }
+            if (!gap) {
+              return std::unexpected(gap.error());
+            }
+            return SceneNode{Row{std::move(*children), std::move(*alignment), std::move(*gap)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateColumn>) {
+            auto children = instantiate_children(primitive.children, path);
+            auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");
+            auto gap = resolve_value(primitive.gap, context_, path + "/gap");
+            if (!children) {
+              return std::unexpected(children.error());
+            }
+            if (!alignment) {
+              return std::unexpected(alignment.error());
+            }
+            if (!gap) {
+              return std::unexpected(gap.error());
+            }
+            return SceneNode{Column{std::move(*children), std::move(*alignment), std::move(*gap)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateButton>) {
+            if (primitive.content == nullptr) {
+              return std::unexpected(
+                  TemplateError{TemplateErrorCode::invalid_template, path + "/content", {}});
+            }
+            auto content = instantiate(*primitive.content, path + "/content");
+            auto enabled = resolve_value(primitive.enabled, context_, path + "/enabled");
+            auto label =
+                resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
+            if (!content) {
+              return std::unexpected(content.error());
+            }
+            if (!enabled) {
+              return std::unexpected(enabled.error());
+            }
+            if (!label) {
+              return std::unexpected(label.error());
+            }
+            return SceneNode{
+                Button{std::move(*content), primitive.action_id, *enabled, std::move(*label)}};
+          } else {
+            return std::unexpected(TemplateError{TemplateErrorCode::invalid_template, "", ""});
           }
-          if (!role) {
-            return std::unexpected(role.error());
-          }
-          if (!truncation) {
-            return std::unexpected(truncation.error());
-          }
-          return SceneNode{Text{std::move(*value), std::move(*role), std::move(*truncation)}};
-        } else if constexpr (std::is_same_v<Primitive, TemplateIcon>) {
-          auto name = resolve_value(primitive.name, context_, path + "/name");
-          auto label = resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
-          if (!name) {
-            return std::unexpected(name.error());
-          }
-          if (!label) {
-            return std::unexpected(label.error());
-          }
-          return SceneNode{Icon{std::move(*name), std::move(*label)}};
-        } else if constexpr (std::is_same_v<Primitive, TemplateSpacer>) {
-          auto flexible = resolve_value(primitive.flexible, context_, path + "/flexible");
-          auto size = resolve_value(primitive.size_token, context_, path + "/size_token");
-          if (!flexible) {
-            return std::unexpected(flexible.error());
-          }
-          if (!size) {
-            return std::unexpected(size.error());
-          }
-          return SceneNode{Spacer{*flexible, std::move(*size)}};
-        } else if constexpr (std::is_same_v<Primitive, TemplateProgress>) {
-          auto value = resolve_value(primitive.value, context_, path + "/value");
-          auto label = resolve_value(primitive.label, context_, path + "/label");
-          auto state = resolve_value(primitive.state, context_, path + "/state");
-          if (!value) {
-            return std::unexpected(value.error());
-          }
-          if (!label) {
-            return std::unexpected(label.error());
-          }
-          if (!state) {
-            return std::unexpected(state.error());
-          }
-          return SceneNode{Progress{*value, std::move(*label), std::move(*state)}};
-        } else if constexpr (std::is_same_v<Primitive, TemplateRow>) {
-          auto children = instantiate_children(primitive.children, path);
-          auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");
-          auto gap = resolve_value(primitive.gap, context_, path + "/gap");
-          if (!children) {
-            return std::unexpected(children.error());
-          }
-          if (!alignment) {
-            return std::unexpected(alignment.error());
-          }
-          if (!gap) {
-            return std::unexpected(gap.error());
-          }
-          return SceneNode{Row{std::move(*children), std::move(*alignment), std::move(*gap)}};
-        } else if constexpr (std::is_same_v<Primitive, TemplateColumn>) {
-          auto children = instantiate_children(primitive.children, path);
-          auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");
-          auto gap = resolve_value(primitive.gap, context_, path + "/gap");
-          if (!children) {
-            return std::unexpected(children.error());
-          }
-          if (!alignment) {
-            return std::unexpected(alignment.error());
-          }
-          if (!gap) {
-            return std::unexpected(gap.error());
-          }
-          return SceneNode{Column{std::move(*children), std::move(*alignment), std::move(*gap)}};
-        } else if constexpr (std::is_same_v<Primitive, TemplateButton>) {
-          if (primitive.content == nullptr) {
-            return std::unexpected(
-                TemplateError{TemplateErrorCode::invalid_template, path + "/content", {}});
-          }
-          auto content = instantiate(*primitive.content, path + "/content");
-          auto enabled = resolve_value(primitive.enabled, context_, path + "/enabled");
-          auto label =
-              resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
-          if (!content) {
-            return std::unexpected(content.error());
-          }
-          if (!enabled) {
-            return std::unexpected(enabled.error());
-          }
-          if (!label) {
-            return std::unexpected(label.error());
-          }
-          return SceneNode{Button{std::move(*content), primitive.action_id, *enabled,
-                                  std::move(*label)}};
-        } else {
-          return std::unexpected(
-              TemplateError{TemplateErrorCode::invalid_template, "", ""});
-        }
-      },
-      scene_template.value);
+        },
+        scene_template.value);
   }
 
 private:
@@ -261,13 +263,12 @@ private:
       }
       if (!(**source).is_array()) {
         return std::unexpected(TemplateError{TemplateErrorCode::repeat_source_mismatch,
-                                              child_path + "/repeat",
-                                              data_path(repeat.source.path)});
+                                             child_path + "/repeat",
+                                             data_path(repeat.source.path)});
       }
       for (std::size_t item_index = 0; item_index < (**source).size(); ++item_index) {
         context_.scopes.emplace_back(repeat.alias, &(**source)[item_index]);
-        auto node = instantiate(*repeat.body,
-                                child_path + "/items/" + std::to_string(item_index));
+        auto node = instantiate(*repeat.body, child_path + "/items/" + std::to_string(item_index));
         context_.scopes.pop_back();
         if (!node) {
           return std::unexpected(node.error());
@@ -284,8 +285,8 @@ private:
 
 } // namespace
 
-std::expected<SceneNode, TemplateError>
-instantiate_template(const SceneTemplate &scene_template, const nlohmann::json &snapshot) {
+std::expected<SceneNode, TemplateError> instantiate_template(const SceneTemplate &scene_template,
+                                                             const nlohmann::json &snapshot) {
   auto result = Instantiator{snapshot}.instantiate(scene_template);
   if (!result.has_value()) {
     return result;

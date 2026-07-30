@@ -9,8 +9,8 @@
 namespace {
 
 gisland::SceneTemplate text_template(gisland::TemplateValue<std::string> value,
-                                     gisland::TemplateValue<std::string> role =
-                                         std::string{"body"}) {
+                                     gisland::TemplateValue<std::string> role = std::string{
+                                         "body"}) {
   return gisland::SceneTemplate{gisland::TemplateText{
       .value = std::move(value),
       .role = std::move(role),
@@ -32,8 +32,8 @@ TEST_CASE("scene templates resolve literal and dotted bound values") {
   CHECK(literal_text->value == "fixed");
 
   const nlohmann::json snapshot{{"clock", {{"time", "14:35"}}}};
-  const auto bound = gisland::instantiate_template(
-      text_template(gisland::DataBinding{"clock.time"}), snapshot);
+  const auto bound =
+      gisland::instantiate_template(text_template(gisland::DataBinding{"clock.time"}), snapshot);
   REQUIRE(bound.has_value());
   const auto *bound_text = std::get_if<gisland::Text>(&bound->value);
   REQUIRE(bound_text != nullptr);
@@ -54,6 +54,12 @@ TEST_CASE("scene template binding errors identify template and data paths") {
   CHECK(wrong_type.error().code == gisland::TemplateErrorCode::wrong_type);
   CHECK(wrong_type.error().template_path == "/value");
   CHECK(wrong_type.error().data_path == "/time");
+
+  const auto wrong_container = gisland::instantiate_template(
+      text_template(gisland::DataBinding{"clock.time"}), {{"clock", "invalid"}});
+  REQUIRE_FALSE(wrong_container.has_value());
+  CHECK(wrong_container.error().code == gisland::TemplateErrorCode::wrong_type);
+  CHECK(wrong_container.error().data_path == "/clock");
 }
 
 TEST_CASE("scene templates instantiate every scalar primitive strictly") {
@@ -86,26 +92,26 @@ TEST_CASE("scene templates instantiate every scalar primitive strictly") {
 }
 
 TEST_CASE("instantiated templates retain scene validation bounds") {
-  const auto invalid = gisland::instantiate_template(
-      text_template(gisland::DataBinding{"value"}), {{"value", std::string(4097, 'x')}});
+  const auto invalid = gisland::instantiate_template(text_template(gisland::DataBinding{"value"}),
+                                                     {{"value", std::string(4097, 'x')}});
   REQUIRE_FALSE(invalid.has_value());
   CHECK(invalid.error().code == gisland::TemplateErrorCode::invalid_scene);
   CHECK(invalid.error().template_path == "/value");
 }
 
 TEST_CASE("nested repeats expand arrays in deterministic source order") {
-  const auto day = shared(text_template(gisland::DataBinding{"day.label"},
-                                        gisland::DataBinding{"day.role"}));
+  const auto day =
+      shared(text_template(gisland::DataBinding{"day.label"}, gisland::DataBinding{"day.role"}));
   const auto week = shared(gisland::SceneTemplate{gisland::TemplateRow{
       .children = {gisland::TemplateRepeat{gisland::DataBinding{"week"}, "day", day}},
   }});
   const gisland::SceneTemplate calendar{gisland::TemplateColumn{
       .children = {gisland::TemplateRepeat{gisland::DataBinding{"weeks"}, "week", week}},
   }};
-  const nlohmann::json snapshot{{"weeks",
-                                 {{{{"label", "29"}, {"role", "muted"}},
-                                   {{"label", "30"}, {"role", "today"}}},
-                                  {{{"label", "1"}, {"role", "body"}}}}}};
+  const nlohmann::json snapshot{
+      {"weeks",
+       {{{{"label", "29"}, {"role", "muted"}}, {{"label", "30"}, {"role", "today"}}},
+        {{{"label", "1"}, {"role", "body"}}}}}};
 
   const auto result = gisland::instantiate_template(calendar, snapshot);
 
@@ -163,8 +169,7 @@ TEST_CASE("repeat expansion remains bounded by scene node limits") {
 TEST_CASE("module view state replaces compact and expanded views atomically") {
   gisland::ModuleViewState state{text_template(gisland::DataBinding{"compact"}),
                                  text_template(gisland::DataBinding{"expanded"})};
-  REQUIRE(state.apply({{"compact", "14:35"}, {"expanded", "July"}, {"old", true}})
-              .has_value());
+  REQUIRE(state.apply({{"compact", "14:35"}, {"expanded", "July"}, {"old", true}}).has_value());
   REQUIRE(state.views().has_value());
 
   const auto rejected = state.apply({{"compact", "14:36"}});

@@ -365,8 +365,8 @@ parse_template_value(const toml::node &node, const std::string &path,
     const auto *bind_node = binding->get("bind");
     const auto value = bind_node->value_exact<std::string>();
     if (!value.has_value() || !valid_binding_path(*value)) {
-      return std::unexpected(error_at(source_name, path + ".bind", "invalid binding path",
-                                      bind_node));
+      return std::unexpected(
+          error_at(source_name, path + ".bind", "invalid binding path", bind_node));
     }
     return TemplateValue<T>{DataBinding{*value}};
   }
@@ -407,10 +407,11 @@ parse_template_children(const toml::table &table, const std::string &path,
                         std::string_view source_name) {
   const auto *node = table.get("children");
   if (node == nullptr || node->as_array() == nullptr) {
-    return std::unexpected(error_at(source_name, path + ".children", "expected a child array",
-                                    node));
+    return std::unexpected(
+        error_at(source_name, path + ".children", "expected a child array", node));
   }
   std::vector<TemplateChild> children;
+  std::set<std::string> aliases;
   const auto &array = *node->as_array();
   children.reserve(array.size());
   for (std::size_t index = 0; index < array.size(); ++index) {
@@ -433,17 +434,21 @@ parse_template_children(const toml::table &table, const std::string &path,
         return std::unexpected(source.error());
       }
       if (!valid_binding_path(*source)) {
-        return std::unexpected(error_at(source_name, item_path + ".repeat",
-                                        "invalid binding path", child->get("repeat")));
+        return std::unexpected(error_at(source_name, item_path + ".repeat", "invalid binding path",
+                                        child->get("repeat")));
       }
       if (!alias || alias->find('.') != std::string::npos) {
-        return std::unexpected(alias ? error_at(source_name, item_path + ".as", "invalid alias",
-                                                 child->get("as"))
-                                     : alias.error());
+        return std::unexpected(
+            alias ? error_at(source_name, item_path + ".as", "invalid alias", child->get("as"))
+                   : alias.error());
+      }
+      if (!aliases.insert(*alias).second) {
+        return std::unexpected(error_at(source_name, item_path + ".as",
+                                        "alias must be unique in its scope", child->get("as")));
       }
       if (body == nullptr) {
-        return std::unexpected(error_at(source_name, item_path + ".template",
-                                        "expected a template table", body_node));
+        return std::unexpected(
+            error_at(source_name, item_path + ".template", "expected a template table", body_node));
       }
       auto parsed = parse_scene_template(*body, item_path + ".template", source_name);
       if (!parsed) {
@@ -467,8 +472,8 @@ parse_template_children(const toml::table &table, const std::string &path,
 parse_scene_template(const toml::table &table, const std::string &path,
                      std::string_view source_name) {
   if (table.contains("repeat")) {
-    return std::unexpected(error_at(source_name, path, "repeat is only allowed in child arrays",
-                                    table.get("repeat")));
+    return std::unexpected(
+        error_at(source_name, path, "repeat is only allowed in child arrays", table.get("repeat")));
   }
   auto type = required_non_empty_string(table, "type", path + ".type", source_name);
   if (!type) {
@@ -480,22 +485,27 @@ parse_scene_template(const toml::table &table, const std::string &path,
     auto role = template_field<std::string>(table, "role", path + ".role", source_name);
     auto truncation = template_field<std::string>(table, "truncation", path + ".truncation",
                                                   source_name, std::string{"end"});
-    if (!keys) return std::unexpected(keys.error());
-    if (!value) return std::unexpected(value.error());
-    if (!role) return std::unexpected(role.error());
-    if (!truncation) return std::unexpected(truncation.error());
-    return SceneTemplate{TemplateText{std::move(*value), std::move(*role),
-                                      std::move(*truncation)}};
+    if (!keys)
+      return std::unexpected(keys.error());
+    if (!value)
+      return std::unexpected(value.error());
+    if (!role)
+      return std::unexpected(role.error());
+    if (!truncation)
+      return std::unexpected(truncation.error());
+    return SceneTemplate{TemplateText{std::move(*value), std::move(*role), std::move(*truncation)}};
   }
   if (*type == "icon") {
     auto keys = require_keys(table, {"type", "name", "accessible_label"}, path, source_name);
     auto name = template_field<std::string>(table, "name", path + ".name", source_name);
-    auto label = template_field<std::string>(table, "accessible_label",
-                                             path + ".accessible_label", source_name,
-                                             std::string{});
-    if (!keys) return std::unexpected(keys.error());
-    if (!name) return std::unexpected(name.error());
-    if (!label) return std::unexpected(label.error());
+    auto label = template_field<std::string>(table, "accessible_label", path + ".accessible_label",
+                                             source_name, std::string{});
+    if (!keys)
+      return std::unexpected(keys.error());
+    if (!name)
+      return std::unexpected(name.error());
+    if (!label)
+      return std::unexpected(label.error());
     return SceneTemplate{TemplateIcon{std::move(*name), std::move(*label)}};
   }
   if (*type == "spacer") {
@@ -503,22 +513,29 @@ parse_scene_template(const toml::table &table, const std::string &path,
     auto flexible = template_field<bool>(table, "flexible", path + ".flexible", source_name, true);
     auto size = template_field<std::string>(table, "size_token", path + ".size_token", source_name,
                                             std::string{});
-    if (!keys) return std::unexpected(keys.error());
-    if (!flexible) return std::unexpected(flexible.error());
-    if (!size) return std::unexpected(size.error());
+    if (!keys)
+      return std::unexpected(keys.error());
+    if (!flexible)
+      return std::unexpected(flexible.error());
+    if (!size)
+      return std::unexpected(size.error());
     return SceneTemplate{TemplateSpacer{std::move(*flexible), std::move(*size)}};
   }
   if (*type == "progress") {
     auto keys = require_keys(table, {"type", "value", "label", "state"}, path, source_name);
     auto value = template_field<double>(table, "value", path + ".value", source_name);
-    auto label = template_field<std::string>(table, "label", path + ".label", source_name,
-                                             std::string{});
-    auto state = template_field<std::string>(table, "state", path + ".state", source_name,
-                                             std::string{});
-    if (!keys) return std::unexpected(keys.error());
-    if (!value) return std::unexpected(value.error());
-    if (!label) return std::unexpected(label.error());
-    if (!state) return std::unexpected(state.error());
+    auto label =
+        template_field<std::string>(table, "label", path + ".label", source_name, std::string{});
+    auto state =
+        template_field<std::string>(table, "state", path + ".state", source_name, std::string{});
+    if (!keys)
+      return std::unexpected(keys.error());
+    if (!value)
+      return std::unexpected(value.error());
+    if (!label)
+      return std::unexpected(label.error());
+    if (!state)
+      return std::unexpected(state.error());
     return SceneTemplate{TemplateProgress{std::move(*value), std::move(*label), std::move(*state)}};
   }
   if (*type == "row" || *type == "column") {
@@ -528,44 +545,51 @@ parse_scene_template(const toml::table &table, const std::string &path,
                                                  source_name, std::string{"center"});
     auto gap = template_field<std::string>(table, "gap", path + ".gap", source_name,
                                            std::string{"normal"});
-    if (!keys) return std::unexpected(keys.error());
-    if (!children) return std::unexpected(children.error());
-    if (!alignment) return std::unexpected(alignment.error());
-    if (!gap) return std::unexpected(gap.error());
+    if (!keys)
+      return std::unexpected(keys.error());
+    if (!children)
+      return std::unexpected(children.error());
+    if (!alignment)
+      return std::unexpected(alignment.error());
+    if (!gap)
+      return std::unexpected(gap.error());
     if (*type == "row") {
-      return SceneTemplate{TemplateRow{std::move(*children), std::move(*alignment),
-                                       std::move(*gap)}};
+      return SceneTemplate{
+          TemplateRow{std::move(*children), std::move(*alignment), std::move(*gap)}};
     }
-    return SceneTemplate{TemplateColumn{std::move(*children), std::move(*alignment),
-                                        std::move(*gap)}};
+    return SceneTemplate{
+        TemplateColumn{std::move(*children), std::move(*alignment), std::move(*gap)}};
   }
   if (*type == "button") {
-    auto keys = require_keys(table, {"type", "content", "action_id", "enabled",
-                                     "accessible_label"}, path, source_name);
+    auto keys = require_keys(table, {"type", "content", "action_id", "enabled", "accessible_label"},
+                             path, source_name);
     const auto *content_node = table.get("content");
     const auto *content = content_node == nullptr ? nullptr : content_node->as_table();
     auto action = required_non_empty_string(table, "action_id", path + ".action_id", source_name);
     auto enabled = template_field<bool>(table, "enabled", path + ".enabled", source_name, true);
-    auto label = template_field<std::string>(table, "accessible_label",
-                                             path + ".accessible_label", source_name,
-                                             std::string{});
-    if (!keys) return std::unexpected(keys.error());
+    auto label = template_field<std::string>(table, "accessible_label", path + ".accessible_label",
+                                             source_name, std::string{});
+    if (!keys)
+      return std::unexpected(keys.error());
     if (content == nullptr) {
-      return std::unexpected(error_at(source_name, path + ".content", "expected a template table",
-                                      content_node));
+      return std::unexpected(
+          error_at(source_name, path + ".content", "expected a template table", content_node));
     }
     auto parsed_content = parse_scene_template(*content, path + ".content", source_name);
-    if (!parsed_content) return std::unexpected(parsed_content.error());
-    if (!action) return std::unexpected(action.error());
-    if (!enabled) return std::unexpected(enabled.error());
-    if (!label) return std::unexpected(label.error());
-    return SceneTemplate{TemplateButton{std::make_shared<const SceneTemplate>(
-                                            std::move(*parsed_content)),
-                                        std::move(*action), std::move(*enabled),
-                                        std::move(*label)}};
+    if (!parsed_content)
+      return std::unexpected(parsed_content.error());
+    if (!action)
+      return std::unexpected(action.error());
+    if (!enabled)
+      return std::unexpected(enabled.error());
+    if (!label)
+      return std::unexpected(label.error());
+    return SceneTemplate{
+        TemplateButton{std::make_shared<const SceneTemplate>(std::move(*parsed_content)),
+                       std::move(*action), std::move(*enabled), std::move(*label)}};
   }
-  return std::unexpected(error_at(source_name, path + ".type", "unknown template node type",
-                                  table.get("type")));
+  return std::unexpected(
+      error_at(source_name, path + ".type", "unknown template node type", table.get("type")));
 }
 
 [[nodiscard]] std::expected<std::optional<ModuleInstanceConfig::View>, ConfigError>
@@ -580,7 +604,8 @@ parse_module_view(const toml::table &module, std::size_t index, std::string_view
     return std::unexpected(error_at(source_name, path, "expected a view table", node));
   }
   auto keys = require_keys(*view, {"compact", "expanded"}, path, source_name);
-  if (!keys) return std::unexpected(keys.error());
+  if (!keys)
+    return std::unexpected(keys.error());
   const auto *compact_node = view->get("compact");
   const auto *compact = compact_node == nullptr ? nullptr : compact_node->as_table();
   if (compact == nullptr) {
@@ -588,7 +613,8 @@ parse_module_view(const toml::table &module, std::size_t index, std::string_view
                                     "expected a compact template table", compact_node));
   }
   auto parsed_compact = parse_scene_template(*compact, path + ".compact", source_name);
-  if (!parsed_compact) return std::unexpected(parsed_compact.error());
+  if (!parsed_compact)
+    return std::unexpected(parsed_compact.error());
   std::optional<SceneTemplate> parsed_expanded;
   if (const auto *expanded_node = view->get("expanded"); expanded_node != nullptr) {
     const auto *expanded = expanded_node->as_table();
@@ -597,11 +623,12 @@ parse_module_view(const toml::table &module, std::size_t index, std::string_view
                                       "expected an expanded template table", expanded_node));
     }
     auto candidate = parse_scene_template(*expanded, path + ".expanded", source_name);
-    if (!candidate) return std::unexpected(candidate.error());
+    if (!candidate)
+      return std::unexpected(candidate.error());
     parsed_expanded = std::move(*candidate);
   }
-  return std::optional<ModuleInstanceConfig::View>{ModuleInstanceConfig::View{
-      std::move(*parsed_compact), std::move(parsed_expanded)}};
+  return std::optional<ModuleInstanceConfig::View>{
+      ModuleInstanceConfig::View{std::move(*parsed_compact), std::move(parsed_expanded)}};
 }
 
 [[nodiscard]] std::expected<std::vector<ModuleInstanceConfig>, ConfigError>

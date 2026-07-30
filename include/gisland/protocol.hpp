@@ -84,9 +84,8 @@ struct LogMessage {
   std::string message;
 };
 
-using ModuleMessage =
-    std::variant<ReadyMessage, PublishMessage, DismissMessage, ActionResultMessage, LogMessage,
-                 DataMessage>;
+using ModuleMessage = std::variant<ReadyMessage, PublishMessage, DismissMessage,
+                                   ActionResultMessage, LogMessage, DataMessage>;
 
 struct ProtocolError {
   std::string path;

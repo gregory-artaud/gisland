@@ -94,8 +94,7 @@ children = [
   REQUIRE(result.has_value());
   REQUIRE(result->modules.size() == 1);
   REQUIRE(result->modules.front().view.has_value());
-  CHECK(std::holds_alternative<gisland::TemplateRow>(
-      result->modules.front().view->compact.value));
+  CHECK(std::holds_alternative<gisland::TemplateRow>(result->modules.front().view->compact.value));
   REQUIRE(result->modules.front().view->expanded.has_value());
   CHECK(std::holds_alternative<gisland::TemplateColumn>(
       result->modules.front().view->expanded->value));
@@ -137,9 +136,32 @@ TEST_CASE("module view templates reject unknown properties and root repeats") {
   REQUIRE_FALSE(unknown.has_value());
   CHECK(unknown.error().path == "modules[0].view.compact.colour");
 
-  const auto repeat = parse_view("repeat=\"items\"\nas=\"item\"\ntemplate={type=\"text\",value=\"x\",role=\"body\"}\n");
+  const auto repeat = parse_view(
+      "repeat=\"items\"\nas=\"item\"\ntemplate={type=\"text\",value=\"x\",role=\"body\"}\n");
   REQUIRE_FALSE(repeat.has_value());
   CHECK(repeat.error().path == "modules[0].view.compact");
+}
+
+TEST_CASE("module view templates reject duplicate aliases in one scope") {
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "default"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+[modules.view.compact]
+type = "row"
+children = [
+  { repeat = "first", as = "item", template = { type = "text", value = { bind = "item" }, role = "body" } },
+  { repeat = "second", as = "item", template = { type = "text", value = { bind = "item" }, role = "body" } }
+]
+)";
+
+  const auto result = gisland::parse_config(source, "duplicate-alias.toml");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "modules[0].view.compact.children[1].as");
 }
 
 TEST_CASE("default module must reference an enabled instance") {

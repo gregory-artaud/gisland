@@ -758,8 +758,7 @@ private:
     if (std::holds_alternative<DataMessage>(*message) &&
         !instance.negotiated_capabilities.contains("data-snapshots")) {
       record_violation(instance,
-                       ProtocolError{"/type", "data-snapshots capability was not negotiated"},
-                       now);
+                       ProtocolError{"/type", "data-snapshots capability was not negotiated"}, now);
       return;
     }
 

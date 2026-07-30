@@ -131,9 +131,9 @@ TEST_CASE("a data line preserves its complete object value") {
   REQUIRE(result.has_value());
   const auto *data = std::get_if<gisland::DataMessage>(&*result);
   REQUIRE(data != nullptr);
-  CHECK(data->value == nlohmann::json{{"temperature", 21.5},
-                                      {"forecast",
-                                       {{{"day", "Tuesday"}, {"hours", {14, 15, 16}}}}}});
+  CHECK(data->value ==
+        nlohmann::json{{"temperature", 21.5},
+                       {"forecast", {{{"day", "Tuesday"}, {"hours", {14, 15, 16}}}}}});
 }
 
 TEST_CASE("a data line requires an object value") {
