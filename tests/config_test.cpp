@@ -62,6 +62,110 @@ enabled = false
   CHECK(music.options.empty());
 }
 
+TEST_CASE("module views parse into typed templates") {
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "default"
+default_module = "clock"
+
+[[modules]]
+id = "clock"
+command = ["python3", "clock.py"]
+
+[modules.view.compact]
+type = "row"
+gap = "small"
+children = [
+  { type = "text", value = { bind = "time" }, role = "primary" },
+  { type = "text", value = { bind = "date_short" }, role = "muted" }
+]
+
+[modules.view.expanded]
+type = "column"
+children = [
+  { repeat = "weeks", as = "week", template = { type = "row", children = [
+    { repeat = "week", as = "day", template = { type = "text", value = { bind = "day.label" }, role = { bind = "day.role" } } }
+  ] } }
+]
+)";
+
+  const auto result = gisland::parse_config(source, "views.toml");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->modules.size() == 1);
+  const auto *view =
+      result->modules.front().view.has_value() ? &result->modules.front().view.value() : nullptr;
+  REQUIRE(view != nullptr);
+  CHECK(std::holds_alternative<gisland::TemplateRow>(view->compact.value));
+  const auto *expanded = view->expanded.has_value() ? &view->expanded.value() : nullptr;
+  REQUIRE(expanded != nullptr);
+  CHECK(std::holds_alternative<gisland::TemplateColumn>(expanded->value));
+}
+
+TEST_CASE("invalid module view bindings fail at the TOML boundary") {
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "default"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+[modules.view.compact]
+type = "text"
+value = { bind = "day..label" }
+role = "body"
+)";
+
+  const auto result = gisland::parse_config(source, "invalid-view.toml");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "modules[0].view.compact.value.bind");
+  CHECK(result.error().line > 0);
+  CHECK(result.error().column > 0);
+}
+
+TEST_CASE("module view templates reject unknown properties and root repeats") {
+  const auto parse_view = [](std::string_view compact) {
+    return gisland::parse_config(
+        std::string{"monitor=\"primary\"\ntheme=\"default\"\ndefault_module=\"clock\"\n"
+                    "[[modules]]\nid=\"clock\"\ncommand=[\"clock\"]\n"
+                    "[modules.view.compact]\n"} +
+            std::string{compact},
+        "invalid-view.toml");
+  };
+
+  const auto unknown = parse_view("type=\"text\"\nvalue=\"x\"\nrole=\"body\"\ncolour=\"red\"\n");
+  REQUIRE_FALSE(unknown.has_value());
+  CHECK(unknown.error().path == "modules[0].view.compact.colour");
+
+  const auto repeat = parse_view(
+      "repeat=\"items\"\nas=\"item\"\ntemplate={type=\"text\",value=\"x\",role=\"body\"}\n");
+  REQUIRE_FALSE(repeat.has_value());
+  CHECK(repeat.error().path == "modules[0].view.compact");
+}
+
+TEST_CASE("module view templates reject duplicate aliases in one scope") {
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "default"
+default_module = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+[modules.view.compact]
+type = "row"
+children = [
+  { repeat = "first", as = "item", template = { type = "text", value = { bind = "item" }, role = "body" } },
+  { repeat = "second", as = "item", template = { type = "text", value = { bind = "item" }, role = "body" } }
+]
+)";
+
+  const auto result = gisland::parse_config(source, "duplicate-alias.toml");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "modules[0].view.compact.children[1].as");
+}
+
 TEST_CASE("default module must reference an enabled instance") {
   constexpr auto missing_default = R"(
 monitor = "primary"

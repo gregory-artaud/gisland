@@ -70,6 +70,7 @@ add_library(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/scene.cpp
+  src/scene_template.cpp
   src/write_queue.cpp
   src/x11_shape.cpp
 )
@@ -116,6 +117,7 @@ if(BUILD_TESTING)
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/scene_test.cpp
+    tests/scene_template_test.cpp
     tests/write_queue_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
@@ -146,6 +148,7 @@ set(
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/scene.hpp
+  include/gisland/scene_template.hpp
   include/gisland/write_queue.hpp
   include/gisland/x11_shape.hpp
   src/application.cpp
@@ -159,6 +162,7 @@ set(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/scene.cpp
+  src/scene_template.cpp
   src/write_queue.cpp
   src/x11_shape.cpp
   tests/fake_module.cpp
@@ -173,6 +177,7 @@ set(
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/scene_test.cpp
+  tests/scene_template_test.cpp
   tests/write_queue_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)

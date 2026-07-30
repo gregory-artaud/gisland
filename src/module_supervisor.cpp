@@ -755,6 +755,12 @@ private:
       record_violation(instance, ProtocolError{"/type", "message is invalid in this state"}, now);
       return;
     }
+    if (std::holds_alternative<DataMessage>(*message) &&
+        !instance.negotiated_capabilities.contains("data-snapshots")) {
+      record_violation(instance,
+                       ProtocolError{"/type", "data-snapshots capability was not negotiated"}, now);
+      return;
+    }
 
     instance.consecutive_violations = 0;
     emit(ModuleMessageEvent{instance.request.instance_id, *message, now});

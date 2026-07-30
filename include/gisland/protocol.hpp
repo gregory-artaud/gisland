@@ -67,6 +67,10 @@ struct ReadyMessage {
   std::vector<std::string> capabilities;
 };
 
+struct DataMessage {
+  nlohmann::json value;
+};
+
 struct ActionResultMessage {
   std::string action_id;
   bool accepted;
@@ -80,8 +84,8 @@ struct LogMessage {
   std::string message;
 };
 
-using ModuleMessage =
-    std::variant<ReadyMessage, PublishMessage, DismissMessage, ActionResultMessage, LogMessage>;
+using ModuleMessage = std::variant<ReadyMessage, PublishMessage, DismissMessage,
+                                   ActionResultMessage, LogMessage, DataMessage>;
 
 struct ProtocolError {
   std::string path;

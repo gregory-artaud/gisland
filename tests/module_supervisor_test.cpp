@@ -185,6 +185,47 @@ TEST_CASE("supervisor asynchronously handshakes publishes and gracefully stops")
   CHECK(removal.value_or(events.size()) < stopped.value_or(events.size()));
 }
 
+TEST_CASE("supervisor emits data snapshots only after capability negotiation") {
+  SECTION("negotiated data is emitted") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("data", "data");
+    request.init.maximum = {.major = 1, .minor = 1};
+    request.init.capabilities.emplace_back("data-snapshots");
+    const auto started = supervisor.start(std::move(request));
+    REQUIRE(started.has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::DataMessage>(observed, "data");
+    });
+    stop_and_wait(supervisor, events, "data");
+  }
+
+  SECTION("data without capability is a violation") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor.start(fake_request("unnegotiated", "data-without-capability")).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return count_events<gisland::ProtocolViolationEvent>(observed, "unnegotiated") > 0;
+    });
+    CHECK_FALSE(has_message<gisland::DataMessage>(events, "unnegotiated"));
+    stop_and_wait(supervisor, events, "unnegotiated");
+  }
+
+  SECTION("data before ready fails startup") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor.start(fake_request("early", "data-before-ready")).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_state(observed, "early", gisland::ModuleState::stopped);
+    });
+    CHECK(count_events<gisland::ProtocolViolationEvent>(events, "early") > 0);
+    CHECK_FALSE(has_message<gisland::DataMessage>(events, "early"));
+  }
+}
+
 TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
   gisland::ModuleSupervisor supervisor;
   EventLog events;

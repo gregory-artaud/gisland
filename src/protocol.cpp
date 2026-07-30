@@ -388,6 +388,17 @@ parse_children(const Json &object, const std::string &path) {
   return ModuleMessage{DismissMessage{std::move(*context_id)}};
 }
 
+[[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_data(const Json &object) {
+  auto value = required_field(object, "value", "");
+  if (!value.has_value()) {
+    return std::unexpected(value.error());
+  }
+  if (!(*value)->is_object()) {
+    return std::unexpected(error_at("/value", "expected an object"));
+  }
+  return ModuleMessage{DataMessage{**value}};
+}
+
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_publish(const Json &object) {
   auto context_id = required_string(object, "context_id", "");
   auto priority = required_integer<int>(object, "priority", "");
@@ -528,6 +539,9 @@ std::expected<ModuleMessage, ProtocolError> parse_module_message(std::string_vie
   }
   if (*type == "log") {
     return parse_log(object);
+  }
+  if (*type == "data") {
+    return parse_data(object);
   }
   return std::unexpected(error_at("/type", "unknown message type"));
 }

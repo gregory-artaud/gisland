@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gisland/scene_template.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -42,6 +44,11 @@ struct ModuleInstanceConfig {
   ModuleTimings timings;
   std::map<std::string, std::string> environment;
   std::optional<std::filesystem::path> working_directory;
+  struct View {
+    SceneTemplate compact;
+    std::optional<SceneTemplate> expanded;
+  };
+  std::optional<View> view;
 };
 
 struct AppConfig {
