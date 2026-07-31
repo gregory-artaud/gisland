@@ -58,6 +58,25 @@ IslandGeometry interpolate(const IslandGeometry &from, const IslandGeometry &to,
   };
 }
 
+bool OverlayInteraction::pointer_pressed(PointerButton button, bool inside) {
+  if (mode_ != IslandMode::compact || button != PointerButton::primary || !inside) {
+    return false;
+  }
+  mode_ = IslandMode::expanded;
+  return true;
+}
+
+bool OverlayInteraction::dismiss(OverlayDismissal reason) {
+  static_cast<void>(reason);
+  if (mode_ == IslandMode::compact) {
+    return false;
+  }
+  mode_ = IslandMode::compact;
+  return true;
+}
+
+IslandMode OverlayInteraction::mode() const { return mode_; }
+
 void SpringProgress::set_target(float target) { target_ = std::clamp(target, 0.0F, 1.0F); }
 
 void SpringProgress::update(float delta_seconds) {

@@ -5,10 +5,10 @@
 namespace gisland {
 
 struct ApplicationConfig {
-  int width{640};
-  int height{360};
   std::string title{"gisland"};
   int target_fps{60};
+  std::string monitor{"primary"};
+  int top_margin{8};
 };
 
 class Application {

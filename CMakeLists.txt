@@ -58,7 +58,11 @@ FetchContent_MakeAvailable(raylib nlohmann_json tomlplusplus)
 if(BUILD_TESTING)
   FetchContent_MakeAvailable(Catch2)
 endif()
-find_package(X11 REQUIRED COMPONENTS Xext)
+set(GISLAND_X11_COMPONENTS Xext Xrandr)
+if(BUILD_TESTING AND GISLAND_BUILD_GRAPHICAL_TESTS)
+  list(APPEND GISLAND_X11_COMPONENTS Xtst)
+endif()
+find_package(X11 REQUIRED COMPONENTS ${GISLAND_X11_COMPONENTS})
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -90,6 +94,8 @@ add_library(
   src/scene_template.cpp
   src/theme.cpp
   src/write_queue.cpp
+  src/x11_monitor.cpp
+  src/x11_window_host.cpp
   src/x11_shape.cpp
 )
 add_library(gisland::app ALIAS gisland_app)
@@ -108,6 +114,7 @@ target_link_libraries(
     tomlplusplus::tomlplusplus
     X11::X11
     X11::Xext
+    X11::Xrandr
 )
 gisland_set_project_options(gisland_app)
 
@@ -140,6 +147,7 @@ if(BUILD_TESTING)
     tests/scene_template_test.cpp
     tests/theme_test.cpp
     tests/write_queue_test.cpp
+    tests/x11_monitor_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(
@@ -157,6 +165,39 @@ if(BUILD_TESTING)
   catch_discover_tests(gisland_tests DISCOVERY_MODE PRE_TEST)
 
   if(GISLAND_BUILD_GRAPHICAL_TESTS)
+    add_executable(gisland_application_x11_smoke_tests tests/application_x11_smoke_test.cpp)
+    target_compile_features(gisland_application_x11_smoke_tests PRIVATE cxx_std_23)
+    target_link_libraries(
+      gisland_application_x11_smoke_tests
+      PRIVATE Catch2::Catch2WithMain X11::X11 X11::Xtst
+    )
+    target_compile_definitions(
+      gisland_application_x11_smoke_tests
+      PRIVATE GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
+    )
+    gisland_set_project_options(gisland_application_x11_smoke_tests)
+    add_dependencies(gisland_application_x11_smoke_tests gisland)
+    catch_discover_tests(
+      gisland_application_x11_smoke_tests
+      TEST_PREFIX "application_x11::"
+      PROPERTIES LABELS graphical RUN_SERIAL true
+      DISCOVERY_MODE PRE_TEST
+    )
+
+    add_executable(gisland_x11_window_tests tests/x11_window_host_test.cpp)
+    target_compile_features(gisland_x11_window_tests PRIVATE cxx_std_23)
+    target_link_libraries(
+      gisland_x11_window_tests
+      PRIVATE gisland::app Catch2::Catch2WithMain X11::X11 X11::Xext X11::Xtst
+    )
+    gisland_set_project_options(gisland_x11_window_tests)
+    catch_discover_tests(
+      gisland_x11_window_tests
+      TEST_PREFIX "x11_window::"
+      PROPERTIES LABELS graphical RUN_SERIAL true
+      DISCOVERY_MODE PRE_TEST
+    )
+
     add_executable(gisland_raylib_renderer_tests tests/raylib_renderer_test.cpp)
     target_compile_features(gisland_raylib_renderer_tests PRIVATE cxx_std_23)
     target_link_libraries(
@@ -225,6 +266,8 @@ set(
   include/gisland/scene_template.hpp
   include/gisland/theme.hpp
   include/gisland/write_queue.hpp
+  include/gisland/x11_monitor.hpp
+  include/gisland/x11_window_host.hpp
   include/gisland/x11_shape.hpp
   src/application.cpp
   src/config.cpp
@@ -242,8 +285,11 @@ set(
   src/scene_template.cpp
   src/theme.cpp
   src/write_queue.cpp
+  src/x11_monitor.cpp
+  src/x11_window_host.cpp
   src/x11_shape.cpp
   tests/fake_module.cpp
+  tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
@@ -261,6 +307,8 @@ set(
   tests/theme_test.cpp
   tests/visual_regression_test.cpp
   tests/write_queue_test.cpp
+  tests/x11_monitor_test.cpp
+  tests/x11_window_host_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)
