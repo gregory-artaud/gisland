@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -85,4 +86,43 @@ TEST_CASE("button action IDs must not be empty") {
 
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().code == gisland::SceneErrorCode::empty_action);
+}
+
+TEST_CASE("scene display strings are bounded by UTF-8 byte count") {
+  const std::string oversized(4097, 'x');
+  const auto check = [](gisland::SceneNode scene, std::string_view path) {
+    const auto result = gisland::validate_scene(scene);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::SceneErrorCode::text_too_long);
+    CHECK(result.error().path == path);
+  };
+
+  check(gisland::SceneNode{gisland::Icon{"clock", oversized}}, "/accessible_label");
+  check(gisland::SceneNode{gisland::Progress{0.5, oversized, "accent"}}, "/label");
+  check(gisland::SceneNode{gisland::Button{gisland::SceneNode{gisland::Text{"x", "body"}}, "open",
+                                           true, oversized}},
+        "/accessible_label");
+}
+
+TEST_CASE("scene semantic strings are bounded with exact paths") {
+  const std::string oversized(129, 'x');
+  const auto check = [](gisland::SceneNode scene, std::string_view path) {
+    const auto result = gisland::validate_scene(scene);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::SceneErrorCode::identifier_too_long);
+    CHECK(result.error().path == path);
+  };
+
+  check(gisland::SceneNode{gisland::Text{"x", oversized}}, "/role");
+  check(gisland::SceneNode{gisland::Text{"x", "body", oversized}}, "/truncation");
+  check(gisland::SceneNode{gisland::Icon{oversized, "Clock"}}, "/name");
+  check(gisland::SceneNode{gisland::Spacer{false, oversized}}, "/size_token");
+  check(gisland::SceneNode{gisland::Progress{0.5, "Half", oversized}}, "/state");
+  check(gisland::SceneNode{gisland::Row{{}, oversized, "normal"}}, "/alignment");
+  check(gisland::SceneNode{gisland::Row{{}, "center", oversized}}, "/gap");
+  check(gisland::SceneNode{gisland::Column{{}, oversized, "normal"}}, "/alignment");
+  check(gisland::SceneNode{gisland::Column{{}, "center", oversized}}, "/gap");
+  check(gisland::SceneNode{gisland::Button{gisland::SceneNode{gisland::Text{"x", "body"}},
+                                           oversized}},
+        "/action_id");
 }

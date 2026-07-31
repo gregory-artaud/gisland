@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 
 using Catch::Approx;
@@ -162,6 +163,9 @@ TEST_CASE("rounded mask covers the middle and insets its edges") {
 }
 
 TEST_CASE("input shape does not clip antialiased rendering") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
   Display *display = XOpenDisplay(nullptr);
   REQUIRE(display != nullptr);
 

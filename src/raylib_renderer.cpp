@@ -1,0 +1,498 @@
+#include "gisland/raylib_renderer.hpp"
+
+#include <GL/gl.h>
+#include <raylib.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <compare>
+#include <cstdint>
+#include <expected>
+#include <filesystem>
+#include <limits>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
+
+namespace gisland {
+namespace {
+
+struct FontKey {
+  std::filesystem::path path;
+  int base_size;
+
+  auto operator<=>(const FontKey &) const = default;
+};
+
+[[nodiscard]] int base_size(const TypographyRole &role) {
+  return std::max(1, static_cast<int>(std::ceil(role.size)));
+}
+
+[[nodiscard]] RendererError renderer_error(RendererErrorCode code, std::filesystem::path resource,
+                                           std::string message) {
+  return RendererError{code, std::move(resource), std::move(message)};
+}
+
+[[nodiscard]] Color color(Rgba value) {
+  return Color{value.red, value.green, value.blue, value.alpha};
+}
+
+[[nodiscard]] std::expected<Rect, RendererError>
+checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height) {
+  constexpr auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
+  constexpr auto maximum = static_cast<std::int64_t>(std::numeric_limits<int>::max());
+  if (x < minimum || x > maximum || y < minimum || y > maximum || width < 0 || width > maximum ||
+      height < 0 || height > maximum || x + width > maximum || y + height > maximum) {
+    return std::unexpected(renderer_error(RendererErrorCode::invalid_geometry, {},
+                                          "render coordinates exceed integer bounds"));
+  }
+  return Rect{static_cast<int>(x), static_cast<int>(y), static_cast<int>(width),
+              static_cast<int>(height)};
+}
+
+[[nodiscard]] std::expected<Rect, RendererError> translated(Rect value, RenderOrigin origin) {
+  return checked_rect(static_cast<std::int64_t>(value.x) + origin.x,
+                      static_cast<std::int64_t>(value.y) + origin.y, value.width, value.height);
+}
+
+[[nodiscard]] Rectangle rectangle(Rect value) {
+  return Rectangle{static_cast<float>(value.x), static_cast<float>(value.y),
+                   static_cast<float>(value.width), static_cast<float>(value.height)};
+}
+
+[[nodiscard]] float roundness(Rect bounds, int radius) {
+  const int short_edge = std::min(bounds.width, bounds.height);
+  if (short_edge <= 0) {
+    return 0.0F;
+  }
+  const double diameter = std::max(0.0, static_cast<double>(radius) * 2.0);
+  return static_cast<float>(std::clamp(diameter / static_cast<double>(short_edge), 0.0, 1.0));
+}
+
+[[nodiscard]] std::expected<void, RendererError> draw_shadow(const RoundedView &view,
+                                                             RenderOrigin origin) {
+  if (view.shadow.color.alpha == 0) {
+    return {};
+  }
+  const int layers = std::max(1, view.shadow.blur + 1);
+  Rgba layer_color = view.shadow.color;
+  layer_color.alpha =
+      static_cast<std::uint8_t>(std::max(1, static_cast<int>(view.shadow.color.alpha) / layers));
+  for (int blur = view.shadow.blur; blur >= 0; --blur) {
+    const auto expansion = static_cast<std::int64_t>(view.shadow.spread) + blur;
+    auto bounds =
+        checked_rect(static_cast<std::int64_t>(view.bounds.x) + view.shadow.offset_x - expansion,
+                     static_cast<std::int64_t>(view.bounds.y) + view.shadow.offset_y - expansion,
+                     static_cast<std::int64_t>(view.bounds.width) + (2 * expansion),
+                     static_cast<std::int64_t>(view.bounds.height) + (2 * expansion));
+    if (!bounds) {
+      return std::unexpected(bounds.error());
+    }
+    auto rendered_bounds = translated(*bounds, origin);
+    if (!rendered_bounds) {
+      return std::unexpected(rendered_bounds.error());
+    }
+    const auto radius = static_cast<std::int64_t>(view.radius) + expansion;
+    if (radius < std::numeric_limits<int>::min() || radius > std::numeric_limits<int>::max()) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_geometry, {},
+                                            "shadow radius exceeds integer bounds"));
+    }
+    DrawRectangleRounded(rectangle(*rendered_bounds),
+                         roundness(*rendered_bounds, static_cast<int>(radius)), 16,
+                         color(layer_color));
+  }
+  return {};
+}
+
+[[nodiscard]] std::string encode_utf8(char32_t codepoint) {
+  std::string result;
+  if (codepoint <= 0x7FU) {
+    result.push_back(static_cast<char>(codepoint));
+  } else if (codepoint <= 0x7FFU) {
+    result.push_back(static_cast<char>(0xC0U | (codepoint >> 6U)));
+    result.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+  } else if (codepoint <= 0xFFFFU) {
+    result.push_back(static_cast<char>(0xE0U | (codepoint >> 12U)));
+    result.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
+    result.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+  } else {
+    result.push_back(static_cast<char>(0xF0U | (codepoint >> 18U)));
+    result.push_back(static_cast<char>(0x80U | ((codepoint >> 12U) & 0x3FU)));
+    result.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
+    result.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+  }
+  return result;
+}
+
+template <typename Visitor>
+[[nodiscard]] bool visit_utf8(std::string_view text, Visitor &&visitor) {
+  for (std::size_t index = 0; index < text.size();) {
+    const auto first = static_cast<unsigned char>(text[index]);
+    char32_t codepoint = 0;
+    std::size_t length = 0;
+    if (first <= 0x7FU) {
+      codepoint = first;
+      length = 1;
+    } else if (first >= 0xC2U && first <= 0xDFU) {
+      codepoint = first & 0x1FU;
+      length = 2;
+    } else if (first >= 0xE0U && first <= 0xEFU) {
+      codepoint = first & 0x0FU;
+      length = 3;
+    } else if (first >= 0xF0U && first <= 0xF4U) {
+      codepoint = first & 0x07U;
+      length = 4;
+    } else {
+      return false;
+    }
+    if (index + length > text.size()) {
+      return false;
+    }
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto continuation = static_cast<unsigned char>(text[index + offset]);
+      if ((continuation & 0xC0U) != 0x80U) {
+        return false;
+      }
+      codepoint = (codepoint << 6U) | (continuation & 0x3FU);
+    }
+    if ((length == 2 && codepoint < 0x80U) || (length == 3 && codepoint < 0x800U) ||
+        (length == 4 && codepoint < 0x10000U) || (codepoint >= 0xD800U && codepoint <= 0xDFFFU) ||
+        codepoint > 0x10FFFFU) {
+      return false;
+    }
+    if (!visitor(codepoint)) {
+      return false;
+    }
+    index += length;
+  }
+  return true;
+}
+
+void add_text_codepoints(std::set<int> &codepoints) {
+  constexpr std::array ranges{
+      std::pair{0x0020, 0x007E}, std::pair{0x00A0, 0x024F}, std::pair{0x0300, 0x052F},
+      std::pair{0x1C80, 0x1C8F}, std::pair{0x1D00, 0x1FFF}, std::pair{0x2000, 0x206F},
+      std::pair{0x2C60, 0x2C7F}, std::pair{0x2DE0, 0x2DFF}, std::pair{0xA640, 0xA69F},
+      std::pair{0xA720, 0xA7FF}, std::pair{0xAB30, 0xAB6F}, std::pair{0x10780, 0x107BF}};
+  for (const auto &[first, last] : ranges) {
+    for (int codepoint = first; codepoint <= last; ++codepoint) {
+      codepoints.insert(codepoint);
+    }
+  }
+}
+
+class Scissor final {
+public:
+  explicit Scissor(Rect clip) { BeginScissorMode(clip.x, clip.y, clip.width, clip.height); }
+
+  Scissor(const Scissor &) = delete;
+  Scissor &operator=(const Scissor &) = delete;
+  ~Scissor() { EndScissorMode(); }
+};
+
+} // namespace
+
+struct RaylibFontBook::Impl {
+  std::map<std::string, std::filesystem::path, std::less<>> resolved_resources;
+  std::map<FontKey, Font> fonts;
+  Texture2D context_marker{};
+  Color marker_color{};
+
+  [[nodiscard]] bool owns_current_context() const {
+    if (!IsWindowReady() || context_marker.id == 0 || glIsTexture(context_marker.id) != GL_TRUE) {
+      return false;
+    }
+    GLint previous_texture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    glBindTexture(GL_TEXTURE_2D, context_marker.id);
+    GLint width = 0;
+    GLint height = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+    std::array<GLubyte, 4> pixel{};
+    if (width == 1 && height == 1) {
+      glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    }
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous_texture));
+    return width == 1 && height == 1 && pixel[0] == marker_color.r && pixel[1] == marker_color.g &&
+           pixel[2] == marker_color.b && pixel[3] == marker_color.a;
+  }
+
+  ~Impl() {
+    const bool release_gpu_resources = owns_current_context();
+    for (auto &[key, font] : fonts) {
+      static_cast<void>(key);
+      if (release_gpu_resources) {
+        UnloadFont(font);
+      } else {
+        UnloadFontData(font.glyphs, font.glyphCount);
+        MemFree(font.recs);
+        font.glyphs = nullptr;
+        font.recs = nullptr;
+      }
+    }
+    if (release_gpu_resources) {
+      UnloadTexture(context_marker);
+    }
+  }
+
+  [[nodiscard]] std::expected<const Font *, RendererError> find(std::string_view resource,
+                                                                const TypographyRole &role) const {
+    const auto resolved = resolved_resources.find(resource);
+    if (resolved == resolved_resources.end()) {
+      return std::unexpected(renderer_error(RendererErrorCode::font_not_loaded,
+                                            std::filesystem::path{resource},
+                                            "font resource is not loaded"));
+    }
+    const FontKey key{resolved->second, base_size(role)};
+    const auto font = fonts.find(key);
+    if (font == fonts.end()) {
+      return std::unexpected(renderer_error(RendererErrorCode::font_not_loaded, resolved->second,
+                                            "font size is not loaded"));
+    }
+    return &font->second;
+  }
+};
+
+RaylibFontBook::RaylibFontBook(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+
+RaylibFontBook::RaylibFontBook(RaylibFontBook &&) noexcept = default;
+
+RaylibFontBook &RaylibFontBook::operator=(RaylibFontBook &&) noexcept = default;
+
+RaylibFontBook::~RaylibFontBook() = default;
+
+std::expected<RaylibFontBook, RendererError>
+RaylibFontBook::load(const Theme &theme, const std::filesystem::path &asset_root) {
+  if (!IsWindowReady()) {
+    return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
+                                          "raylib window must exist before loading fonts"));
+  }
+
+  auto impl = std::make_unique<Impl>();
+  std::uint64_t marker_seed = reinterpret_cast<std::uintptr_t>(impl.get());
+  marker_seed ^= marker_seed >> 30U;
+  marker_seed *= 0xBF58476D1CE4E5B9ULL;
+  marker_seed ^= marker_seed >> 27U;
+  impl->marker_color = Color{static_cast<unsigned char>((marker_seed >> 0U) | 1U),
+                             static_cast<unsigned char>((marker_seed >> 8U) | 1U),
+                             static_cast<unsigned char>((marker_seed >> 16U) | 1U), 255};
+  Image marker_image = GenImageColor(1, 1, impl->marker_color);
+  impl->context_marker = LoadTextureFromImage(marker_image);
+  UnloadImage(marker_image);
+  if (!IsTextureValid(impl->context_marker)) {
+    return std::unexpected(renderer_error(RendererErrorCode::font_load_failed, {},
+                                          "raylib failed to create a context marker texture"));
+  }
+  std::error_code filesystem_error;
+  for (const auto &[name, resource] : theme.fonts()) {
+    static_cast<void>(name);
+    const std::filesystem::path declared{resource};
+    const std::filesystem::path resolved =
+        (declared.is_absolute() ? declared : asset_root / declared).lexically_normal();
+    const bool exists = std::filesystem::exists(resolved, filesystem_error);
+    if (filesystem_error) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_resource, resolved,
+                                            "font resource could not be inspected"));
+    }
+    if (!exists) {
+      return std::unexpected(renderer_error(RendererErrorCode::missing_resource, resolved,
+                                            "font resource does not exist"));
+    }
+    const bool regular_file = std::filesystem::is_regular_file(resolved, filesystem_error);
+    if (filesystem_error || !regular_file) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_resource, resolved,
+                                            "font resource is not a regular readable file"));
+    }
+    impl->resolved_resources.emplace(resource, resolved);
+  }
+
+  const TypographyRole &body = theme.typography().at("body");
+  std::map<FontKey, std::set<int>> requests;
+  const auto request_font = [&](std::string_view resource, const TypographyRole &role) {
+    const auto resolved = impl->resolved_resources.find(resource);
+    requests[FontKey{resolved->second, base_size(role)}];
+  };
+  for (const auto &[name, resource] : theme.fonts()) {
+    static_cast<void>(name);
+    request_font(resource, body);
+  }
+  for (const auto &[name, role] : theme.typography()) {
+    static_cast<void>(name);
+    request_font(theme.fonts().at(role.font), role);
+  }
+
+  std::map<std::filesystem::path, std::set<int>> icon_codepoints;
+  for (const auto &[name, icon] : theme.icons()) {
+    static_cast<void>(name);
+    const auto &resource = theme.fonts().at(icon.font);
+    const auto resolved = impl->resolved_resources.find(resource);
+    icon_codepoints[resolved->second].insert(static_cast<int>(icon.codepoint));
+    request_font(resource, body);
+  }
+
+  for (auto &[key, codepoints] : requests) {
+    add_text_codepoints(codepoints);
+    if (const auto icons = icon_codepoints.find(key.path); icons != icon_codepoints.end()) {
+      codepoints.insert(icons->second.begin(), icons->second.end());
+    }
+    const std::vector<int> pinned_codepoints{codepoints.begin(), codepoints.end()};
+    Font font = LoadFontEx(key.path.c_str(), key.base_size, pinned_codepoints.data(),
+                           static_cast<int>(pinned_codepoints.size()));
+    const bool default_fallback = font.texture.id == GetFontDefault().texture.id;
+    if (!IsFontValid(font) || !IsTextureValid(font.texture) || default_fallback) {
+      if (!default_fallback && IsFontValid(font)) {
+        UnloadFont(font);
+      }
+      return std::unexpected(renderer_error(RendererErrorCode::font_load_failed, key.path,
+                                            "raylib failed to load the font resource"));
+    }
+    impl->fonts.emplace(key, font);
+  }
+
+  return RaylibFontBook{std::move(impl)};
+}
+
+bool RaylibFontBook::supports_text(std::string_view font_resource, const TypographyRole &role,
+                                   std::string_view text) const {
+  return visit_utf8(text, [this, font_resource, &role](char32_t codepoint) {
+    return supports_codepoint(font_resource, role, codepoint);
+  });
+}
+
+bool RaylibFontBook::supports_codepoint(std::string_view font_resource, const TypographyRole &role,
+                                        char32_t codepoint) const {
+  const auto font = impl_->find(font_resource, role);
+  if (!font) {
+    return false;
+  }
+  return std::any_of(
+      (*font)->glyphs, (*font)->glyphs + (*font)->glyphCount,
+      [codepoint](const GlyphInfo &glyph) { return glyph.value == static_cast<int>(codepoint); });
+}
+
+MeasuredGlyphs RaylibFontBook::measure_text(std::string_view font_resource,
+                                            const TypographyRole &role,
+                                            std::string_view text) const {
+  const auto font = impl_->find(font_resource, role);
+  if (!font) {
+    return {};
+  }
+  const std::string terminated{text};
+  const Vector2 measured =
+      MeasureTextEx(**font, terminated.c_str(), static_cast<float>(role.size), 0.0F);
+  return MeasuredGlyphs{static_cast<double>(measured.x),
+                        static_cast<double>(measured.y) * role.line_height};
+}
+
+MeasuredGlyphs RaylibFontBook::measure_codepoint(std::string_view font_resource,
+                                                 const TypographyRole &role,
+                                                 char32_t codepoint) const {
+  return measure_text(font_resource, role, encode_utf8(codepoint));
+}
+
+std::size_t RaylibFontBook::loaded_font_count() const noexcept { return impl_->fonts.size(); }
+
+std::expected<void, RendererError> RaylibPainter::draw_surface(const LayoutPlan &plan,
+                                                               RenderOrigin origin) const {
+  if (!IsWindowReady()) {
+    return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
+                                          "raylib window is not ready for drawing"));
+  }
+  const auto &view = plan.view;
+  auto rendered_bounds = translated(view.bounds, origin);
+  if (!rendered_bounds) {
+    return std::unexpected(rendered_bounds.error());
+  }
+  auto shadow = draw_shadow(view, origin);
+  if (!shadow) {
+    return shadow;
+  }
+  DrawRectangleRounded(rectangle(*rendered_bounds), roundness(*rendered_bounds, view.radius), 16,
+                       color(view.surface));
+  if (view.border > 0) {
+    DrawRectangleRoundedLinesEx(rectangle(*rendered_bounds),
+                                roundness(*rendered_bounds, view.radius), 16,
+                                static_cast<float>(view.border), color(view.border_color));
+  }
+  return {};
+}
+
+std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan &plan,
+                                                               RenderOrigin origin) const {
+  if (!IsWindowReady()) {
+    return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
+                                          "raylib window is not ready for drawing"));
+  }
+
+  for (const auto &content : plan.content) {
+    auto drawn = std::visit(
+        [this, origin](const auto &command) -> std::expected<void, RendererError> {
+          if (command.clip.width <= 0 || command.clip.height <= 0) {
+            return {};
+          }
+          auto rendered_clip = translated(command.clip, origin);
+          if (!rendered_clip) {
+            return std::unexpected(rendered_clip.error());
+          }
+          auto rendered_bounds = translated(command.bounds, origin);
+          if (!rendered_bounds) {
+            return std::unexpected(rendered_bounds.error());
+          }
+          if constexpr (std::is_same_v<std::decay_t<decltype(command)>, TextDrawCommand>) {
+            const auto font = fonts_.impl_->find(command.font_resource, command.typography);
+            if (!font) {
+              return std::unexpected(font.error());
+            }
+            const Scissor scissor{*rendered_clip};
+            DrawTextEx(**font, command.text.c_str(),
+                       Vector2{static_cast<float>(rendered_bounds->x),
+                               static_cast<float>(rendered_bounds->y)},
+                       static_cast<float>(command.typography.size), 0.0F, color(command.color));
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>, IconDrawCommand>) {
+            const auto font = fonts_.impl_->find(command.font_resource, command.typography);
+            if (!font) {
+              return std::unexpected(font.error());
+            }
+            const std::string glyph = encode_utf8(command.codepoint);
+            const Scissor scissor{*rendered_clip};
+            DrawTextEx(**font, glyph.c_str(),
+                       Vector2{static_cast<float>(rendered_bounds->x),
+                               static_cast<float>(rendered_bounds->y)},
+                       static_cast<float>(command.typography.size), 0.0F, color(command.color));
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
+                                              ProgressDrawCommand>) {
+            auto rendered_track = translated(command.track, origin);
+            auto rendered_fill = translated(command.fill, origin);
+            if (!rendered_track) {
+              return std::unexpected(rendered_track.error());
+            }
+            if (!rendered_fill) {
+              return std::unexpected(rendered_fill.error());
+            }
+            const Scissor scissor{*rendered_clip};
+            DrawRectangleRounded(rectangle(*rendered_track), 1.0F, 16, color(command.track_color));
+            if (command.fill.width > 0 && command.fill.height > 0) {
+              DrawRectangleRounded(rectangle(*rendered_fill), 1.0F, 16, color(command.fill_color));
+            }
+          } else {
+            const Scissor scissor{*rendered_clip};
+            DrawRectangleRounded(rectangle(*rendered_bounds), 1.0F, 16, color(command.color));
+          }
+          return {};
+        },
+        content);
+    if (!drawn) {
+      return drawn;
+    }
+  }
+  return {};
+}
+
+} // namespace gisland

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -12,6 +13,21 @@ namespace {
 constexpr std::size_t maximum_depth = 16;
 constexpr std::size_t maximum_nodes = 256;
 constexpr std::size_t maximum_text_bytes = 4096;
+constexpr std::size_t maximum_identifier_bytes = 128;
+
+[[nodiscard]] SceneValidation validate_text(std::string_view value, const std::string &path) {
+  if (value.size() > maximum_text_bytes) {
+    return std::unexpected(SceneError{SceneErrorCode::text_too_long, path});
+  }
+  return {};
+}
+
+[[nodiscard]] SceneValidation validate_identifier(std::string_view value, const std::string &path) {
+  if (value.size() > maximum_identifier_bytes) {
+    return std::unexpected(SceneError{SceneErrorCode::identifier_too_long, path});
+  }
+  return {};
+}
 
 [[nodiscard]] std::vector<SceneChild> share_nodes(std::vector<SceneNode> nodes) {
   std::vector<SceneChild> children;
@@ -44,21 +60,26 @@ public:
 private:
   [[nodiscard]] static SceneValidation validate_primitive(const Text &text, std::size_t /*depth*/,
                                                           const std::string &path) {
-    if (text.value.size() > maximum_text_bytes) {
-      return std::unexpected(SceneError{SceneErrorCode::text_too_long, path + "/value"});
+    if (auto result = validate_text(text.value, path + "/value"); !result) {
+      return result;
     }
-    return {};
+    if (auto result = validate_identifier(text.role, path + "/role"); !result) {
+      return result;
+    }
+    return validate_identifier(text.truncation, path + "/truncation");
+  }
+
+  [[nodiscard]] static SceneValidation validate_primitive(const Icon &icon, std::size_t /*depth*/,
+                                                          const std::string &path) {
+    if (auto result = validate_identifier(icon.name, path + "/name"); !result) {
+      return result;
+    }
+    return validate_text(icon.accessible_label, path + "/accessible_label");
   }
 
   [[nodiscard]] static SceneValidation
-  validate_primitive(const Icon & /*icon*/, std::size_t /*depth*/, const std::string & /*path*/) {
-    return {};
-  }
-
-  [[nodiscard]] static SceneValidation validate_primitive(const Spacer & /*spacer*/,
-                                                          std::size_t /*depth*/,
-                                                          const std::string & /*path*/) {
-    return {};
+  validate_primitive(const Spacer &spacer, std::size_t /*depth*/, const std::string &path) {
+    return validate_identifier(spacer.size_token, path + "/size_token");
   }
 
   [[nodiscard]] static SceneValidation
@@ -66,16 +87,31 @@ private:
     if (!std::isfinite(progress.value) || progress.value < 0.0 || progress.value > 1.0) {
       return std::unexpected(SceneError{SceneErrorCode::invalid_progress, path + "/value"});
     }
-    return {};
+    if (auto result = validate_text(progress.label, path + "/label"); !result) {
+      return result;
+    }
+    return validate_identifier(progress.state, path + "/state");
   }
 
   [[nodiscard]] SceneValidation validate_primitive(const Row &row, std::size_t depth,
                                                    const std::string &path) {
+    if (auto result = validate_identifier(row.alignment, path + "/alignment"); !result) {
+      return result;
+    }
+    if (auto result = validate_identifier(row.gap, path + "/gap"); !result) {
+      return result;
+    }
     return validate_children(row.children, depth, path);
   }
 
   [[nodiscard]] SceneValidation validate_primitive(const Column &column, std::size_t depth,
                                                    const std::string &path) {
+    if (auto result = validate_identifier(column.alignment, path + "/alignment"); !result) {
+      return result;
+    }
+    if (auto result = validate_identifier(column.gap, path + "/gap"); !result) {
+      return result;
+    }
     return validate_children(column.children, depth, path);
   }
 
@@ -83,6 +119,12 @@ private:
                                                    const std::string &path) {
     if (button.action_id.empty()) {
       return std::unexpected(SceneError{SceneErrorCode::empty_action, path + "/action_id"});
+    }
+    if (auto result = validate_identifier(button.action_id, path + "/action_id"); !result) {
+      return result;
+    }
+    if (auto result = validate_text(button.accessible_label, path + "/accessible_label"); !result) {
+      return result;
     }
     return validate(*button.content, depth + 1, path + "/content");
   }

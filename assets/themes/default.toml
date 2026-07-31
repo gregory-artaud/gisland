@@ -1,0 +1,113 @@
+[palette]
+surface = "#000000"
+foreground = "#F7F7F8"
+muted = "#8B8B93"
+accent = "#7C5CFC"
+success = "#35C98B"
+warning = "#F5B942"
+error = "#F06464"
+
+[fonts]
+regular = "fonts/Inter-Regular.ttf"
+semibold = "fonts/Inter-SemiBold.ttf"
+icons = "fonts/Font-Awesome-6-Free-Solid-900.otf"
+
+[typography.body]
+font = "regular"
+color = "foreground"
+size = 16
+weight = 400
+line_height = 1.2
+
+[typography.title]
+font = "semibold"
+color = "foreground"
+size = 22
+weight = 600
+line_height = 1.1
+
+[typography.muted]
+font = "regular"
+color = "muted"
+size = 14
+weight = 400
+line_height = 1.2
+
+[typography.caption]
+font = "semibold"
+color = "muted"
+size = 12
+weight = 600
+line_height = 1.1
+
+[typography.button]
+font = "semibold"
+color = "foreground"
+size = 12
+weight = 600
+line_height = 1.1
+
+[typography.current]
+font = "semibold"
+color = "accent"
+size = 16
+weight = 600
+line_height = 1.2
+
+[gaps]
+xsmall = 4
+small = 8
+normal = 12
+large = 20
+
+[spacers]
+xsmall = 2
+small = 6
+normal = 10
+large = 18
+
+[view.compact]
+padding = 14
+radius = 28
+border = 0
+min_width = 220
+max_width = 340
+min_height = 64
+max_height = 72
+
+[view.expanded]
+padding = 24
+radius = 30
+border = 1
+min_width = 360
+max_width = 432
+min_height = 300
+max_height = 344
+
+[shadow]
+offset_x = 0
+offset_y = 6
+blur = 18
+spread = 0
+color = "#00000066"
+
+[animation]
+compact_to_expanded_ms = 350
+context_change_ms = 250
+easing = "ease-in-out"
+
+[animation.reduced_motion]
+compact_to_expanded_ms = 0
+context_change_ms = 0
+
+[icons.calendar]
+font = "icons"
+codepoint = 0xF133
+
+[icons.chevron-left]
+font = "icons"
+codepoint = 0xF053
+
+[icons.chevron-right]
+font = "icons"
+codepoint = 0xF054

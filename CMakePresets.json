@@ -49,13 +49,22 @@
       "cacheVariables": {
         "GISLAND_ENABLE_CLANG_TIDY": true
       }
+    },
+    {
+      "name": "graphical",
+      "displayName": "Graphical tests",
+      "inherits": "dev",
+      "cacheVariables": {
+        "GISLAND_BUILD_GRAPHICAL_TESTS": true
+      }
     }
   ],
   "buildPresets": [
     { "name": "dev", "configurePreset": "dev", "jobs": 0 },
     { "name": "release", "configurePreset": "release", "jobs": 0 },
     { "name": "asan", "configurePreset": "asan", "jobs": 0 },
-    { "name": "tidy", "configurePreset": "tidy", "jobs": 0 }
+    { "name": "tidy", "configurePreset": "tidy", "jobs": 0 },
+    { "name": "graphical", "configurePreset": "graphical", "jobs": 0 }
   ],
   "testPresets": [
     {
@@ -71,6 +80,11 @@
     {
       "name": "tidy",
       "configurePreset": "tidy",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "graphical",
+      "configurePreset": "graphical",
       "output": { "outputOnFailure": true }
     }
   ]

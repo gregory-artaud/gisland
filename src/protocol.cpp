@@ -317,6 +317,8 @@ parse_children(const Json &object, const std::string &path) {
     return "scene exceeds maximum node count";
   case SceneErrorCode::text_too_long:
     return "text exceeds maximum byte count";
+  case SceneErrorCode::identifier_too_long:
+    return "scene identifier exceeds maximum byte count";
   case SceneErrorCode::invalid_progress:
     return "progress value must be between 0 and 1";
   case SceneErrorCode::empty_action:

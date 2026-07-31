@@ -185,6 +185,30 @@ TEST_CASE("protocol errors identify the failing JSON path") {
     CHECK(result.error().path == "/compact/value");
   }
 
+  SECTION("oversized scene semantic identifier") {
+    const std::string oversized_identifier(129, 'x');
+    const auto line =
+        std::string{
+            R"({"type":"publish","context_id":"x","priority":0,"compact":{"type":"icon","name":")"} +
+        oversized_identifier + R"(","accessible_label":"Clock"}})";
+    const auto result = gisland::parse_module_message(line);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "/compact/name");
+    CHECK(result.error().message == "scene identifier exceeds maximum byte count");
+  }
+
+  SECTION("oversized scene label") {
+    const std::string oversized_label(4097, 'x');
+    const auto line =
+        std::string{
+            R"({"type":"publish","context_id":"x","priority":0,"compact":{"type":"progress","value":0.5,"label":")"} +
+        oversized_label + R"(","state":"accent"}})";
+    const auto result = gisland::parse_module_message(line);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "/compact/label");
+    CHECK(result.error().message == "text exceeds maximum byte count");
+  }
+
   SECTION("negative expiration") {
     const auto result = gisland::parse_module_message(
         R"({"type":"publish","context_id":"x","priority":0,"expires_in_ms":-1,"compact":{"type":"text","value":"x","role":"body"}})");

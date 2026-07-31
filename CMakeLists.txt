@@ -12,6 +12,8 @@ include(CTest)
 include(FetchContent)
 include(cmake/ProjectOptions.cmake)
 
+option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
+
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
 set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
@@ -58,19 +60,35 @@ if(BUILD_TESTING)
 endif()
 find_package(X11 REQUIRED COMPONENTS Xext)
 
+file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
+set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
+add_custom_command(
+  OUTPUT "${GISLAND_ASSET_STAMP}"
+  COMMAND ${CMAKE_COMMAND} -E remove_directory "${PROJECT_BINARY_DIR}/assets"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/assets"
+          "${PROJECT_BINARY_DIR}/assets"
+  COMMAND ${CMAKE_COMMAND} -E touch "${GISLAND_ASSET_STAMP}"
+  DEPENDS ${GISLAND_ASSET_FILES}
+  VERBATIM
+)
+add_custom_target(gisland_assets DEPENDS "${GISLAND_ASSET_STAMP}")
+
 add_library(
   gisland_app STATIC
   src/application.cpp
   src/config.cpp
   src/context.cpp
   src/island.cpp
+  src/layout.cpp
   src/line_buffer.cpp
   src/module_lifecycle.cpp
   src/module_supervisor.cpp
   src/posix_process_backend.cpp
   src/protocol.cpp
+  src/raylib_renderer.cpp
   src/scene.cpp
   src/scene_template.cpp
+  src/theme.cpp
   src/write_queue.cpp
   src/x11_shape.cpp
 )
@@ -97,6 +115,7 @@ add_executable(gisland src/main.cpp)
 target_compile_features(gisland PRIVATE cxx_std_23)
 target_link_libraries(gisland PRIVATE gisland::app)
 gisland_set_project_options(gisland)
+add_dependencies(gisland gisland_assets)
 
 if(BUILD_TESTING)
   add_executable(fake_module tests/fake_module.cpp)
@@ -110,6 +129,7 @@ if(BUILD_TESTING)
     tests/config_test.cpp
     tests/context_test.cpp
     tests/island_test.cpp
+    tests/layout_test.cpp
     tests/line_buffer_test.cpp
     tests/module_lifecycle_test.cpp
     tests/module_supervisor_test.cpp
@@ -118,6 +138,7 @@ if(BUILD_TESTING)
     tests/protocol_test.cpp
     tests/scene_test.cpp
     tests/scene_template_test.cpp
+    tests/theme_test.cpp
     tests/write_queue_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
@@ -134,6 +155,57 @@ if(BUILD_TESTING)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
   catch_discover_tests(gisland_tests DISCOVERY_MODE PRE_TEST)
+
+  if(GISLAND_BUILD_GRAPHICAL_TESTS)
+    add_executable(gisland_raylib_renderer_tests tests/raylib_renderer_test.cpp)
+    target_compile_features(gisland_raylib_renderer_tests PRIVATE cxx_std_23)
+    target_link_libraries(
+      gisland_raylib_renderer_tests
+      PRIVATE gisland::app Catch2::Catch2WithMain raylib
+    )
+    target_compile_definitions(
+      gisland_raylib_renderer_tests
+      PRIVATE GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+    )
+    gisland_set_project_options(gisland_raylib_renderer_tests)
+    add_dependencies(gisland_raylib_renderer_tests gisland_assets)
+    catch_discover_tests(
+      gisland_raylib_renderer_tests
+      TEST_PREFIX "raylib_renderer::"
+      PROPERTIES LABELS graphical
+      DISCOVERY_MODE PRE_TEST
+    )
+
+    add_executable(gisland_visual_regression_tests tests/visual_regression_test.cpp)
+    target_compile_features(gisland_visual_regression_tests PRIVATE cxx_std_23)
+    target_link_libraries(
+      gisland_visual_regression_tests
+      PRIVATE gisland::app Catch2::Catch2WithMain raylib
+    )
+    target_compile_definitions(
+      gisland_visual_regression_tests
+      PRIVATE
+        GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+        GISLAND_TEST_BASELINE_ROOT="${PROJECT_SOURCE_DIR}/tests/baselines"
+        GISLAND_VISUAL_ARTIFACT_ROOT="${PROJECT_BINARY_DIR}/visual-artifacts"
+    )
+    gisland_set_project_options(gisland_visual_regression_tests)
+    add_dependencies(gisland_visual_regression_tests gisland_assets)
+    catch_discover_tests(
+      gisland_visual_regression_tests
+      TEST_PREFIX "visual_regression::"
+      PROPERTIES LABELS graphical
+      DISCOVERY_MODE PRE_TEST
+    )
+    add_custom_target(
+      update-visual-baselines
+      COMMAND
+        ${CMAKE_COMMAND} -E env GISLAND_UPDATE_BASELINES=1 GISLAND_BASELINE_UPDATE_TARGET=1
+        $<TARGET_FILE:gisland_visual_regression_tests>
+      DEPENDS gisland_visual_regression_tests
+      VERBATIM
+    )
+  endif()
 endif()
 
 set(
@@ -142,27 +214,33 @@ set(
   include/gisland/config.hpp
   include/gisland/context.hpp
   include/gisland/island.hpp
+  include/gisland/layout.hpp
   include/gisland/line_buffer.hpp
   include/gisland/module_lifecycle.hpp
   include/gisland/module_supervisor.hpp
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
+  include/gisland/raylib_renderer.hpp
   include/gisland/scene.hpp
   include/gisland/scene_template.hpp
+  include/gisland/theme.hpp
   include/gisland/write_queue.hpp
   include/gisland/x11_shape.hpp
   src/application.cpp
   src/config.cpp
   src/context.cpp
   src/island.cpp
+  src/layout.cpp
   src/line_buffer.cpp
   src/main.cpp
   src/module_lifecycle.cpp
   src/module_supervisor.cpp
   src/posix_process_backend.cpp
   src/protocol.cpp
+  src/raylib_renderer.cpp
   src/scene.cpp
   src/scene_template.cpp
+  src/theme.cpp
   src/write_queue.cpp
   src/x11_shape.cpp
   tests/fake_module.cpp
@@ -170,14 +248,18 @@ set(
   tests/config_test.cpp
   tests/context_test.cpp
   tests/island_test.cpp
+  tests/layout_test.cpp
   tests/line_buffer_test.cpp
   tests/module_lifecycle_test.cpp
   tests/module_supervisor_test.cpp
   tests/posix_process_backend_test.cpp
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
+  tests/raylib_renderer_test.cpp
   tests/scene_test.cpp
   tests/scene_template_test.cpp
+  tests/theme_test.cpp
+  tests/visual_regression_test.cpp
   tests/write_queue_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)

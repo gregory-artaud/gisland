@@ -72,6 +72,7 @@ enum class SceneErrorCode {
   too_deep,
   too_many_nodes,
   text_too_long,
+  identifier_too_long,
   invalid_progress,
   empty_action
 };
