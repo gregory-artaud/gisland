@@ -78,7 +78,7 @@ max_height = 72
 [view.expanded]
 padding = 24
 radius = 30
-border = 1
+border = 0
 min_width = 360
 max_width = 432
 min_height = 300

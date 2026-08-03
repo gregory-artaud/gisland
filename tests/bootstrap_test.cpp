@@ -90,6 +90,8 @@ TEST_CASE("bootstrap loads config and distributed theme before graphical startup
   CHECK(bootstrap->theme_path ==
         std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "themes/default.toml");
   CHECK(bootstrap->asset_root == std::filesystem::path{GISLAND_TEST_ASSET_ROOT});
+  CHECK(bootstrap->theme.views().compact.border == 0.0);
+  CHECK(bootstrap->theme.views().expanded.border == 0.0);
 }
 
 TEST_CASE("bootstrap gives a valid user theme priority over the distributed theme") {
