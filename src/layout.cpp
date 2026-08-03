@@ -230,10 +230,11 @@ public:
 
   [[nodiscard]] std::expected<void, LayoutError>
   place(const MeasuredNode &node, Rect assigned, Rect clip,
-        std::vector<ContentDrawCommand> &commands) const {
+        std::vector<ContentDrawCommand> &commands,
+        std::vector<InteractionTarget> &interactions) const {
     return std::visit(
-        [this, &node, assigned, clip, &commands](const auto &primitive) {
-          return place_primitive(node, primitive, assigned, clip, commands);
+        [this, &node, assigned, clip, &commands, &interactions](const auto &primitive) {
+          return place_primitive(node, primitive, assigned, clip, commands, interactions);
         },
         node.scene->value);
   }
@@ -637,7 +638,8 @@ private:
 
   [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Text &text, Rect assigned, Rect clip,
-                  std::vector<ContentDrawCommand> &commands) const {
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> & /*interactions*/) const {
     if (assigned.height < node.minimum_height || assigned.width < node.minimum_width) {
       return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
                                    "text cannot fit the assigned bounds"));
@@ -668,7 +670,8 @@ private:
 
   [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Icon &icon, Rect assigned, Rect clip,
-                  std::vector<ContentDrawCommand> &commands) const {
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> & /*interactions*/) const {
     if (assigned.width < node.width || assigned.height < node.height) {
       return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
                                    "icon cannot fit the assigned bounds"));
@@ -689,13 +692,15 @@ private:
 
   [[nodiscard]] static std::expected<void, LayoutError>
   place_primitive(const MeasuredNode & /*node*/, const Spacer & /*spacer*/, Rect /*assigned*/,
-                  Rect /*clip*/, std::vector<ContentDrawCommand> & /*commands*/) {
+                  Rect /*clip*/, std::vector<ContentDrawCommand> & /*commands*/,
+                  std::vector<InteractionTarget> & /*interactions*/) {
     return {};
   }
 
   [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Progress &progress, Rect assigned, Rect clip,
-                  std::vector<ContentDrawCommand> &commands) const {
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> & /*interactions*/) const {
     if (assigned.width < node.minimum_width || assigned.height < node.minimum_height) {
       return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
                                    "progress cannot fit the assigned bounds"));
@@ -737,7 +742,8 @@ private:
   template <typename Container>
   [[nodiscard]] std::expected<void, LayoutError>
   place_container(const MeasuredNode &node, const Container & /*container*/, Rect assigned,
-                  Rect clip, std::vector<ContentDrawCommand> &commands, Axis axis) const {
+                  Rect clip, std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions, Axis axis) const {
     const int available_main = axis == Axis::horizontal ? assigned.width : assigned.height;
     const int available_cross = axis == Axis::horizontal ? assigned.height : assigned.width;
     auto gap_total_result = checked_multiply(
@@ -833,7 +839,7 @@ private:
       const Rect child_bounds = axis == Axis::horizontal
                                     ? Rect{cursor, *cross_position, sizes[index], child_cross}
                                     : Rect{*cross_position, cursor, child_cross, sizes[index]};
-      auto placed = place(child, child_bounds, *child_clip, commands);
+      auto placed = place(child, child_bounds, *child_clip, commands, interactions);
       if (!placed) {
         return placed;
       }
@@ -855,19 +861,22 @@ private:
 
   [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Row &row, Rect assigned, Rect clip,
-                  std::vector<ContentDrawCommand> &commands) const {
-    return place_container(node, row, assigned, clip, commands, Axis::horizontal);
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions) const {
+    return place_container(node, row, assigned, clip, commands, interactions, Axis::horizontal);
   }
 
   [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Column &column, Rect assigned, Rect clip,
-                  std::vector<ContentDrawCommand> &commands) const {
-    return place_container(node, column, assigned, clip, commands, Axis::vertical);
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions) const {
+    return place_container(node, column, assigned, clip, commands, interactions, Axis::vertical);
   }
 
   [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Button &button, Rect assigned, Rect clip,
-                  std::vector<ContentDrawCommand> &commands) const {
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions) const {
     const int width = std::min(node.width, assigned.width);
     const int height = std::min(node.height, assigned.height);
     if (width < node.minimum_width || height < node.minimum_height) {
@@ -887,6 +896,8 @@ private:
                                                       button.enabled ? theme_.palette().at("accent")
                                                                      : theme_.palette().at("muted"),
                                                       button.enabled});
+    interactions.push_back(InteractionTarget{bounds, *clipped, button.action_id, button.enabled,
+                                             button.accessible_label});
 
     const auto &child = node.children.front();
     auto doubled_padding = checked_multiply(2, node.padding, node.path);
@@ -921,7 +932,7 @@ private:
       return std::unexpected(child_y.error());
     }
     const Rect child_bounds{*child_x, *child_y, child_width, child_height};
-    return place(child, child_bounds, *clipped, commands);
+    return place(child, child_bounds, *clipped, commands, interactions);
   }
 
   const Theme &theme_;
@@ -1027,8 +1038,10 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
                   theme.palette().at("muted"),
                   ViewShadow{*shadow_offset_x, *shadow_offset_y, *shadow_blur, *shadow_spread,
                              resolve_theme_color(theme, theme.shadow().color)}},
+      {},
       {}};
-  auto placed = builder.place(*measured, content_bounds, content_bounds, plan.content);
+  auto placed =
+      builder.place(*measured, content_bounds, content_bounds, plan.content, plan.interactions);
   if (!placed) {
     return std::unexpected(placed.error());
   }

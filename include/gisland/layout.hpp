@@ -104,9 +104,20 @@ struct ButtonDecorationDrawCommand {
 using ContentDrawCommand = std::variant<TextDrawCommand, IconDrawCommand, ProgressDrawCommand,
                                         ButtonDecorationDrawCommand>;
 
+struct InteractionTarget {
+  Rect bounds;
+  Rect clip;
+  std::string action_id;
+  bool enabled;
+  std::string accessible_label;
+
+  bool operator==(const InteractionTarget &) const = default;
+};
+
 struct LayoutPlan {
   RoundedView view;
   std::vector<ContentDrawCommand> content;
+  std::vector<InteractionTarget> interactions{};
 };
 
 enum class LayoutErrorCode {

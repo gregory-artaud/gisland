@@ -434,10 +434,17 @@ TEST_CASE("buttons emit disabled decoration before centered child content") {
 
   REQUIRE(result.has_value());
   REQUIRE(result->content.size() == 2);
+  REQUIRE(result->interactions.size() == 1);
   const auto &button = command_at<gisland::ButtonDecorationDrawCommand>(*result, 0);
   const auto &text = command_at<gisland::TextDrawCommand>(*result, 1);
+  const auto &interaction = result->interactions.front();
   CHECK_FALSE(button.enabled);
   CHECK(button.color == gisland::Rgba{128, 128, 128, 255});
+  CHECK(interaction.bounds == button.bounds);
+  CHECK(interaction.clip == button.clip);
+  CHECK(interaction.action_id == "go");
+  CHECK_FALSE(interaction.enabled);
+  CHECK(interaction.accessible_label == "Go now");
   CHECK(text.bounds.x == button.bounds.x + ((button.bounds.width - text.bounds.width) / 2));
   CHECK(text.bounds.y == button.bounds.y + ((button.bounds.height - text.bounds.height) / 2));
 }

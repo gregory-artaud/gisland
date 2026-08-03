@@ -360,8 +360,8 @@ std::expected<std::vector<X11WindowEvent>, X11WindowError> X11WindowHost::poll_e
         return std::unexpected(
             error(X11WindowErrorCode::request_failed, "could not release the compact X11 grab"));
       }
-      events.push_back(
-          X11WindowEvent{X11WindowEventKind::inside_press, button, event.xbutton.time});
+      events.push_back(X11WindowEvent{X11WindowEventKind::inside_press, button, event.xbutton.time,
+                                      event.xbutton.x, event.xbutton.y});
     } else if (event.type == ButtonPress && impl_->pointer_grabbed) {
       const bool inside =
           contains(impl_->root_bounds, impl_->geometry, event.xbutton.x_root, event.xbutton.y_root);
@@ -374,8 +374,8 @@ std::expected<std::vector<X11WindowEvent>, X11WindowError> X11WindowHost::poll_e
           return std::unexpected(
               error(X11WindowErrorCode::request_failed, "could not resume the X11 pointer"));
         }
-        events.push_back(
-            X11WindowEvent{X11WindowEventKind::inside_press, button, event.xbutton.time});
+        events.push_back(X11WindowEvent{X11WindowEventKind::inside_press, button,
+                                        event.xbutton.time, event.xbutton.x, event.xbutton.y});
       } else {
         if (!checked_request(impl_->display, [&] {
               XAllowEvents(impl_->display, ReplayPointer, event.xbutton.time);
@@ -384,8 +384,8 @@ std::expected<std::vector<X11WindowEvent>, X11WindowError> X11WindowHost::poll_e
               error(X11WindowErrorCode::request_failed, "could not replay the X11 pointer press"));
         }
         impl_->pointer_grabbed = false;
-        events.push_back(
-            X11WindowEvent{X11WindowEventKind::outside_press, button, event.xbutton.time});
+        events.push_back(X11WindowEvent{X11WindowEventKind::outside_press, button,
+                                        event.xbutton.time, event.xbutton.x, event.xbutton.y});
       }
     } else if (event.type == ConfigureNotify) {
       Window child = None;

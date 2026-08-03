@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -115,6 +116,48 @@ void read_init() {
 [[nodiscard]] int silent() {
   std::string line;
   while (std::getline(std::cin, line)) {
+  }
+  return EXIT_SUCCESS;
+}
+
+[[nodiscard]] int interactive_data() {
+  read_init();
+  write_json({
+      {"type", "ready"},
+      {"protocol_major", 1},
+      {"protocol_minor", 1},
+      {"capabilities", {"data-snapshots"}},
+  });
+  write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});
+
+  std::string line;
+  bool replaced = false;
+  while (std::getline(std::cin, line)) {
+    const auto message = nlohmann::json::parse(line, nullptr, false);
+    if (!message.is_object()) {
+      continue;
+    }
+    const auto type = message.value("type", "");
+    if (type == "shutdown") {
+      return EXIT_SUCCESS;
+    }
+    if (type != "action") {
+      continue;
+    }
+    const std::string action_id = message.value("action_id", "");
+    if (const char *path = std::getenv("GISLAND_ACTION_LOG"); path != nullptr) {
+      std::ofstream log{path, std::ios::app};
+      log << action_id << '\n';
+    }
+    if (action_id == "first" && !replaced) {
+      write_json({{"type", "data"}, {"value", {{"time", "14:36"}}}});
+      replaced = true;
+    }
+    write_json({
+        {"type", "action_result"},
+        {"action_id", action_id},
+        {"accepted", true},
+    });
   }
   return EXIT_SUCCESS;
 }
@@ -342,6 +385,9 @@ void read_init() {
       }
     }
     return EXIT_SUCCESS;
+  }
+  if (mode == "interactive-data") {
+    return interactive_data();
   }
   if (mode == "final-line") {
     read_init();

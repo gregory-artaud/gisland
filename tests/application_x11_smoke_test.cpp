@@ -7,11 +7,13 @@
 
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -22,10 +24,15 @@ namespace {
 
 class ChildProcess {
 public:
-  explicit ChildProcess(const std::filesystem::path &config_home) : pid_(fork()) {
+  ChildProcess(const std::filesystem::path &config_home,
+               const std::filesystem::path &application_log)
+      : pid_(fork()) {
     if (pid_ == 0) {
       setenv("XDG_CONFIG_HOME", config_home.c_str(), 1);
       setenv("TZ", "UTC", 1);
+      if (std::freopen(application_log.c_str(), "w", stderr) == nullptr) {
+        _exit(126);
+      }
       execl(GISLAND_BINARY_PATH, GISLAND_BINARY_PATH, nullptr);
       _exit(127);
     }
@@ -53,6 +60,8 @@ public:
   TemporaryConfig() {
     const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     home_ = std::filesystem::temp_directory_path() / ("gisland-smoke-" + std::to_string(suffix));
+    action_log_ = home_ / "actions.log";
+    application_log_ = home_ / "application.log";
     std::filesystem::create_directories(home_ / "gisland");
     std::ofstream config{home_ / "gisland/config.toml"};
     if (!config) {
@@ -65,16 +74,28 @@ public:
               "id = \"clock\"\n"
               "command = [\""
            << GISLAND_FAKE_MODULE_PATH
-           << "\", \"delayed-data\"]\n"
+           << "\", \"interactive-data\"]\n"
               "restart = \"never\"\n"
+              "[modules.environment]\n"
+              "GISLAND_ACTION_LOG = \""
+           << action_log_.string()
+           << "\"\n"
               "[modules.view.compact]\n"
               "type = \"text\"\n"
               "value = { bind = \"time\" }\n"
               "role = \"body\"\n"
               "[modules.view.expanded]\n"
-              "type = \"text\"\n"
-              "value = { bind = \"time\" }\n"
-              "role = \"body\"\n";
+              "type = \"row\"\n"
+              "gap = \"normal\"\n"
+              "children = [\n"
+              "  { type = \"button\", action_id = \"first\", accessible_label = \"First\", content "
+              "= { type = \"text\", value = \"First\", role = \"button\" } },\n"
+              "  { type = \"button\", action_id = \"disabled\", enabled = false, accessible_label "
+              "= \"Disabled\", content = { type = \"text\", value = \"Disabled\", role = "
+              "\"button\" } },\n"
+              "  { type = \"button\", action_id = \"last\", accessible_label = \"Last\", content = "
+              "{ type = \"text\", value = \"Last\", role = \"button\" } }\n"
+              "]\n";
   }
 
   TemporaryConfig(const TemporaryConfig &) = delete;
@@ -82,10 +103,19 @@ public:
   ~TemporaryConfig() { std::filesystem::remove_all(home_); }
 
   [[nodiscard]] const std::filesystem::path &home() const { return home_; }
+  [[nodiscard]] const std::filesystem::path &action_log() const { return action_log_; }
+  [[nodiscard]] const std::filesystem::path &application_log() const { return application_log_; }
 
 private:
   std::filesystem::path home_;
+  std::filesystem::path action_log_;
+  std::filesystem::path application_log_;
 };
+
+[[nodiscard]] std::string read_text(const std::filesystem::path &path) {
+  std::ifstream stream{path};
+  return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+}
 
 [[nodiscard]] std::optional<Window> find_gisland_window(Display *display) {
   Window root = DefaultRootWindow(display);
@@ -134,7 +164,7 @@ TEST_CASE("application opens on click, resizes natively, and closes on Escape") 
   Display *display = XOpenDisplay(nullptr);
   REQUIRE(display != nullptr);
   TemporaryConfig config;
-  ChildProcess child{config.home()};
+  ChildProcess child{config.home(), config.application_log()};
 
   std::optional<Window> window;
   REQUIRE(wait_until([&] {
@@ -179,6 +209,60 @@ TEST_CASE("application opens on click, resizes natively, and closes on Escape") 
   int revert = 0;
   XGetInputFocus(display, &focused, &revert);
   CHECK(focused == *window);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds{800});
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 48,
+                               attributes.y + 150, CurrentTime) != 0);
+  REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(XTestFakeButtonEvent(display, Button1, False, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\n"; }));
+  REQUIRE(wait_until([&] {
+    return read_text(config.application_log()).find("[clock] action 'first' accepted") !=
+           std::string::npos;
+  }));
+  std::this_thread::sleep_for(std::chrono::milliseconds{20});
+
+  const KeyCode tab = XKeysymToKeycode(display, XK_Tab);
+  const KeyCode enter = XKeysymToKeycode(display, XK_Return);
+  const KeyCode shift = XKeysymToKeycode(display, XK_Shift_L);
+  const KeyCode space = XKeysymToKeycode(display, XK_space);
+  REQUIRE(tab != 0);
+  REQUIRE(enter != 0);
+  REQUIRE(shift != 0);
+  REQUIRE(space != 0);
+  REQUIRE(XTestFakeKeyEvent(display, tab, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, tab, False, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, enter, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, enter, False, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\nlast\n"; }));
+
+  REQUIRE(XTestFakeKeyEvent(display, shift, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, tab, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, tab, False, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, shift, False, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, space, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeKeyEvent(display, space, False, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\nlast\nfirst\n"; }));
 
   const KeyCode escape = XKeysymToKeycode(display, XK_Escape);
   REQUIRE(escape != 0);

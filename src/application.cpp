@@ -1,4 +1,5 @@
 #include "gisland/application.hpp"
+#include "gisland/interaction.hpp"
 #include "gisland/island.hpp"
 #include "gisland/layout.hpp"
 #include "gisland/module_supervisor.hpp"
@@ -263,6 +264,13 @@ void log_supervisor_event(const SupervisorEvent &event) {
         } else if constexpr (std::is_same_v<Event, ModuleMessageEvent>) {
           if (const auto *log = std::get_if<LogMessage>(&typed_event.message)) {
             std::cerr << '[' << typed_event.instance_id << "] " << log->message << '\n';
+          } else if (const auto *result = std::get_if<ActionResultMessage>(&typed_event.message)) {
+            std::cerr << '[' << typed_event.instance_id << "] action '" << result->action_id << "' "
+                      << (result->accepted ? "accepted" : "rejected");
+            if (result->message) {
+              std::cerr << ": " << *result->message;
+            }
+            std::cerr << '\n';
           }
         }
       },
@@ -318,6 +326,7 @@ int Application::run() {
   const int texture_size_location = GetShaderLocation(blur_shader, "textureSize");
   const int blur_radius_location = GetShaderLocation(blur_shader, "blurRadius");
   OverlayInteraction interaction;
+  InteractionController controls;
   IslandMode mode = interaction.mode();
   SpringProgress spring;
   ContentCrossfade content_crossfade;
@@ -326,6 +335,7 @@ int Application::run() {
   X11Monitor monitor = raylib_monitor_fallback();
   std::optional<RenderedContext> rendered;
   bool visible = false;
+  bool controls_ready = false;
 
   const auto refresh_monitor = [&] {
     if (!host) {
@@ -390,7 +400,9 @@ int Application::run() {
         selection.context != nullptr && (!rendered || rendered->key != selection.context->key ||
                                          rendered->revision != selection.revision);
     if (changed) {
-      if (interaction.dismiss(OverlayDismissal::focus_lost) && host) {
+      const bool preserve_expanded =
+          interaction.mode() == IslandMode::expanded && selection.context->expanded.has_value();
+      if (!preserve_expanded && interaction.dismiss(OverlayDismissal::focus_lost) && host) {
         if (auto left = host->leave_expanded(false); !left) {
           std::cerr << left.error().message << '\n';
         }
@@ -410,11 +422,15 @@ int Application::run() {
           unload(*rendered);
         }
         rendered.emplace(std::move(*candidate));
-        interaction = OverlayInteraction{};
-        mode = IslandMode::compact;
-        spring = SpringProgress{};
-        content_crossfade = ContentCrossfade{};
-        current = geometry(rendered->compact.view);
+        controls.clear();
+        controls_ready = false;
+        if (!preserve_expanded) {
+          interaction = OverlayInteraction{};
+          mode = IslandMode::compact;
+          spring = SpringProgress{};
+          content_crossfade = ContentCrossfade{};
+          current = geometry(rendered->compact.view);
+        }
       }
     } else if (selection.context == nullptr && rendered) {
       if (interaction.dismiss(OverlayDismissal::focus_lost) && host) {
@@ -424,11 +440,24 @@ int Application::run() {
       }
       unload(*rendered);
       rendered.reset();
+      controls.clear();
+      controls_ready = false;
       if (visible) {
         Window::hide();
         visible = false;
       }
     }
+
+    const auto send_action = [&](const std::optional<std::string> &action) {
+      if (!action || selection.context == nullptr) {
+        return;
+      }
+      if (auto sent = supervisor.send(selection.context->key.instance_id,
+                                      ActionMessage{.action_id = *action, .value = std::nullopt});
+          !sent) {
+        std::cerr << '[' << selection.context->key.instance_id << "] action delivery failed\n";
+      }
+    };
 
     bool topology_changed = false;
     if (host) {
@@ -437,19 +466,26 @@ int Application::run() {
         std::cerr << events.error().message << '\n';
       } else {
         for (const auto &event : *events) {
-          if (event.kind == X11WindowEventKind::inside_press && rendered && rendered->expanded &&
-              interaction.pointer_pressed(event.button, true)) {
-            if (auto entered = host->enter_expanded(event.timestamp); !entered) {
-              std::cerr << entered.error().message << '\n';
-              static_cast<void>(interaction.dismiss(OverlayDismissal::focus_lost));
+          if (event.kind == X11WindowEventKind::inside_press && rendered && rendered->expanded) {
+            if (interaction.pointer_pressed(event.button, true)) {
+              if (auto entered = host->enter_expanded(event.timestamp); !entered) {
+                std::cerr << entered.error().message << '\n';
+                static_cast<void>(interaction.dismiss(OverlayDismissal::focus_lost));
+              }
+            } else if (controls_ready && event.button == PointerButton::primary) {
+              send_action(controls.pointer_action(*rendered->expanded, event.x, event.y));
             }
           } else if (event.kind == X11WindowEventKind::outside_press &&
                      interaction.dismiss(OverlayDismissal::outside_press)) {
+            controls.clear();
+            controls_ready = false;
             if (auto left = host->leave_expanded(false); !left) {
               std::cerr << left.error().message << '\n';
             }
           } else if (event.kind == X11WindowEventKind::focus_lost &&
                      interaction.dismiss(OverlayDismissal::focus_lost)) {
+            controls.clear();
+            controls_ready = false;
             if (auto left = host->leave_expanded(false); !left) {
               std::cerr << left.error().message << '\n';
             }
@@ -465,11 +501,29 @@ int Application::run() {
     if (!host && rendered && rendered->expanded && interaction.mode() == IslandMode::compact &&
         IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       static_cast<void>(interaction.pointer_pressed(PointerButton::primary, true));
+    } else if (!host && controls_ready && rendered && rendered->expanded &&
+               IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      const Vector2 pointer = GetMousePosition();
+      send_action(controls.pointer_action(*rendered->expanded,
+                                          static_cast<int>(std::lround(pointer.x)),
+                                          static_cast<int>(std::lround(pointer.y))));
     }
     if (interaction.mode() == IslandMode::expanded && IsKeyPressed(KEY_ESCAPE) &&
         interaction.dismiss(OverlayDismissal::escape) && host) {
+      controls.clear();
+      controls_ready = false;
       if (auto left = host->leave_expanded(true); !left) {
         std::cerr << left.error().message << '\n';
+      }
+    }
+    if (controls_ready && rendered && rendered->expanded) {
+      if (IsKeyPressed(KEY_TAB)) {
+        const bool reverse = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        controls.move_focus(*rendered->expanded,
+                            reverse ? FocusDirection::backward : FocusDirection::forward);
+      }
+      if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
+        send_action(controls.activate(*rendered->expanded));
       }
     }
 
@@ -488,6 +542,17 @@ int Application::run() {
 
     spring.update(delta_seconds);
     content_crossfade.update(delta_seconds);
+    const ContentVisual expanded_visual = content_crossfade.expanded();
+    const bool expanded_settled = mode == IslandMode::expanded && spring.value() == 1.0F &&
+                                  expanded_visual.opacity == 1.0F && expanded_visual.blur == 0.0F &&
+                                  expanded_visual.scale == 1.0F;
+    if (expanded_settled && !controls_ready && rendered && rendered->expanded) {
+      controls.reset(*rendered->expanded);
+      controls_ready = true;
+    } else if (!expanded_settled && controls_ready) {
+      controls.clear();
+      controls_ready = false;
+    }
     if (rendered) {
       const RoundedView &expanded_view =
           rendered->expanded ? rendered->expanded->view : rendered->compact.view;
@@ -497,7 +562,7 @@ int Application::run() {
       apply_native_geometry();
       BeginDrawing();
       ClearBackground(BLANK);
-      if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}}); !drawn) {
+      if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}, {}}); !drawn) {
         std::cerr << drawn.error().message << '\n';
       }
       draw_content(rendered->compact_content, content_crossfade.compact(), current, placement,
@@ -505,6 +570,14 @@ int Application::run() {
       if (rendered->expanded_content) {
         draw_content(*rendered->expanded_content, content_crossfade.expanded(), current, placement,
                      blur_shader, texture_size_location, blur_radius_location);
+      }
+      if (controls_ready && rendered->expanded && controls.focused_index() &&
+          *controls.focused_index() < rendered->expanded->interactions.size()) {
+        const auto &target = rendered->expanded->interactions[*controls.focused_index()];
+        if (auto drawn = painter.draw_focus(target, bootstrap_.theme.palette().at("foreground"));
+            !drawn) {
+          std::cerr << drawn.error().message << '\n';
+        }
       }
       EndDrawing();
       if (!visible) {

@@ -83,6 +83,7 @@ add_library(
   src/bootstrap.cpp
   src/config.cpp
   src/context.cpp
+  src/interaction.cpp
   src/island.cpp
   src/layout.cpp
   src/line_buffer.cpp
@@ -142,6 +143,7 @@ if(BUILD_TESTING)
     tests/bootstrap_test.cpp
     tests/config_test.cpp
     tests/context_test.cpp
+    tests/interaction_test.cpp
     tests/island_test.cpp
     tests/layout_test.cpp
     tests/line_buffer_test.cpp
@@ -267,6 +269,7 @@ set(
   include/gisland/bootstrap.hpp
   include/gisland/config.hpp
   include/gisland/context.hpp
+  include/gisland/interaction.hpp
   include/gisland/island.hpp
   include/gisland/layout.hpp
   include/gisland/line_buffer.hpp
@@ -287,6 +290,7 @@ set(
   src/bootstrap.cpp
   src/config.cpp
   src/context.cpp
+  src/interaction.cpp
   src/island.cpp
   src/layout.cpp
   src/line_buffer.cpp
@@ -310,6 +314,7 @@ set(
   tests/bootstrap_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
+  tests/interaction_test.cpp
   tests/island_test.cpp
   tests/layout_test.cpp
   tests/line_buffer_test.cpp

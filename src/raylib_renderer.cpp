@@ -495,4 +495,27 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
   return {};
 }
 
+std::expected<void, RendererError> RaylibPainter::draw_focus(const InteractionTarget &target,
+                                                             Rgba focus_color,
+                                                             RenderOrigin origin) const {
+  if (!IsWindowReady()) {
+    return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
+                                          "raylib window is not ready for drawing"));
+  }
+  if (target.clip.width <= 0 || target.clip.height <= 0) {
+    return {};
+  }
+  auto rendered_clip = translated(target.clip, origin);
+  if (!rendered_clip) {
+    return std::unexpected(rendered_clip.error());
+  }
+  auto rendered_bounds = translated(target.bounds, origin);
+  if (!rendered_bounds) {
+    return std::unexpected(rendered_bounds.error());
+  }
+  const Scissor scissor{*rendered_clip};
+  DrawRectangleRoundedLinesEx(rectangle(*rendered_bounds), 1.0F, 16, 2.0F, color(focus_color));
+  return {};
+}
+
 } // namespace gisland

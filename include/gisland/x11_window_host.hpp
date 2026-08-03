@@ -38,6 +38,8 @@ struct X11WindowEvent {
   X11WindowEventKind kind;
   PointerButton button{PointerButton::other};
   std::uint64_t timestamp{};
+  int x{};
+  int y{};
 };
 
 class X11WindowHost final {

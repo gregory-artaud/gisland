@@ -289,6 +289,12 @@ TEST_CASE("X11 host classifies presses from confirmed server geometry") {
   const auto events = host->poll_events();
   REQUIRE(events.has_value());
   CHECK(has_event(*events, gisland::X11WindowEventKind::inside_press));
+  const auto inside = std::ranges::find_if(*events, [](const auto &event) {
+    return event.kind == gisland::X11WindowEventKind::inside_press;
+  });
+  REQUIRE(inside != events->end());
+  CHECK(inside->x == 10);
+  CHECK(inside->y == 10);
   REQUIRE(XTestFakeButtonEvent(windows.display(), Button1, False, CurrentTime) != 0);
   XSync(windows.display(), False);
   REQUIRE(host->leave_expanded(false).has_value());
