@@ -32,6 +32,7 @@ gisland::AppConfig config() {
       .monitor = "primary",
       .theme = "default",
       .default_module = "clock",
+      .interaction = {},
       .modules = {std::move(clock), std::move(status)},
   };
 }

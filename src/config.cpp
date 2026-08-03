@@ -3,6 +3,7 @@
 #include <toml++/toml.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -738,6 +739,53 @@ parse_modules(const toml::table &root, std::string_view source_name) {
   return modules;
 }
 
+[[nodiscard]] std::expected<InteractionConfig, ConfigError>
+parse_interaction(const toml::table &root, std::string_view source_name) {
+  InteractionConfig interaction;
+  const auto *node = root.get("interaction");
+  if (node == nullptr) {
+    return interaction;
+  }
+  const auto *table = node->as_table();
+  if (table == nullptr) {
+    return std::unexpected(error_at(source_name, "interaction", "expected a table", node));
+  }
+  for (const auto &[key, value] : *table) {
+    if (key != "animation_speed" && key != "hover_exit_ms") {
+      return std::unexpected(error_at(source_name, "interaction." + std::string{key.str()},
+                                      "unknown interaction property", &value));
+    }
+  }
+
+  if (const auto *speed_node = table->get("animation_speed"); speed_node != nullptr) {
+    const auto speed = speed_node->value<double>();
+    if (!speed.has_value()) {
+      return std::unexpected(
+          error_at(source_name, "interaction.animation_speed", "expected a number", speed_node));
+    }
+    if (!std::isfinite(*speed) || *speed < 0.25 || *speed > 4.0) {
+      return std::unexpected(error_at(source_name, "interaction.animation_speed",
+                                      "value must be finite and between 0.25 and 4.0", speed_node));
+    }
+    interaction.animation_speed = *speed;
+  }
+
+  if (const auto *hover_node = table->get("hover_exit_ms"); hover_node != nullptr) {
+    const auto hover_exit = hover_node->value_exact<std::int64_t>();
+    if (!hover_exit.has_value()) {
+      return std::unexpected(error_at(source_name, "interaction.hover_exit_ms",
+                                      "expected integer milliseconds", hover_node));
+    }
+    if (*hover_exit < 0 || *hover_exit > 2000) {
+      return std::unexpected(error_at(source_name, "interaction.hover_exit_ms",
+                                      "value must be between 0 and 2000", hover_node));
+    }
+    interaction.hover_exit = std::chrono::milliseconds{*hover_exit};
+  }
+
+  return interaction;
+}
+
 [[nodiscard]] std::expected<AppConfig, ConfigError> parse_table(const toml::table &root,
                                                                 std::string_view source_name) {
   auto monitor = required_non_empty_string(root, "monitor", "monitor", source_name);
@@ -752,6 +800,11 @@ parse_modules(const toml::table &root, std::string_view source_name) {
   }
   if (!default_module.has_value()) {
     return std::unexpected(default_module.error());
+  }
+
+  auto interaction = parse_interaction(root, source_name);
+  if (!interaction.has_value()) {
+    return std::unexpected(interaction.error());
   }
 
   auto modules = parse_modules(root, source_name);
@@ -773,7 +826,7 @@ parse_modules(const toml::table &root, std::string_view source_name) {
   }
 
   return AppConfig{std::move(*monitor), std::move(*theme), std::move(*default_module),
-                   std::move(*modules)};
+                   std::move(*interaction), std::move(*modules)};
 }
 
 } // namespace

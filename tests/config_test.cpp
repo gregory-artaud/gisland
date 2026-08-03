@@ -6,7 +6,27 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <variant>
+
+namespace {
+
+[[nodiscard]] std::string config_with_interaction(std::string_view interaction) {
+  return std::string{R"(monitor = "primary"
+theme = "organic"
+default_module = "clock"
+
+[interaction]
+)"} + std::string{interaction} +
+         R"(
+
+[[modules]]
+id = "clock"
+command = ["clock"]
+)";
+}
+
+} // namespace
 
 TEST_CASE("minimum application configuration parses into typed values") {
   constexpr auto source = R"(
@@ -40,6 +60,8 @@ enabled = false
   CHECK(result->monitor == "DP-1");
   CHECK(result->theme == "organic");
   CHECK(result->default_module == "clock");
+  CHECK(result->interaction.animation_speed == 1.25);
+  CHECK(result->interaction.hover_exit == std::chrono::milliseconds{120});
   REQUIRE(result->modules.size() == 2);
 
   const auto &clock = result->modules[0];
@@ -60,6 +82,85 @@ enabled = false
   CHECK(music.id == "music");
   CHECK_FALSE(music.enabled);
   CHECK(music.options.empty());
+}
+
+TEST_CASE("interaction timing parses explicit values and accepted boundaries") {
+  SECTION("explicit values") {
+    const auto result = gisland::parse_config(
+        config_with_interaction("animation_speed = 2.0\nhover_exit_ms = 450\n"),
+        "interaction.toml");
+
+    REQUIRE(result.has_value());
+    CHECK(result->interaction.animation_speed == 2.0);
+    CHECK(result->interaction.hover_exit == std::chrono::milliseconds{450});
+  }
+
+  SECTION("minimum values") {
+    const auto result = gisland::parse_config(
+        config_with_interaction("animation_speed = 0.25\nhover_exit_ms = 0\n"), "interaction.toml");
+
+    REQUIRE(result.has_value());
+    CHECK(result->interaction.animation_speed == 0.25);
+    CHECK(result->interaction.hover_exit == std::chrono::milliseconds{0});
+  }
+
+  SECTION("maximum values") {
+    const auto result = gisland::parse_config(
+        config_with_interaction("animation_speed = 4.0\nhover_exit_ms = 2000\n"),
+        "interaction.toml");
+
+    REQUIRE(result.has_value());
+    CHECK(result->interaction.animation_speed == 4.0);
+    CHECK(result->interaction.hover_exit == std::chrono::milliseconds{2000});
+  }
+}
+
+TEST_CASE("invalid interaction timing is rejected at the TOML boundary") {
+  const auto check_error_path = [](std::string_view interaction, std::string_view expected_path) {
+    const auto result =
+        gisland::parse_config(config_with_interaction(interaction), "interaction.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == expected_path);
+  };
+
+  SECTION("animation speed type") {
+    check_error_path("animation_speed = \"fast\"\n", "interaction.animation_speed");
+  }
+  SECTION("hover exit type") {
+    check_error_path("hover_exit_ms = 120.0\n", "interaction.hover_exit_ms");
+  }
+  SECTION("non-finite animation speed") {
+    check_error_path("animation_speed = inf\n", "interaction.animation_speed");
+  }
+  SECTION("animation speed below minimum") {
+    check_error_path("animation_speed = 0.24\n", "interaction.animation_speed");
+  }
+  SECTION("animation speed above maximum") {
+    check_error_path("animation_speed = 4.01\n", "interaction.animation_speed");
+  }
+  SECTION("hover exit below minimum") {
+    check_error_path("hover_exit_ms = -1\n", "interaction.hover_exit_ms");
+  }
+  SECTION("hover exit above maximum") {
+    check_error_path("hover_exit_ms = 2001\n", "interaction.hover_exit_ms");
+  }
+  SECTION("unknown property") {
+    check_error_path("animation_curve = \"linear\"\n", "interaction.animation_curve");
+  }
+
+  SECTION("interaction is not a table") {
+    constexpr auto source = R"(monitor = "primary"
+theme = "organic"
+default_module = "clock"
+interaction = "fast"
+[[modules]]
+id = "clock"
+command = ["clock"]
+)";
+    const auto result = gisland::parse_config(source, "interaction.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "interaction");
+  }
 }
 
 TEST_CASE("module views parse into typed templates") {

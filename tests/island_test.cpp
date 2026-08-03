@@ -8,10 +8,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <limits>
 
 using Catch::Approx;
+using namespace std::chrono_literals;
 
 TEST_CASE("island modes have stable geometry") {
   const auto compact = gisland::geometry_for(gisland::IslandMode::compact);
@@ -70,10 +72,24 @@ TEST_CASE("hover expands immediately and collapses after its exit tolerance") {
   gisland::HoverController hover;
   hover.update(true, 0.0F);
   CHECK(hover.mode() == gisland::IslandMode::expanded);
-  hover.update(false, 0.149F);
+  hover.update(false, 0.119F);
   CHECK(hover.mode() == gisland::IslandMode::expanded);
   hover.update(false, 0.001F);
   CHECK(hover.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("hover exit tolerance is configurable and permits immediate collapse") {
+  gisland::HoverController delayed{450ms};
+  delayed.update(true, 0.0F);
+  delayed.update(false, 0.449F);
+  CHECK(delayed.mode() == gisland::IslandMode::expanded);
+  delayed.update(false, 0.001F);
+  CHECK(delayed.mode() == gisland::IslandMode::compact);
+
+  gisland::HoverController immediate{0ms};
+  immediate.update(true, 0.0F);
+  immediate.update(false, 0.0F);
+  CHECK(immediate.mode() == gisland::IslandMode::compact);
 }
 
 TEST_CASE("hover re-entry cancels collapse and preserves animation continuity") {
@@ -93,7 +109,9 @@ TEST_CASE("hover re-entry cancels collapse and preserves animation continuity") 
   hover.update(true, 0.0F);
   CHECK(hover.mode() == gisland::IslandMode::expanded);
 
-  hover.update(false, 0.15F);
+  hover.update(false, 0.119F);
+  CHECK(hover.mode() == gisland::IslandMode::expanded);
+  hover.update(false, 0.001F);
   REQUIRE(hover.mode() == gisland::IslandMode::compact);
   spring.set_target(0.0F);
   crossfade.set_mode(hover.mode());

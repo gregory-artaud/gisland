@@ -336,7 +336,7 @@ int Application::run() {
   const Shader blur_shader = LoadShaderFromMemory(nullptr, content_blur_shader);
   const int texture_size_location = GetShaderLocation(blur_shader, "textureSize");
   const int blur_radius_location = GetShaderLocation(blur_shader, "blurRadius");
-  HoverController hover;
+  HoverController hover{bootstrap_.config.interaction.hover_exit};
   InteractionController controls;
   IslandMode mode = hover.mode();
   SpringProgress spring;
@@ -427,7 +427,7 @@ int Application::run() {
         canvas = canvas_for(rendered->compact, rendered->expanded);
         actions_ready = false;
         if (!preserve_expanded) {
-          hover = HoverController{};
+          hover = HoverController{bootstrap_.config.interaction.hover_exit};
           mode = IslandMode::compact;
           spring = SpringProgress{};
           content_crossfade = ContentCrossfade{};
@@ -439,7 +439,7 @@ int Application::run() {
     } else if (selection.context == nullptr && rendered) {
       unload(*rendered);
       rendered.reset();
-      hover = HoverController{};
+      hover = HoverController{bootstrap_.config.interaction.hover_exit};
       actions_ready = false;
       if (visible) {
         Window::hide();
@@ -500,8 +500,10 @@ int Application::run() {
       }
     }
 
-    spring.update(delta_seconds);
-    content_crossfade.update(delta_seconds);
+    const float animation_delta =
+        delta_seconds * static_cast<float>(bootstrap_.config.interaction.animation_speed);
+    spring.update(animation_delta);
+    content_crossfade.update(animation_delta);
     const ContentVisual expanded_visual = content_crossfade.expanded();
     const bool expanded_settled = mode == IslandMode::expanded && spring.value() == 1.0F &&
                                   expanded_visual.opacity == 1.0F && expanded_visual.blur == 0.0F &&

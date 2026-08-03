@@ -51,10 +51,16 @@ struct ModuleInstanceConfig {
   std::optional<View> view;
 };
 
+struct InteractionConfig {
+  double animation_speed{1.25};
+  std::chrono::milliseconds hover_exit{120};
+};
+
 struct AppConfig {
   std::string monitor;
   std::string theme;
   std::string default_module;
+  InteractionConfig interaction;
   std::vector<ModuleInstanceConfig> modules;
 };
 

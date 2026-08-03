@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <vector>
 
 namespace gisland {
@@ -31,6 +32,8 @@ struct IslandMaskRow {
 
 class HoverController {
 public:
+  explicit HoverController(std::chrono::milliseconds exit_tolerance = std::chrono::milliseconds{
+                               120});
   void update(bool hovered, float delta_seconds);
   void collapse();
   [[nodiscard]] IslandMode mode() const;
@@ -38,6 +41,7 @@ public:
 private:
   IslandMode mode_{IslandMode::compact};
   float outside_elapsed_{0.0F};
+  float exit_tolerance_seconds_;
 };
 
 class SpringProgress {

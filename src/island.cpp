@@ -128,6 +128,10 @@ void ContentCrossfade::update_layer(LayerTransition &layer, float delta_seconds)
   };
 }
 
+HoverController::HoverController(std::chrono::milliseconds exit_tolerance)
+    : exit_tolerance_seconds_(
+          std::max(std::chrono::duration<float>{exit_tolerance}.count(), 0.0F)) {}
+
 void HoverController::update(bool hovered, float delta_seconds) {
   if (hovered) {
     mode_ = IslandMode::expanded;
@@ -137,7 +141,7 @@ void HoverController::update(bool hovered, float delta_seconds) {
 
   if (mode_ == IslandMode::expanded) {
     outside_elapsed_ += std::max(delta_seconds, 0.0F);
-    if (outside_elapsed_ >= 0.15F) {
+    if (outside_elapsed_ >= exit_tolerance_seconds_) {
       collapse();
     }
   }
