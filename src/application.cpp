@@ -60,7 +60,7 @@ class Window final {
 public:
   Window(const ApplicationConfig &config, const IslandGeometry &compact) {
     SetConfigFlags(FLAG_WINDOW_TRANSPARENT | FLAG_WINDOW_UNDECORATED | FLAG_WINDOW_TOPMOST |
-                   FLAG_WINDOW_ALWAYS_RUN | FLAG_WINDOW_HIDDEN);
+                   FLAG_WINDOW_ALWAYS_RUN | FLAG_WINDOW_HIDDEN | FLAG_WINDOW_UNFOCUSED);
     InitWindow(static_cast<int>(std::lround(compact.width)),
                static_cast<int>(std::lround(compact.height)), config.title.c_str());
     SetExitKey(KEY_NULL);
@@ -168,6 +168,17 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
 [[nodiscard]] IslandGeometry geometry(const RoundedView &view) {
   return IslandGeometry{static_cast<float>(view.bounds.width),
                         static_cast<float>(view.bounds.height), static_cast<float>(view.radius)};
+}
+
+[[nodiscard]] IslandCanvasSize canvas_for(const LayoutPlan &compact,
+                                          const std::optional<LayoutPlan> &expanded) {
+  return IslandCanvasSize{
+      static_cast<float>(std::max(compact.view.bounds.width, expanded ? expanded->view.bounds.width
+                                                                      : compact.view.bounds.width)),
+      static_cast<float>(std::max(compact.view.bounds.height, expanded
+                                                                  ? expanded->view.bounds.height
+                                                                  : compact.view.bounds.height)),
+  };
 }
 
 struct RenderedContext {
@@ -325,17 +336,18 @@ int Application::run() {
   const Shader blur_shader = LoadShaderFromMemory(nullptr, content_blur_shader);
   const int texture_size_location = GetShaderLocation(blur_shader, "textureSize");
   const int blur_radius_location = GetShaderLocation(blur_shader, "blurRadius");
-  OverlayInteraction interaction;
+  HoverController hover;
   InteractionController controls;
-  IslandMode mode = interaction.mode();
+  IslandMode mode = hover.mode();
   SpringProgress spring;
   ContentCrossfade content_crossfade;
   IslandGeometry current = initial_geometry;
-  const IslandPlacement placement{0.0F, 0.0F};
+  IslandCanvasSize canvas{initial_geometry.width, initial_geometry.height};
+  IslandPlacement placement = place_at_top_center(current, canvas);
   X11Monitor monitor = raylib_monitor_fallback();
   std::optional<RenderedContext> rendered;
   bool visible = false;
-  bool controls_ready = false;
+  bool actions_ready = false;
 
   const auto refresh_monitor = [&] {
     if (!host) {
@@ -354,12 +366,12 @@ int Application::run() {
     }
   };
 
-  int native_width = std::max(1, static_cast<int>(std::lround(current.width)));
-  int native_height = std::max(1, static_cast<int>(std::lround(current.height)));
+  int native_width = std::max(1, static_cast<int>(std::lround(canvas.width)));
+  int native_height = std::max(1, static_cast<int>(std::lround(canvas.height)));
   std::optional<X11WindowPlacement> native_position;
-  const auto apply_native_geometry = [&] {
-    const int next_width = std::max(1, static_cast<int>(std::lround(current.width)));
-    const int next_height = std::max(1, static_cast<int>(std::lround(current.height)));
+  const auto apply_native_canvas = [&] {
+    const int next_width = std::max(1, static_cast<int>(std::lround(canvas.width)));
+    const int next_height = std::max(1, static_cast<int>(std::lround(canvas.height)));
     if (next_width != native_width || next_height != native_height) {
       SetWindowSize(next_width, next_height);
       native_width = next_width;
@@ -375,14 +387,9 @@ int Application::run() {
       SetWindowPosition(positioned->x, positioned->y);
       native_position = *positioned;
     }
-    if (host) {
-      if (auto shaped = host->apply_shape(current); !shaped) {
-        std::cerr << shaped.error().message << '\n';
-      }
-    }
   };
   refresh_monitor();
-  apply_native_geometry();
+  apply_native_canvas();
 
   while (!WindowShouldClose()) {
     const float delta_seconds = GetFrameTime();
@@ -401,12 +408,7 @@ int Application::run() {
                                          rendered->revision != selection.revision);
     if (changed) {
       const bool preserve_expanded =
-          interaction.mode() == IslandMode::expanded && selection.context->expanded.has_value();
-      if (!preserve_expanded && interaction.dismiss(OverlayDismissal::focus_lost) && host) {
-        if (auto left = host->leave_expanded(false); !left) {
-          std::cerr << left.error().message << '\n';
-        }
-      }
+          hover.mode() == IslandMode::expanded && selection.context->expanded.has_value();
       auto candidate =
           render_context(*selection.context, selection.revision, bootstrap_.theme, *fonts);
       if (!candidate) {
@@ -422,26 +424,23 @@ int Application::run() {
           unload(*rendered);
         }
         rendered.emplace(std::move(*candidate));
-        controls.clear();
-        controls_ready = false;
+        canvas = canvas_for(rendered->compact, rendered->expanded);
+        actions_ready = false;
         if (!preserve_expanded) {
-          interaction = OverlayInteraction{};
+          hover = HoverController{};
           mode = IslandMode::compact;
           spring = SpringProgress{};
           content_crossfade = ContentCrossfade{};
           current = geometry(rendered->compact.view);
         }
+        placement = place_at_top_center(current, canvas);
+        apply_native_canvas();
       }
     } else if (selection.context == nullptr && rendered) {
-      if (interaction.dismiss(OverlayDismissal::focus_lost) && host) {
-        if (auto left = host->leave_expanded(false); !left) {
-          std::cerr << left.error().message << '\n';
-        }
-      }
       unload(*rendered);
       rendered.reset();
-      controls.clear();
-      controls_ready = false;
+      hover = HoverController{};
+      actions_ready = false;
       if (visible) {
         Window::hide();
         visible = false;
@@ -466,30 +465,7 @@ int Application::run() {
         std::cerr << events.error().message << '\n';
       } else {
         for (const auto &event : *events) {
-          if (event.kind == X11WindowEventKind::inside_press && rendered && rendered->expanded) {
-            if (interaction.pointer_pressed(event.button, true)) {
-              if (auto entered = host->enter_expanded(event.timestamp); !entered) {
-                std::cerr << entered.error().message << '\n';
-                static_cast<void>(interaction.dismiss(OverlayDismissal::focus_lost));
-              }
-            } else if (controls_ready && event.button == PointerButton::primary) {
-              send_action(controls.pointer_action(*rendered->expanded, event.x, event.y));
-            }
-          } else if (event.kind == X11WindowEventKind::outside_press &&
-                     interaction.dismiss(OverlayDismissal::outside_press)) {
-            controls.clear();
-            controls_ready = false;
-            if (auto left = host->leave_expanded(false); !left) {
-              std::cerr << left.error().message << '\n';
-            }
-          } else if (event.kind == X11WindowEventKind::focus_lost &&
-                     interaction.dismiss(OverlayDismissal::focus_lost)) {
-            controls.clear();
-            controls_ready = false;
-            if (auto left = host->leave_expanded(false); !left) {
-              std::cerr << left.error().message << '\n';
-            }
-          } else if (event.kind == X11WindowEventKind::topology_changed) {
+          if (event.kind == X11WindowEventKind::topology_changed) {
             topology_changed = true;
           }
         }
@@ -497,37 +473,21 @@ int Application::run() {
     }
     if (topology_changed) {
       refresh_monitor();
+      apply_native_canvas();
     }
-    if (!host && rendered && rendered->expanded && interaction.mode() == IslandMode::compact &&
+    const Vector2 pointer = GetMousePosition();
+    const bool hovered = IsCursorOnScreen() &&
+                         CheckCollisionPointRec(pointer, Rectangle{placement.x, placement.y,
+                                                                   current.width, current.height});
+    if (actions_ready && rendered && rendered->expanded &&
         IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      static_cast<void>(interaction.pointer_pressed(PointerButton::primary, true));
-    } else if (!host && controls_ready && rendered && rendered->expanded &&
-               IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      const Vector2 pointer = GetMousePosition();
       send_action(controls.pointer_action(*rendered->expanded,
-                                          static_cast<int>(std::lround(pointer.x)),
-                                          static_cast<int>(std::lround(pointer.y))));
-    }
-    if (interaction.mode() == IslandMode::expanded && IsKeyPressed(KEY_ESCAPE) &&
-        interaction.dismiss(OverlayDismissal::escape) && host) {
-      controls.clear();
-      controls_ready = false;
-      if (auto left = host->leave_expanded(true); !left) {
-        std::cerr << left.error().message << '\n';
-      }
-    }
-    if (controls_ready && rendered && rendered->expanded) {
-      if (IsKeyPressed(KEY_TAB)) {
-        const bool reverse = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
-        controls.move_focus(*rendered->expanded,
-                            reverse ? FocusDirection::backward : FocusDirection::forward);
-      }
-      if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
-        send_action(controls.activate(*rendered->expanded));
-      }
+                                          static_cast<int>(std::lround(pointer.x - placement.x)),
+                                          static_cast<int>(std::lround(pointer.y - placement.y))));
     }
 
-    const IslandMode next_mode = interaction.mode();
+    hover.update(hovered && rendered && rendered->expanded.has_value(), delta_seconds);
+    const IslandMode next_mode = hover.mode();
     if (next_mode != mode) {
       mode = next_mode;
       spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);
@@ -546,20 +506,20 @@ int Application::run() {
     const bool expanded_settled = mode == IslandMode::expanded && spring.value() == 1.0F &&
                                   expanded_visual.opacity == 1.0F && expanded_visual.blur == 0.0F &&
                                   expanded_visual.scale == 1.0F;
-    if (expanded_settled && !controls_ready && rendered && rendered->expanded) {
-      controls.reset(*rendered->expanded);
-      controls_ready = true;
-    } else if (!expanded_settled && controls_ready) {
-      controls.clear();
-      controls_ready = false;
-    }
+    actions_ready = expanded_settled && rendered && rendered->expanded.has_value();
     if (rendered) {
       const RoundedView &expanded_view =
           rendered->expanded ? rendered->expanded->view : rendered->compact.view;
-      const RoundedView surface =
-          interpolate(rendered->compact.view, expanded_view, spring.value());
+      RoundedView surface = interpolate(rendered->compact.view, expanded_view, spring.value());
       current = geometry(surface);
-      apply_native_geometry();
+      placement = place_at_top_center(current, canvas);
+      surface.bounds.x = static_cast<int>(std::lround(placement.x));
+      surface.bounds.y = static_cast<int>(std::lround(placement.y));
+      if (host) {
+        if (auto shaped = host->apply_shape(current, placement); !shaped) {
+          std::cerr << shaped.error().message << '\n';
+        }
+      }
       BeginDrawing();
       ClearBackground(BLANK);
       if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}, {}}); !drawn) {
@@ -570,14 +530,6 @@ int Application::run() {
       if (rendered->expanded_content) {
         draw_content(*rendered->expanded_content, content_crossfade.expanded(), current, placement,
                      blur_shader, texture_size_location, blur_radius_location);
-      }
-      if (controls_ready && rendered->expanded && controls.focused_index() &&
-          *controls.focused_index() < rendered->expanded->interactions.size()) {
-        const auto &target = rendered->expanded->interactions[*controls.focused_index()];
-        if (auto drawn = painter.draw_focus(target, bootstrap_.theme.palette().at("foreground"));
-            !drawn) {
-          std::cerr << drawn.error().message << '\n';
-        }
       }
       EndDrawing();
       if (!visible) {

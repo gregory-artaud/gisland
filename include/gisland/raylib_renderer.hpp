@@ -74,8 +74,6 @@ public:
                                                                 RenderOrigin origin = {}) const;
   [[nodiscard]] std::expected<void, RendererError> draw_content(const LayoutPlan &plan,
                                                                 RenderOrigin origin = {}) const;
-  [[nodiscard]] std::expected<void, RendererError>
-  draw_focus(const InteractionTarget &target, Rgba focus_color, RenderOrigin origin = {}) const;
 
 private:
   const RaylibFontBook &fonts_;

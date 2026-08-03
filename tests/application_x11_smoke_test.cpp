@@ -1,10 +1,11 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XTest.h>
-#include <X11/keysym.h>
+#include <X11/extensions/shape.h>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -155,9 +156,43 @@ template <typename Predicate> [[nodiscard]] bool wait_until(Predicate predicate)
   return false;
 }
 
+struct ShapeBounds {
+  int x;
+  int y;
+  int width;
+  int height;
+};
+
+[[nodiscard]] std::optional<ShapeBounds> input_shape_bounds(Display *display, Window window) {
+  int rectangle_count = 0;
+  int ordering = 0;
+  XRectangle *rectangles =
+      XShapeGetRectangles(display, window, ShapeInput, &rectangle_count, &ordering);
+  if (rectangles == nullptr || rectangle_count == 0) {
+    if (rectangles != nullptr) {
+      XFree(rectangles);
+    }
+    return std::nullopt;
+  }
+  int minimum_x = rectangles[0].x;
+  int minimum_y = rectangles[0].y;
+  int maximum_x = rectangles[0].x + rectangles[0].width;
+  int maximum_y = rectangles[0].y + rectangles[0].height;
+  for (int index = 1; index < rectangle_count; ++index) {
+    minimum_x = std::min(minimum_x, static_cast<int>(rectangles[index].x));
+    minimum_y = std::min(minimum_y, static_cast<int>(rectangles[index].y));
+    maximum_x =
+        std::max(maximum_x, static_cast<int>(rectangles[index].x + rectangles[index].width));
+    maximum_y =
+        std::max(maximum_y, static_cast<int>(rectangles[index].y + rectangles[index].height));
+  }
+  XFree(rectangles);
+  return ShapeBounds{minimum_x, minimum_y, maximum_x - minimum_x, maximum_y - minimum_y};
+}
+
 } // namespace
 
-TEST_CASE("application opens on click, resizes natively, and closes on Escape") {
+TEST_CASE("application expands on hover and animates within a fixed native canvas") {
   if (std::getenv("DISPLAY") == nullptr) {
     SKIP("requires an X11 display");
   }
@@ -180,41 +215,48 @@ TEST_CASE("application opens on click, resizes natively, and closes on Escape") 
   REQUIRE(wait_until([&] {
     XSync(display, False);
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
-           attributes.map_state == IsViewable && attributes.width == 220 &&
-           attributes.height == 64 && attributes.x == 530 && attributes.y == 8;
+           attributes.map_state == IsViewable && attributes.width == 360 &&
+           attributes.height == 300 && attributes.x == 460 && attributes.y == 8;
   }));
-  CHECK(attributes.width == 220);
-  CHECK(attributes.height == 64);
-  CHECK(attributes.x == 530);
-  CHECK(attributes.y == 8);
-
-  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 110,
-                               attributes.y + 32, CurrentTime) != 0);
-  REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeButtonEvent(display, Button1, False, CurrentTime) != 0);
-  XSync(display, False);
-
-  const bool expanded = wait_until([&] {
-    XSync(display, False);
-    return XGetWindowAttributes(display, *window, &attributes) != 0 && attributes.width == 360 &&
-           attributes.height == 300;
-  });
-  INFO("final geometry: " << attributes.width << 'x' << attributes.height);
-  REQUIRE(expanded);
+  CHECK(attributes.width == 360);
+  CHECK(attributes.height == 300);
   CHECK(attributes.x == 460);
   CHECK(attributes.y == 8);
-  Window focused = None;
-  int revert = 0;
-  XGetInputFocus(display, &focused, &revert);
-  CHECK(focused == *window);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
+  std::optional<ShapeBounds> compact_shape;
+  const bool compact = wait_until([&] {
+    compact_shape = input_shape_bounds(display, *window);
+    return compact_shape && compact_shape->width == 220 && compact_shape->height == 64 &&
+           compact_shape->x == 70;
+  });
+  if (compact_shape) {
+    INFO("initial shape: " << compact_shape->x << ',' << compact_shape->y << ' '
+                           << compact_shape->width << 'x' << compact_shape->height);
+  } else {
+    INFO("initial input shape is empty");
+  }
+  REQUIRE(compact);
 
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 180,
+                               attributes.y + 32, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width == 360 && shape->height == 300 && shape->x == 0;
+  }));
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  CHECK(attributes.width == 360);
+  CHECK(attributes.height == 300);
+  CHECK(attributes.x == 460);
   std::this_thread::sleep_for(std::chrono::milliseconds{800});
+
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 48,
                                attributes.y + 150, CurrentTime) != 0);
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
   XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
   REQUIRE(XTestFakeButtonEvent(display, Button1, False, CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\n"; }));
@@ -224,60 +266,17 @@ TEST_CASE("application opens on click, resizes natively, and closes on Escape") 
   }));
   std::this_thread::sleep_for(std::chrono::milliseconds{20});
 
-  const KeyCode tab = XKeysymToKeycode(display, XK_Tab);
-  const KeyCode enter = XKeysymToKeycode(display, XK_Return);
-  const KeyCode shift = XKeysymToKeycode(display, XK_Shift_L);
-  const KeyCode space = XKeysymToKeycode(display, XK_space);
-  REQUIRE(tab != 0);
-  REQUIRE(enter != 0);
-  REQUIRE(shift != 0);
-  REQUIRE(space != 0);
-  REQUIRE(XTestFakeKeyEvent(display, tab, True, CurrentTime) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
   XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, tab, False, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, enter, True, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, enter, False, CurrentTime) != 0);
-  XSync(display, False);
-  REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\nlast\n"; }));
-
-  REQUIRE(XTestFakeKeyEvent(display, shift, True, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, tab, True, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, tab, False, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, shift, False, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, space, True, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, space, False, CurrentTime) != 0);
-  XSync(display, False);
-  REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\nlast\nfirst\n"; }));
-
-  const KeyCode escape = XKeysymToKeycode(display, XK_Escape);
-  REQUIRE(escape != 0);
-  REQUIRE(XTestFakeKeyEvent(display, escape, True, CurrentTime) != 0);
-  XSync(display, False);
-  std::this_thread::sleep_for(std::chrono::milliseconds{50});
-  REQUIRE(XTestFakeKeyEvent(display, escape, False, CurrentTime) != 0);
-  XSync(display, False);
-
   REQUIRE(wait_until([&] {
     XSync(display, False);
-    return XGetWindowAttributes(display, *window, &attributes) != 0 && attributes.width == 220 &&
-           attributes.height == 64;
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width == 220 && shape->height == 64 && shape->x == 70;
   }));
-  CHECK(attributes.x == 530);
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  CHECK(attributes.width == 360);
+  CHECK(attributes.height == 300);
+  CHECK(attributes.x == 460);
   CHECK(attributes.y == 8);
 
   XCloseDisplay(display);

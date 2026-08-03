@@ -76,47 +76,27 @@ TEST_CASE("hover expands immediately and collapses after its exit tolerance") {
   CHECK(hover.mode() == gisland::IslandMode::compact);
 }
 
-TEST_CASE("overlay interaction opens only for a primary press inside compact bounds") {
-  gisland::OverlayInteraction interaction;
-
-  CHECK(interaction.mode() == gisland::IslandMode::compact);
-  CHECK_FALSE(interaction.pointer_pressed(gisland::PointerButton::other, true));
-  CHECK_FALSE(interaction.pointer_pressed(gisland::PointerButton::primary, false));
-  CHECK(interaction.mode() == gisland::IslandMode::compact);
-
-  CHECK(interaction.pointer_pressed(gisland::PointerButton::primary, true));
-  CHECK(interaction.mode() == gisland::IslandMode::expanded);
-  CHECK_FALSE(interaction.pointer_pressed(gisland::PointerButton::primary, true));
-}
-
-TEST_CASE("overlay interaction collapses expanded mode through each external dismissal") {
-  for (const auto dismiss :
-       {gisland::OverlayDismissal::outside_press, gisland::OverlayDismissal::escape,
-        gisland::OverlayDismissal::focus_lost}) {
-    gisland::OverlayInteraction interaction;
-    REQUIRE(interaction.pointer_pressed(gisland::PointerButton::primary, true));
-
-    CHECK(interaction.dismiss(dismiss));
-    CHECK(interaction.mode() == gisland::IslandMode::compact);
-    CHECK_FALSE(interaction.dismiss(dismiss));
-  }
-}
-
-TEST_CASE("click-driven mode reversal preserves spring and content continuity") {
-  gisland::OverlayInteraction interaction;
+TEST_CASE("hover re-entry cancels collapse and preserves animation continuity") {
+  gisland::HoverController hover;
   gisland::SpringProgress spring;
   gisland::ContentCrossfade crossfade;
-  REQUIRE(interaction.pointer_pressed(gisland::PointerButton::primary, true));
+  hover.update(true, 0.0F);
   spring.set_target(1.0F);
-  crossfade.set_mode(interaction.mode());
+  crossfade.set_mode(hover.mode());
   spring.update(0.05F);
   crossfade.update(0.15F);
   const float spring_before = spring.value();
   const auto compact_before = crossfade.compact();
 
-  REQUIRE(interaction.dismiss(gisland::OverlayDismissal::outside_press));
+  hover.update(false, 0.10F);
+  CHECK(hover.mode() == gisland::IslandMode::expanded);
+  hover.update(true, 0.0F);
+  CHECK(hover.mode() == gisland::IslandMode::expanded);
+
+  hover.update(false, 0.15F);
+  REQUIRE(hover.mode() == gisland::IslandMode::compact);
   spring.set_target(0.0F);
-  crossfade.set_mode(interaction.mode());
+  crossfade.set_mode(hover.mode());
 
   CHECK(spring.value() == Approx(spring_before));
   CHECK(crossfade.compact().opacity == Approx(compact_before.opacity));

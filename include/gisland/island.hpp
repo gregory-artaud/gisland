@@ -5,8 +5,6 @@
 namespace gisland {
 
 enum class IslandMode { compact, expanded };
-enum class PointerButton { primary, other };
-enum class OverlayDismissal { outside_press, escape, focus_lost };
 
 struct IslandGeometry {
   float width;
@@ -29,16 +27,6 @@ struct IslandMaskRow {
   int y;
   int width;
   int height;
-};
-
-class OverlayInteraction {
-public:
-  [[nodiscard]] bool pointer_pressed(PointerButton button, bool inside);
-  [[nodiscard]] bool dismiss(OverlayDismissal reason);
-  [[nodiscard]] IslandMode mode() const;
-
-private:
-  IslandMode mode_{IslandMode::compact};
 };
 
 class HoverController {

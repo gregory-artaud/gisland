@@ -386,24 +386,3 @@ TEST_CASE_METHOD(HiddenWindow, "painter rejects coordinates that overflow after 
   REQUIRE_FALSE(content.has_value());
   CHECK(content.error().code == gisland::RendererErrorCode::invalid_geometry);
 }
-
-TEST_CASE_METHOD(HiddenWindow, "painter draws a clipped keyboard focus outline") {
-  auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
-  REQUIRE(fonts.has_value());
-  const gisland::RaylibPainter painter{*fonts};
-  const gisland::InteractionTarget target{
-      .bounds = {8, 8, 24, 24},
-      .clip = {12, 8, 20, 24},
-      .action_id = "open",
-      .enabled = true,
-      .accessible_label = "Open",
-  };
-
-  Image image = render_image(
-      [&] { REQUIRE(painter.draw_focus(target, gisland::Rgba{240, 240, 240, 255}).has_value()); });
-
-  CHECK(same_color(GetImageColor(image, 20, 8), gisland::Rgba{240, 240, 240, 255}));
-  const Color clipped = GetImageColor(image, 9, 20);
-  CHECK(clipped.a == 0);
-  UnloadImage(image);
-}

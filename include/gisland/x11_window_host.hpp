@@ -3,7 +3,6 @@
 #include "gisland/island.hpp"
 #include "gisland/x11_monitor.hpp"
 
-#include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
@@ -16,7 +15,6 @@ enum class X11WindowErrorCode {
   invalid_window,
   randr_unavailable,
   no_active_outputs,
-  pointer_grab_failed,
   request_failed
 };
 
@@ -25,21 +23,10 @@ struct X11WindowError {
   std::string message;
 };
 
-struct X11RootBounds {
-  int x;
-  int y;
-  int width;
-  int height;
-};
-
-enum class X11WindowEventKind { inside_press, outside_press, focus_lost, topology_changed };
+enum class X11WindowEventKind { topology_changed };
 
 struct X11WindowEvent {
   X11WindowEventKind kind;
-  PointerButton button{PointerButton::other};
-  std::uint64_t timestamp{};
-  int x{};
-  int y{};
 };
 
 class X11WindowHost final {
@@ -56,9 +43,7 @@ public:
   [[nodiscard]] std::expected<MonitorSelection, X11WindowError>
   select_output(std::string_view requested_name) const;
   [[nodiscard]] std::expected<void, X11WindowError>
-  apply_shape(const IslandGeometry &geometry) const;
-  [[nodiscard]] std::expected<void, X11WindowError> enter_expanded(std::uint64_t timestamp = 0);
-  [[nodiscard]] std::expected<void, X11WindowError> leave_expanded(bool restore_focus);
+  apply_shape(const IslandGeometry &geometry, const IslandPlacement &placement) const;
   [[nodiscard]] std::expected<std::vector<X11WindowEvent>, X11WindowError> poll_events();
 
 private:
