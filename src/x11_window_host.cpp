@@ -398,7 +398,8 @@ std::expected<std::vector<X11WindowEvent>, X11WindowError> X11WindowHost::poll_e
         impl_->root_bounds =
             X11RootBounds{root_x, root_y, event.xconfigure.width, event.xconfigure.height};
       }
-    } else if (event.type == FocusOut && event.xfocus.detail != NotifyInferior) {
+    } else if (event.type == FocusOut && impl_->pointer_grabbed &&
+               event.xfocus.detail != NotifyInferior) {
       events.push_back(X11WindowEvent{X11WindowEventKind::focus_lost});
     } else if (event.type == impl_->randr_event_base + RRScreenChangeNotify ||
                event.type == impl_->randr_event_base + RRNotify) {

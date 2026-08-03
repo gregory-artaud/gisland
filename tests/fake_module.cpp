@@ -8,11 +8,13 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -311,13 +313,14 @@ void read_init() {
     });
     return silent();
   }
-  if (mode == "data" || mode == "data-without-capability" || mode == "data-before-ready") {
+  if (mode == "data" || mode == "delayed-data" || mode == "data-without-capability" ||
+      mode == "data-before-ready") {
     read_init();
     if (mode == "data-before-ready") {
       write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});
       return silent();
     }
-    if (mode == "data") {
+    if (mode == "data" || mode == "delayed-data") {
       write_json({
           {"type", "ready"},
           {"protocol_major", 1},
@@ -326,6 +329,9 @@ void read_init() {
       });
     } else {
       write_ready();
+    }
+    if (mode == "delayed-data") {
+      std::this_thread::sleep_for(std::chrono::milliseconds{400});
     }
     write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});
     std::string line;

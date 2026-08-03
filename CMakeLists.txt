@@ -80,6 +80,7 @@ add_custom_target(gisland_assets DEPENDS "${GISLAND_ASSET_STAMP}")
 add_library(
   gisland_app STATIC
   src/application.cpp
+  src/bootstrap.cpp
   src/config.cpp
   src/context.cpp
   src/island.cpp
@@ -90,6 +91,7 @@ add_library(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp
+  src/runtime.cpp
   src/scene.cpp
   src/scene_template.cpp
   src/theme.cpp
@@ -117,6 +119,10 @@ target_link_libraries(
     X11::Xrandr
 )
 gisland_set_project_options(gisland_app)
+target_compile_definitions(
+  gisland_app
+  PRIVATE GISLAND_DISTRIBUTED_DATA_DIR="${PROJECT_BINARY_DIR}/assets"
+)
 
 add_executable(gisland src/main.cpp)
 target_compile_features(gisland PRIVATE cxx_std_23)
@@ -133,6 +139,7 @@ if(BUILD_TESTING)
   add_executable(
     gisland_tests
     tests/application_config_test.cpp
+    tests/bootstrap_test.cpp
     tests/config_test.cpp
     tests/context_test.cpp
     tests/island_test.cpp
@@ -143,6 +150,7 @@ if(BUILD_TESTING)
     tests/posix_process_backend_test.cpp
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
+    tests/runtime_test.cpp
     tests/scene_test.cpp
     tests/scene_template_test.cpp
     tests/theme_test.cpp
@@ -156,9 +164,11 @@ if(BUILD_TESTING)
   )
   target_compile_definitions(
     gisland_tests
-    PRIVATE GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+    PRIVATE
+      GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+      GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
   )
-  add_dependencies(gisland_tests fake_module)
+  add_dependencies(gisland_tests fake_module gisland_assets)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
@@ -173,10 +183,12 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(
       gisland_application_x11_smoke_tests
-      PRIVATE GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
+      PRIVATE
+        GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
+        GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
     )
     gisland_set_project_options(gisland_application_x11_smoke_tests)
-    add_dependencies(gisland_application_x11_smoke_tests gisland)
+    add_dependencies(gisland_application_x11_smoke_tests gisland fake_module)
     catch_discover_tests(
       gisland_application_x11_smoke_tests
       TEST_PREFIX "application_x11::"
@@ -252,6 +264,7 @@ endif()
 set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
+  include/gisland/bootstrap.hpp
   include/gisland/config.hpp
   include/gisland/context.hpp
   include/gisland/island.hpp
@@ -262,6 +275,7 @@ set(
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
+  include/gisland/runtime.hpp
   include/gisland/scene.hpp
   include/gisland/scene_template.hpp
   include/gisland/theme.hpp
@@ -270,6 +284,7 @@ set(
   include/gisland/x11_window_host.hpp
   include/gisland/x11_shape.hpp
   src/application.cpp
+  src/bootstrap.cpp
   src/config.cpp
   src/context.cpp
   src/island.cpp
@@ -281,6 +296,7 @@ set(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp
+  src/runtime.cpp
   src/scene.cpp
   src/scene_template.cpp
   src/theme.cpp
@@ -291,6 +307,7 @@ set(
   tests/fake_module.cpp
   tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
+  tests/bootstrap_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
   tests/island_test.cpp
@@ -301,6 +318,7 @@ set(
   tests/posix_process_backend_test.cpp
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
+  tests/runtime_test.cpp
   tests/raylib_renderer_test.cpp
   tests/scene_test.cpp
   tests/scene_template_test.cpp

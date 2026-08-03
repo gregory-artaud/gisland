@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gisland/bootstrap.hpp"
+
 #include <string>
 
 namespace gisland {
@@ -7,17 +9,17 @@ namespace gisland {
 struct ApplicationConfig {
   std::string title{"gisland"};
   int target_fps{60};
-  std::string monitor{"primary"};
   int top_margin{8};
 };
 
 class Application {
 public:
-  explicit Application(ApplicationConfig config = {});
+  explicit Application(RuntimeBootstrap bootstrap, ApplicationConfig config = {});
 
   [[nodiscard]] int run();
 
 private:
+  RuntimeBootstrap bootstrap_;
   ApplicationConfig config_;
 };
 

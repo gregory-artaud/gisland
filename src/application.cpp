@@ -1,5 +1,9 @@
 #include "gisland/application.hpp"
 #include "gisland/island.hpp"
+#include "gisland/layout.hpp"
+#include "gisland/module_supervisor.hpp"
+#include "gisland/raylib_renderer.hpp"
+#include "gisland/runtime.hpp"
 #include "gisland/x11_monitor.hpp"
 #include "gisland/x11_window_host.hpp"
 
@@ -7,17 +11,21 @@
 #include <rlgl.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <expected>
 #include <iostream>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace gisland {
 namespace {
-
-constexpr int content_font_size = 18;
-constexpr int content_padding = 12;
 
 constexpr const char *content_blur_shader = R"glsl(
 #version 330
@@ -49,8 +57,7 @@ void main() {
 
 class Window final {
 public:
-  explicit Window(const ApplicationConfig &config) {
-    const auto compact = geometry_for(IslandMode::compact);
+  Window(const ApplicationConfig &config, const IslandGeometry &compact) {
     SetConfigFlags(FLAG_WINDOW_TRANSPARENT | FLAG_WINDOW_UNDECORATED | FLAG_WINDOW_TOPMOST |
                    FLAG_WINDOW_ALWAYS_RUN | FLAG_WINDOW_HIDDEN);
     InitWindow(static_cast<int>(std::lround(compact.width)),
@@ -72,6 +79,7 @@ public:
   [[nodiscard]] static bool is_ready() { return IsWindowReady(); }
 
   static void show() { ClearWindowState(FLAG_WINDOW_HIDDEN); }
+  static void hide() { SetWindowState(FLAG_WINDOW_HIDDEN); }
 };
 
 [[nodiscard]] X11Monitor raylib_monitor_fallback() {
@@ -83,34 +91,6 @@ public:
                     GetMonitorWidth(monitor),
                     GetMonitorHeight(monitor),
                     true};
-}
-
-void draw_island(const IslandGeometry &geometry, const IslandPlacement &placement) {
-  const float half_short_side = std::min(geometry.width, geometry.height) / 2.0F;
-  const float roundness = std::clamp(geometry.radius / half_short_side, 0.0F, 1.0F);
-  const Rectangle bounds{
-      .x = placement.x,
-      .y = placement.y,
-      .width = geometry.width,
-      .height = geometry.height,
-  };
-
-  DrawRectangleRounded(bounds, roundness, 24, BLACK);
-}
-
-RenderTexture2D make_content_texture(const char *label) {
-  const int text_width = MeasureText(label, content_font_size);
-  RenderTexture2D texture = LoadRenderTexture(text_width + (2 * content_padding),
-                                              content_font_size + (2 * content_padding));
-  BeginTextureMode(texture);
-  ClearBackground(BLANK);
-  rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ZERO, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
-  BeginBlendMode(BLEND_CUSTOM_SEPARATE);
-  DrawText(label, content_padding, content_padding, content_font_size, RAYWHITE);
-  EndBlendMode();
-  EndTextureMode();
-  SetTextureFilter(texture.texture, TEXTURE_FILTER_BILINEAR);
-  return texture;
 }
 
 void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
@@ -145,19 +125,173 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
   EndBlendMode();
 }
 
+[[nodiscard]] float mix(float from, float to, float progress) {
+  return from + ((to - from) * progress);
+}
+
+[[nodiscard]] int mix(int from, int to, float progress) {
+  return static_cast<int>(
+      std::lround(mix(static_cast<float>(from), static_cast<float>(to), progress)));
+}
+
+[[nodiscard]] std::uint8_t mix(std::uint8_t from, std::uint8_t to, float progress) {
+  return static_cast<std::uint8_t>(
+      std::clamp(mix(static_cast<float>(from), static_cast<float>(to), progress), 0.0F, 255.0F));
+}
+
+[[nodiscard]] Rgba mix(Rgba from, Rgba to, float progress) {
+  return Rgba{mix(from.red, to.red, progress), mix(from.green, to.green, progress),
+              mix(from.blue, to.blue, progress), mix(from.alpha, to.alpha, progress)};
+}
+
+[[nodiscard]] RoundedView interpolate(const RoundedView &compact, const RoundedView &expanded,
+                                      float progress) {
+  return RoundedView{
+      .bounds = {0, 0, mix(compact.bounds.width, expanded.bounds.width, progress),
+                 mix(compact.bounds.height, expanded.bounds.height, progress)},
+      .radius = mix(compact.radius, expanded.radius, progress),
+      .border = mix(compact.border, expanded.border, progress),
+      .surface = mix(compact.surface, expanded.surface, progress),
+      .border_color = mix(compact.border_color, expanded.border_color, progress),
+      .shadow =
+          ViewShadow{
+              .offset_x = mix(compact.shadow.offset_x, expanded.shadow.offset_x, progress),
+              .offset_y = mix(compact.shadow.offset_y, expanded.shadow.offset_y, progress),
+              .blur = mix(compact.shadow.blur, expanded.shadow.blur, progress),
+              .spread = mix(compact.shadow.spread, expanded.shadow.spread, progress),
+              .color = mix(compact.shadow.color, expanded.shadow.color, progress),
+          },
+  };
+}
+
+[[nodiscard]] IslandGeometry geometry(const RoundedView &view) {
+  return IslandGeometry{static_cast<float>(view.bounds.width),
+                        static_cast<float>(view.bounds.height), static_cast<float>(view.radius)};
+}
+
+struct RenderedContext {
+  ContextKey key;
+  std::uint64_t revision;
+  LayoutPlan compact;
+  std::optional<LayoutPlan> expanded;
+  RenderTexture2D compact_content;
+  std::optional<RenderTexture2D> expanded_content;
+};
+
+void unload(RenderedContext &context) {
+  if (context.expanded_content) {
+    UnloadRenderTexture(*context.expanded_content);
+  }
+  UnloadRenderTexture(context.compact_content);
+}
+
+[[nodiscard]] std::expected<RenderTexture2D, std::string>
+render_content(const LayoutPlan &plan, const RaylibPainter &painter) {
+  RenderTexture2D texture =
+      LoadRenderTexture(std::max(1, plan.view.bounds.width), std::max(1, plan.view.bounds.height));
+  if (!IsRenderTextureValid(texture)) {
+    return std::unexpected("could not allocate a context render texture");
+  }
+  BeginTextureMode(texture);
+  ClearBackground(BLANK);
+  auto drawn = painter.draw_content(plan);
+  EndTextureMode();
+  if (!drawn) {
+    const std::string message = drawn.error().message;
+    UnloadRenderTexture(texture);
+    return std::unexpected(message);
+  }
+  SetTextureFilter(texture.texture, TEXTURE_FILTER_BILINEAR);
+  return texture;
+}
+
+[[nodiscard]] std::expected<RenderedContext, std::string>
+render_context(const PublishedContext &context, std::uint64_t revision, const Theme &theme,
+               const RaylibFontBook &fonts) {
+  auto compact = layout_scene(context.compact, theme, ViewMode::compact, fonts);
+  if (!compact) {
+    return std::unexpected(compact.error().path + ": " + compact.error().message);
+  }
+  std::optional<LayoutPlan> expanded;
+  if (context.expanded) {
+    auto candidate = layout_scene(*context.expanded, theme, ViewMode::expanded, fonts);
+    if (!candidate) {
+      return std::unexpected(candidate.error().path + ": " + candidate.error().message);
+    }
+    expanded = std::move(*candidate);
+  }
+  const RaylibPainter painter{fonts};
+  auto compact_content = render_content(*compact, painter);
+  if (!compact_content) {
+    return std::unexpected(compact_content.error());
+  }
+  std::optional<RenderTexture2D> expanded_content;
+  if (expanded) {
+    auto candidate = render_content(*expanded, painter);
+    if (!candidate) {
+      UnloadRenderTexture(*compact_content);
+      return std::unexpected(candidate.error());
+    }
+    expanded_content = *candidate;
+  }
+  return RenderedContext{
+      .key = context.key,
+      .revision = revision,
+      .compact = std::move(*compact),
+      .expanded = std::move(expanded),
+      .compact_content = *compact_content,
+      .expanded_content = expanded_content,
+  };
+}
+
+[[nodiscard]] std::string environment_or(const char *name, std::string fallback) {
+  const char *value = std::getenv(name);
+  return value != nullptr && *value != '\0' ? std::string{value} : std::move(fallback);
+}
+
+void log_supervisor_event(const SupervisorEvent &event) {
+  std::visit(
+      [](const auto &typed_event) {
+        using Event = std::decay_t<decltype(typed_event)>;
+        if constexpr (std::is_same_v<Event, StderrLogEvent>) {
+          std::cerr << '[' << typed_event.instance_id << "] " << typed_event.line << '\n';
+        } else if constexpr (std::is_same_v<Event, ProtocolViolationEvent>) {
+          std::cerr << '[' << typed_event.instance_id << "] protocol " << typed_event.error.path
+                    << ": " << typed_event.error.message << '\n';
+        } else if constexpr (std::is_same_v<Event, SupervisorErrorEvent>) {
+          std::cerr << '[' << typed_event.instance_id << "] " << typed_event.message << '\n';
+        } else if constexpr (std::is_same_v<Event, ModuleMessageEvent>) {
+          if (const auto *log = std::get_if<LogMessage>(&typed_event.message)) {
+            std::cerr << '[' << typed_event.instance_id << "] " << log->message << '\n';
+          }
+        }
+      },
+      event);
+}
+
 } // namespace
 
-Application::Application(ApplicationConfig config) : config_(std::move(config)) {}
+Application::Application(RuntimeBootstrap bootstrap, ApplicationConfig config)
+    : bootstrap_(std::move(bootstrap)), config_(std::move(config)) {}
 
 int Application::run() {
-  Window window{config_};
+  const auto &compact_theme = bootstrap_.theme.views().compact;
+  const IslandGeometry initial_geometry{static_cast<float>(compact_theme.min_width),
+                                        static_cast<float>(compact_theme.min_height),
+                                        static_cast<float>(compact_theme.radius)};
+  Window window{config_, initial_geometry};
   if (!Window::is_ready()) {
     std::cerr << "Failed to initialize the raylib window\n";
     return EXIT_FAILURE;
   }
-
   SetTargetFPS(config_.target_fps);
 
+  auto fonts = RaylibFontBook::load(bootstrap_.theme, bootstrap_.asset_root);
+  if (!fonts) {
+    std::cerr << fonts.error().message << '\n';
+    return EXIT_FAILURE;
+  }
+  const RaylibPainter painter{*fonts};
   std::optional<X11WindowHost> host;
   auto created_host = X11WindowHost::create(GetWindowHandle());
   if (created_host) {
@@ -166,36 +300,47 @@ int Application::run() {
     std::cerr << created_host.error().message << '\n';
   }
 
-  const RenderTexture2D compact_content = make_content_texture("gisland");
-  const RenderTexture2D expanded_content = make_content_texture("expanded");
+  ModuleSupervisor supervisor;
+  RuntimeCoordinator runtime{bootstrap_.config};
+  const std::string locale = environment_or("LC_ALL", environment_or("LANG", "C"));
+  const std::string timezone = environment_or("TZ", "UTC");
+  for (const auto &module : bootstrap_.config.modules) {
+    if (!module.enabled) {
+      continue;
+    }
+    auto started = supervisor.start(make_module_start_request(module, locale, timezone));
+    if (!started) {
+      std::cerr << '[' << module.id << "] module start request failed\n";
+    }
+  }
+
   const Shader blur_shader = LoadShaderFromMemory(nullptr, content_blur_shader);
   const int texture_size_location = GetShaderLocation(blur_shader, "textureSize");
   const int blur_radius_location = GetShaderLocation(blur_shader, "blurRadius");
-
-  const IslandGeometry compact = geometry_for(IslandMode::compact);
-  const IslandGeometry expanded = geometry_for(IslandMode::expanded);
   OverlayInteraction interaction;
   IslandMode mode = interaction.mode();
   SpringProgress spring;
   ContentCrossfade content_crossfade;
-  IslandGeometry current = compact;
+  IslandGeometry current = initial_geometry;
   const IslandPlacement placement{0.0F, 0.0F};
   X11Monitor monitor = raylib_monitor_fallback();
+  std::optional<RenderedContext> rendered;
+  bool visible = false;
 
   const auto refresh_monitor = [&] {
     if (!host) {
       monitor = raylib_monitor_fallback();
       return;
     }
-    auto selected = host->select_output(config_.monitor);
+    auto selected = host->select_output(bootstrap_.config.monitor);
     if (!selected) {
       std::cerr << selected.error().message << '\n';
       return;
     }
     monitor = std::move(selected->monitor);
     if (selected->used_fallback) {
-      std::cerr << "X11 output '" << config_.monitor << "' is unavailable; using '" << monitor.name
-                << "'\n";
+      std::cerr << "X11 output '" << bootstrap_.config.monitor << "' is unavailable; using '"
+                << monitor.name << "'\n";
     }
   };
 
@@ -226,22 +371,65 @@ int Application::run() {
       }
     }
   };
-
   refresh_monitor();
   apply_native_geometry();
 
-  BeginDrawing();
-  ClearBackground(BLANK);
-  draw_island(current, placement);
-  draw_content(compact_content, content_crossfade.compact(), current, placement, blur_shader,
-               texture_size_location, blur_radius_location);
-  draw_content(expanded_content, content_crossfade.expanded(), current, placement, blur_shader,
-               texture_size_location, blur_radius_location);
-  EndDrawing();
-  Window::show();
-
   while (!WindowShouldClose()) {
     const float delta_seconds = GetFrameTime();
+    const MonotonicTime now = std::chrono::steady_clock::now();
+    for (const auto &event : supervisor.drain_events()) {
+      log_supervisor_event(event);
+      if (auto consumed = runtime.consume(event); !consumed) {
+        std::cerr << '[' << consumed.error().instance_id << "] " << consumed.error().message
+                  << '\n';
+      }
+    }
+
+    auto selection = runtime.active(now);
+    const bool changed =
+        selection.context != nullptr && (!rendered || rendered->key != selection.context->key ||
+                                         rendered->revision != selection.revision);
+    if (changed) {
+      if (interaction.dismiss(OverlayDismissal::focus_lost) && host) {
+        if (auto left = host->leave_expanded(false); !left) {
+          std::cerr << left.error().message << '\n';
+        }
+      }
+      auto candidate =
+          render_context(*selection.context, selection.revision, bootstrap_.theme, *fonts);
+      if (!candidate) {
+        std::cerr << '[' << selection.context->key.instance_id << "] layout: " << candidate.error()
+                  << '\n';
+        runtime.reject(selection.context->key);
+        if (rendered) {
+          unload(*rendered);
+          rendered.reset();
+        }
+      } else {
+        if (rendered) {
+          unload(*rendered);
+        }
+        rendered.emplace(std::move(*candidate));
+        interaction = OverlayInteraction{};
+        mode = IslandMode::compact;
+        spring = SpringProgress{};
+        content_crossfade = ContentCrossfade{};
+        current = geometry(rendered->compact.view);
+      }
+    } else if (selection.context == nullptr && rendered) {
+      if (interaction.dismiss(OverlayDismissal::focus_lost) && host) {
+        if (auto left = host->leave_expanded(false); !left) {
+          std::cerr << left.error().message << '\n';
+        }
+      }
+      unload(*rendered);
+      rendered.reset();
+      if (visible) {
+        Window::hide();
+        visible = false;
+      }
+    }
+
     bool topology_changed = false;
     if (host) {
       auto events = host->poll_events();
@@ -249,7 +437,7 @@ int Application::run() {
         std::cerr << events.error().message << '\n';
       } else {
         for (const auto &event : *events) {
-          if (event.kind == X11WindowEventKind::inside_press &&
+          if (event.kind == X11WindowEventKind::inside_press && rendered && rendered->expanded &&
               interaction.pointer_pressed(event.button, true)) {
             if (auto entered = host->enter_expanded(event.timestamp); !entered) {
               std::cerr << entered.error().message << '\n';
@@ -274,16 +462,14 @@ int Application::run() {
     if (topology_changed) {
       refresh_monitor();
     }
-    if (!host && interaction.mode() == IslandMode::compact &&
+    if (!host && rendered && rendered->expanded && interaction.mode() == IslandMode::compact &&
         IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       static_cast<void>(interaction.pointer_pressed(PointerButton::primary, true));
     }
     if (interaction.mode() == IslandMode::expanded && IsKeyPressed(KEY_ESCAPE) &&
-        interaction.dismiss(OverlayDismissal::escape)) {
-      if (host) {
-        if (auto left = host->leave_expanded(true); !left) {
-          std::cerr << left.error().message << '\n';
-        }
+        interaction.dismiss(OverlayDismissal::escape) && host) {
+      if (auto left = host->leave_expanded(true); !left) {
+        std::cerr << left.error().message << '\n';
       }
     }
 
@@ -293,26 +479,50 @@ int Application::run() {
       spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);
       content_crossfade.set_mode(mode);
     }
+    for (const auto &update : runtime.visibility_updates(now, mode)) {
+      if (auto sent = supervisor.send(update.instance_id, VisibilityMessage{update.visibility});
+          !sent) {
+        std::cerr << '[' << update.instance_id << "] visibility update failed\n";
+      }
+    }
 
     spring.update(delta_seconds);
     content_crossfade.update(delta_seconds);
-    current = interpolate(compact, expanded, spring.value());
-    apply_native_geometry();
-
-    BeginDrawing();
-    ClearBackground(BLANK);
-    draw_island(current, placement);
-    draw_content(compact_content, content_crossfade.compact(), current, placement, blur_shader,
-                 texture_size_location, blur_radius_location);
-    draw_content(expanded_content, content_crossfade.expanded(), current, placement, blur_shader,
-                 texture_size_location, blur_radius_location);
-    EndDrawing();
+    if (rendered) {
+      const RoundedView &expanded_view =
+          rendered->expanded ? rendered->expanded->view : rendered->compact.view;
+      const RoundedView surface =
+          interpolate(rendered->compact.view, expanded_view, spring.value());
+      current = geometry(surface);
+      apply_native_geometry();
+      BeginDrawing();
+      ClearBackground(BLANK);
+      if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}}); !drawn) {
+        std::cerr << drawn.error().message << '\n';
+      }
+      draw_content(rendered->compact_content, content_crossfade.compact(), current, placement,
+                   blur_shader, texture_size_location, blur_radius_location);
+      if (rendered->expanded_content) {
+        draw_content(*rendered->expanded_content, content_crossfade.expanded(), current, placement,
+                     blur_shader, texture_size_location, blur_radius_location);
+      }
+      EndDrawing();
+      if (!visible) {
+        Window::show();
+        visible = true;
+      }
+    } else {
+      BeginDrawing();
+      ClearBackground(BLANK);
+      EndDrawing();
+    }
   }
 
+  supervisor.shutdown();
+  if (rendered) {
+    unload(*rendered);
+  }
   UnloadShader(blur_shader);
-  UnloadRenderTexture(expanded_content);
-  UnloadRenderTexture(compact_content);
-
   return EXIT_SUCCESS;
 }
 
