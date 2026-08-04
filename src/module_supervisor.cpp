@@ -57,6 +57,7 @@ struct StopCommand {
 
 struct RestartCommand {
   std::string instance_id;
+  std::uint64_t generation;
 };
 
 struct SendCommand {
@@ -107,6 +108,7 @@ struct Instance {
   std::size_t consecutive_violations{0};
   bool ready{false};
   bool restart_after_stop{false};
+  std::optional<std::uint64_t> restart_generation;
   bool contexts_removed{true};
   bool stdout_eof{false};
   bool stderr_eof{false};
@@ -260,7 +262,7 @@ private:
             } else if constexpr (std::is_same_v<Type, StopCommand>) {
               handle_stop(typed_command.instance_id, now, false);
             } else if constexpr (std::is_same_v<Type, RestartCommand>) {
-              handle_restart(typed_command.instance_id, now);
+              handle_restart(typed_command.instance_id, typed_command.generation, now);
             } else if constexpr (std::is_same_v<Type, SendCommand>) {
               handle_send(typed_command.instance_id, typed_command.message, now);
             } else {
@@ -350,13 +352,20 @@ private:
     }
   }
 
-  void handle_restart(const std::string &instance_id, MonotonicTime now) {
+  void handle_restart(const std::string &instance_id, std::uint64_t generation, MonotonicTime now) {
     const auto iterator = instances_.find(instance_id);
     if (iterator == instances_.end()) {
       emit_error(instance_id, "restart requested for an unknown module instance", now);
+      emit(RestartCompletedEvent{instance_id, generation, false, ModuleState::failed, now});
       return;
     }
     auto &instance = *iterator->second;
+    if (instance.restart_generation) {
+      emit(RestartCompletedEvent{instance_id, generation, false, instance.lifecycle.state(), now});
+      return;
+    }
+    instance.restart_generation = generation;
+    instance.lifecycle.reset_for_explicit_restart();
     if (instance.lifecycle.state() == ModuleState::failed ||
         instance.lifecycle.state() == ModuleState::stopped) {
       start_existing(instance, now);
@@ -404,15 +413,18 @@ private:
 
   void start_existing(Instance &instance, MonotonicTime now) {
     if (global_shutdown_) {
+      complete_restart(instance, false, instance.lifecycle.state(), now);
       return;
     }
     if (active_instance_count() >= ModuleSupervisor::maximum_instances) {
       emit_error(instance.request.instance_id, "the 32-instance supervision limit is reached", now);
+      complete_restart(instance, false, instance.lifecycle.state(), now);
       return;
     }
     const auto transition = instance.lifecycle.start(now);
     if (!transition.has_value()) {
       emit_error(instance.request.instance_id, "module lifecycle rejected restart", now);
+      complete_restart(instance, false, instance.lifecycle.state(), now);
       return;
     }
     emit_transition(instance, *transition);
@@ -834,14 +846,33 @@ private:
     emit(ContextsRemovedEvent{instance.request.instance_id, now});
   }
 
-  void emit_transition(const Instance &instance, const StateTransition &transition) {
+  void emit_transition(Instance &instance, const StateTransition &transition) {
     emit(StateChangedEvent{instance.request.instance_id, transition});
+    if (!instance.restart_generation) {
+      return;
+    }
+    if (transition.to == ModuleState::running) {
+      complete_restart(instance, true, transition.to, transition.at);
+    } else if (transition.to == ModuleState::failed || (transition.from == ModuleState::starting &&
+                                                        transition.cause != StopCause::requested &&
+                                                        transition.to != ModuleState::running)) {
+      complete_restart(instance, false, transition.to, transition.at);
+    }
   }
 
-  void emit_transitions(const Instance &instance, const std::vector<StateTransition> &transitions) {
+  void emit_transitions(Instance &instance, const std::vector<StateTransition> &transitions) {
     for (const auto &transition : transitions) {
       emit_transition(instance, transition);
     }
+  }
+
+  void complete_restart(Instance &instance, bool succeeded, ModuleState state, MonotonicTime now) {
+    if (!instance.restart_generation) {
+      return;
+    }
+    const std::uint64_t generation = *instance.restart_generation;
+    instance.restart_generation.reset();
+    emit(RestartCompletedEvent{instance.request.instance_id, generation, succeeded, state, now});
   }
 
   void emit_stderr(const Instance &instance, const BufferedLine &line, MonotonicTime now) {
@@ -993,11 +1024,12 @@ std::expected<void, SupervisorCommandError> ModuleSupervisor::stop(std::string i
   return implementation_->enqueue(StopCommand{std::move(instance_id)});
 }
 
-std::expected<void, SupervisorCommandError> ModuleSupervisor::restart(std::string instance_id) {
+std::expected<void, SupervisorCommandError> ModuleSupervisor::restart(std::string instance_id,
+                                                                      std::uint64_t generation) {
   if (instance_id.empty()) {
     return std::unexpected(SupervisorCommandError::invalid_request);
   }
-  return implementation_->enqueue(RestartCommand{std::move(instance_id)});
+  return implementation_->enqueue(RestartCommand{std::move(instance_id), generation});
 }
 
 std::expected<void, SupervisorCommandError> ModuleSupervisor::send(std::string instance_id,

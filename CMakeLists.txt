@@ -101,8 +101,12 @@ add_library(
   src/application.cpp
   src/bootstrap.cpp
   src/config.cpp
+  src/control.cpp
+  src/control_client.cpp
+  src/control_dispatcher.cpp
   src/context.cpp
   src/interaction.cpp
+  src/ipc_server.cpp
   src/island.cpp
   src/layout.cpp
   src/line_buffer.cpp
@@ -150,6 +154,11 @@ target_link_libraries(gisland PRIVATE gisland::app)
 gisland_set_project_options(gisland)
 add_dependencies(gisland gisland_assets)
 
+add_executable(gislandctl src/control_main.cpp)
+target_compile_features(gislandctl PRIVATE cxx_std_23)
+target_link_libraries(gislandctl PRIVATE gisland::app)
+gisland_set_project_options(gislandctl)
+
 if(BUILD_TESTING)
   add_executable(fake_module tests/fake_module.cpp)
   target_compile_features(fake_module PRIVATE cxx_std_23)
@@ -163,8 +172,12 @@ if(BUILD_TESTING)
     tests/clock_calendar_test.cpp
     tests/clock_calendar_process_test.cpp
     tests/config_test.cpp
+    tests/control_client_test.cpp
+    tests/control_dispatcher_test.cpp
+    tests/control_test.cpp
     tests/context_test.cpp
     tests/interaction_test.cpp
+    tests/ipc_server_test.cpp
     tests/island_test.cpp
     tests/layout_test.cpp
     tests/line_buffer_test.cpp
@@ -208,7 +221,7 @@ if(BUILD_TESTING)
     target_compile_features(gisland_application_x11_smoke_tests PRIVATE cxx_std_23)
     target_link_libraries(
       gisland_application_x11_smoke_tests
-      PRIVATE Catch2::Catch2WithMain X11::X11 X11::Xtst
+      PRIVATE gisland::app Catch2::Catch2WithMain X11::X11 X11::Xtst
     )
     target_compile_definitions(
       gisland_application_x11_smoke_tests
@@ -302,8 +315,12 @@ set(
   include/gisland/bootstrap.hpp
   include/gisland/clock_calendar.hpp
   include/gisland/config.hpp
+  include/gisland/control.hpp
+  include/gisland/control_client.hpp
+  include/gisland/control_dispatcher.hpp
   include/gisland/context.hpp
   include/gisland/interaction.hpp
+  include/gisland/ipc_server.hpp
   include/gisland/island.hpp
   include/gisland/layout.hpp
   include/gisland/line_buffer.hpp
@@ -325,8 +342,13 @@ set(
   src/clock_calendar.cpp
   src/clock_calendar_main.cpp
   src/config.cpp
+  src/control.cpp
+  src/control_client.cpp
+  src/control_main.cpp
+  src/control_dispatcher.cpp
   src/context.cpp
   src/interaction.cpp
+  src/ipc_server.cpp
   src/island.cpp
   src/layout.cpp
   src/line_buffer.cpp
@@ -351,8 +373,12 @@ set(
   tests/clock_calendar_test.cpp
   tests/clock_calendar_process_test.cpp
   tests/config_test.cpp
+  tests/control_client_test.cpp
+  tests/control_dispatcher_test.cpp
+  tests/control_test.cpp
   tests/context_test.cpp
   tests/interaction_test.cpp
+  tests/ipc_server_test.cpp
   tests/island_test.cpp
   tests/layout_test.cpp
   tests/line_buffer_test.cpp

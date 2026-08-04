@@ -154,6 +154,54 @@ void HoverController::collapse() {
 
 IslandMode HoverController::mode() const { return mode_; }
 
+OverlayModeController::OverlayModeController(std::chrono::milliseconds exit_tolerance)
+    : hover_(exit_tolerance) {}
+
+void OverlayModeController::update(bool hovered, bool has_expanded, float delta_seconds) {
+  hovered_ = hovered;
+  if (!has_expanded) {
+    explicit_open_ = false;
+    hover_suppressed_ = false;
+    hover_.collapse();
+    return;
+  }
+  if (hover_suppressed_) {
+    hover_.collapse();
+    if (!hovered) {
+      hover_suppressed_ = false;
+    }
+    return;
+  }
+  hover_.update(hovered, delta_seconds);
+}
+
+std::expected<void, ModeControlError> OverlayModeController::open(bool has_expanded) {
+  if (!has_expanded) {
+    return std::unexpected(ModeControlError::unavailable_expanded);
+  }
+  explicit_open_ = true;
+  hover_suppressed_ = false;
+  return {};
+}
+
+void OverlayModeController::close() {
+  explicit_open_ = false;
+  hover_suppressed_ = hovered_;
+  hover_.collapse();
+}
+
+std::expected<void, ModeControlError> OverlayModeController::toggle(bool has_expanded) {
+  if (mode() == IslandMode::expanded) {
+    close();
+    return {};
+  }
+  return open(has_expanded);
+}
+
+IslandMode OverlayModeController::mode() const {
+  return explicit_open_ ? IslandMode::expanded : hover_.mode();
+}
+
 std::vector<IslandMaskRow> rounded_mask_rows(const IslandGeometry &geometry) {
   const int width = std::max(1, static_cast<int>(std::lround(geometry.width)));
   const int height = std::max(1, static_cast<int>(std::lround(geometry.height)));

@@ -1,5 +1,7 @@
 #include "gisland/application.hpp"
+#include "gisland/control_dispatcher.hpp"
 #include "gisland/interaction.hpp"
+#include "gisland/ipc_server.hpp"
 #include "gisland/island.hpp"
 #include "gisland/layout.hpp"
 #include "gisland/module_supervisor.hpp"
@@ -310,6 +312,17 @@ Application::Application(RuntimeBootstrap bootstrap, ApplicationConfig config)
     : bootstrap_(std::move(bootstrap)), config_(std::move(config)) {}
 
 int Application::run() {
+  const char *runtime_directory = std::getenv("XDG_RUNTIME_DIR");
+  if (runtime_directory == nullptr || *runtime_directory == '\0') {
+    std::cerr << "XDG_RUNTIME_DIR is unset\n";
+    return EXIT_FAILURE;
+  }
+  auto ipc = IpcServer::create(runtime_directory);
+  if (!ipc) {
+    std::cerr << ipc.error().message << '\n';
+    return EXIT_FAILURE;
+  }
+
   const auto &compact_theme = bootstrap_.theme.views().compact;
   const IslandGeometry initial_geometry{static_cast<float>(compact_theme.min_width),
                                         static_cast<float>(compact_theme.min_height),
@@ -352,9 +365,14 @@ int Application::run() {
   const Shader blur_shader = LoadShaderFromMemory(nullptr, content_blur_shader);
   const int texture_size_location = GetShaderLocation(blur_shader, "textureSize");
   const int blur_radius_location = GetShaderLocation(blur_shader, "blurRadius");
-  HoverController hover{bootstrap_.config.interaction.hover_exit};
+  OverlayModeController mode_controller{bootstrap_.config.interaction.hover_exit};
+  ControlDispatcher dispatcher{runtime, mode_controller,
+                               [&supervisor](std::string instance_id, std::uint64_t generation) {
+                                 return supervisor.restart(std::move(instance_id), generation);
+                               },
+                               ipc->socket_path()};
   InteractionController controls;
-  IslandMode mode = hover.mode();
+  IslandMode mode = mode_controller.mode();
   SpringProgress spring;
   ContentCrossfade content_crossfade;
   IslandGeometry current = initial_geometry;
@@ -412,19 +430,26 @@ int Application::run() {
     const MonotonicTime now = std::chrono::steady_clock::now();
     for (const auto &event : supervisor.drain_events()) {
       log_supervisor_event(event);
+      if (const auto *completed = std::get_if<RestartCompletedEvent>(&event)) {
+        dispatcher.consume(*completed);
+      }
       if (auto consumed = runtime.consume(event); !consumed) {
         std::cerr << '[' << consumed.error().instance_id << "] " << consumed.error().message
                   << '\n';
       }
     }
 
+    static_cast<void>(runtime.active(now));
+    ipc->advance(now, [&dispatcher, now](const ControlCommand &command) {
+      return dispatcher.dispatch(command, now);
+    });
     auto selection = runtime.active(now);
     const bool changed =
         selection.context != nullptr && (!rendered || rendered->key != selection.context->key ||
                                          rendered->revision != selection.revision);
     if (changed) {
       const bool preserve_expanded =
-          hover.mode() == IslandMode::expanded && selection.context->expanded.has_value();
+          mode_controller.mode() == IslandMode::expanded && selection.context->expanded.has_value();
       auto candidate =
           render_context(*selection.context, selection.revision, bootstrap_.theme, *fonts);
       if (!candidate) {
@@ -443,7 +468,7 @@ int Application::run() {
         canvas = canvas_for(rendered->compact, rendered->expanded);
         actions_ready = false;
         if (!preserve_expanded) {
-          hover = HoverController{bootstrap_.config.interaction.hover_exit};
+          mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
           mode = IslandMode::compact;
           spring = SpringProgress{};
           content_crossfade = ContentCrossfade{};
@@ -455,7 +480,7 @@ int Application::run() {
     } else if (selection.context == nullptr && rendered) {
       unload(*rendered);
       rendered.reset();
-      hover = HoverController{bootstrap_.config.interaction.hover_exit};
+      mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
       actions_ready = false;
       if (visible) {
         Window::hide();
@@ -502,8 +527,8 @@ int Application::run() {
                                           static_cast<int>(std::lround(pointer.y - placement.y))));
     }
 
-    hover.update(hovered && rendered && rendered->expanded.has_value(), delta_seconds);
-    const IslandMode next_mode = hover.mode();
+    mode_controller.update(hovered, rendered && rendered->expanded.has_value(), delta_seconds);
+    const IslandMode next_mode = mode_controller.mode();
     if (next_mode != mode) {
       mode = next_mode;
       spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);

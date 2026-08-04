@@ -3,6 +3,8 @@
 #include <X11/extensions/XTest.h>
 #include <X11/extensions/shape.h>
 
+#include "gisland/control_client.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -30,6 +32,7 @@ public:
       : pid_(fork()) {
     if (pid_ == 0) {
       setenv("XDG_CONFIG_HOME", config_home.c_str(), 1);
+      setenv("XDG_RUNTIME_DIR", config_home.c_str(), 1);
       setenv("TZ", "UTC", 1);
       std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
       path += ':';
@@ -246,6 +249,32 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
     INFO("initial input shape is empty");
   }
   REQUIRE(compact);
+
+  const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                    gisland::StatusControl{});
+  REQUIRE(status.has_value());
+  const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+  REQUIRE(snapshot.active_context.has_value());
+  CHECK(snapshot.active_context->instance_id == "clock");
+  REQUIRE(snapshot.modules.size() == 1);
+  CHECK(snapshot.modules[0].state == gisland::ControlModuleState::running);
+
+  REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                        gisland::OpenControl{})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width == 360 && shape->height == 300 && shape->x == 0;
+  }));
+  REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                        gisland::CloseControl{})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width == 220 && shape->height == 64 && shape->x == 70;
+  }));
 
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 180,
                                attributes.y + 32, CurrentTime) != 0);

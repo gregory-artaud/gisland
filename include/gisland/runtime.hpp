@@ -9,15 +9,25 @@
 #include <cstdint>
 #include <expected>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gisland {
 
 inline constexpr std::string_view configured_context_id = "configured";
 
-enum class RuntimeErrorCode { unknown_instance, missing_view, invalid_snapshot };
+enum class RuntimeErrorCode {
+  unknown_instance,
+  disabled_instance,
+  unavailable_instance,
+  unknown_context,
+  missing_view,
+  invalid_snapshot
+};
 
 struct RuntimeError {
   RuntimeErrorCode code;
@@ -37,6 +47,15 @@ struct VisibilityUpdate {
   bool operator==(const VisibilityUpdate &) const = default;
 };
 
+struct RuntimeModuleStatus {
+  std::string id;
+  bool enabled;
+  ModuleState state;
+  bool available;
+
+  bool operator==(const RuntimeModuleStatus &) const = default;
+};
+
 [[nodiscard]] ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
                                                            std::string locale,
                                                            std::string timezone);
@@ -47,6 +66,12 @@ public:
 
   [[nodiscard]] std::expected<void, RuntimeError> consume(const SupervisorEvent &event);
   [[nodiscard]] RuntimeSelection active(MonotonicTime now);
+  [[nodiscard]] std::expected<ContextKey, RuntimeError>
+  activate(std::string_view instance_id, std::optional<std::chrono::milliseconds> duration,
+           MonotonicTime now);
+  [[nodiscard]] std::expected<ContextKey, RuntimeError> dismiss_active(std::string_view context_id,
+                                                                       MonotonicTime now);
+  [[nodiscard]] std::vector<RuntimeModuleStatus> module_statuses(MonotonicTime now);
   void reject(const ContextKey &key);
   [[nodiscard]] std::vector<VisibilityUpdate> visibility_updates(MonotonicTime now,
                                                                  IslandMode mode);
@@ -55,6 +80,8 @@ private:
   [[nodiscard]] std::expected<void, RuntimeError> consume_message(const ModuleMessageEvent &event);
 
   ContextArbiter arbiter_;
+  std::vector<std::pair<std::string, bool>> configured_instances_;
+  std::map<std::string, ModuleState> module_states_;
   std::map<std::string, ModuleViewState> views_;
   std::vector<std::string> enabled_instances_;
   std::set<std::string> ready_instances_;

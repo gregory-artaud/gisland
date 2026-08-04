@@ -54,6 +54,7 @@ public:
   [[nodiscard]] std::expected<StateTransition, LifecycleError> stop(MonotonicTime now);
   [[nodiscard]] std::expected<StateTransition, LifecycleError> fail(StopCause cause,
                                                                     MonotonicTime now);
+  void reset_for_explicit_restart();
 
   [[nodiscard]] std::optional<ShutdownSignal> due_signal(MonotonicTime now) const noexcept;
   [[nodiscard]] std::expected<void, LifecycleError> signal_sent(ShutdownSignal signal,

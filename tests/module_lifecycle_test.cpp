@@ -243,3 +243,30 @@ TEST_CASE("failure lockout uses a rolling five-minute window") {
   REQUIRE(lifecycle.exited(gisland::StopCause::failed_exit, now).size() == 1);
   CHECK(lifecycle.state() == gisland::ModuleState::backoff);
 }
+
+TEST_CASE("explicit restart resets rolling failures and exponential backoff") {
+  gisland::ModuleLifecycle lifecycle{gisland::RestartPolicy::on_failure, {}};
+  auto now = epoch;
+  for (int failure = 0; failure < 9; ++failure) {
+    if (lifecycle.state() == gisland::ModuleState::stopped) {
+      reach_running(lifecycle, now);
+    } else {
+      REQUIRE(lifecycle.restart_at().has_value());
+      now = required_value(lifecycle.restart_at());
+      REQUIRE(lifecycle.tick(now).size() == 1);
+      REQUIRE(lifecycle.ready(now).has_value());
+    }
+    REQUIRE(lifecycle.exited(gisland::StopCause::failed_exit, now).size() == 1);
+  }
+
+  REQUIRE(lifecycle.restart_at().has_value());
+  now = required_value(lifecycle.restart_at());
+  REQUIRE(lifecycle.tick(now).size() == 1);
+  REQUIRE(lifecycle.ready(now).has_value());
+  lifecycle.reset_for_explicit_restart();
+  REQUIRE(lifecycle.exited(gisland::StopCause::failed_exit, now).size() == 1);
+
+  CHECK(lifecycle.state() == gisland::ModuleState::backoff);
+  REQUIRE(lifecycle.restart_at().has_value());
+  CHECK(required_value(lifecycle.restart_at()) - now == 250ms);
+}

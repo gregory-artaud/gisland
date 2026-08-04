@@ -142,6 +142,11 @@ std::expected<StateTransition, LifecycleError> ModuleLifecycle::fail(StopCause c
   return transition;
 }
 
+void ModuleLifecycle::reset_for_explicit_restart() {
+  failures_.clear();
+  next_backoff_ = timings_.initial_backoff;
+}
+
 std::optional<ShutdownSignal> ModuleLifecycle::due_signal(MonotonicTime now) const noexcept {
   if (state_ != ModuleState::stopping || !pending_signal_.has_value() || !signal_at_.has_value() ||
       now < *signal_at_) {

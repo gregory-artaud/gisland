@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <expected>
 #include <vector>
 
 namespace gisland {
@@ -42,6 +43,26 @@ private:
   IslandMode mode_{IslandMode::compact};
   float outside_elapsed_{0.0F};
   float exit_tolerance_seconds_;
+};
+
+enum class ModeControlError { unavailable_expanded };
+
+class OverlayModeController {
+public:
+  explicit OverlayModeController(
+      std::chrono::milliseconds exit_tolerance = std::chrono::milliseconds{120});
+
+  void update(bool hovered, bool has_expanded, float delta_seconds);
+  [[nodiscard]] std::expected<void, ModeControlError> open(bool has_expanded);
+  void close();
+  [[nodiscard]] std::expected<void, ModeControlError> toggle(bool has_expanded);
+  [[nodiscard]] IslandMode mode() const;
+
+private:
+  HoverController hover_;
+  bool explicit_open_{false};
+  bool hover_suppressed_{false};
+  bool hovered_{false};
 };
 
 class SpringProgress {

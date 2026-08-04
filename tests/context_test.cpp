@@ -128,3 +128,70 @@ TEST_CASE("all contexts owned by a stopped instance are removed together") {
   REQUIRE(arbiter.active(epoch + 3ms) != nullptr);
   CHECK((arbiter.active(epoch + 3ms)->key == gisland::ContextKey{"clock", "default"}));
 }
+
+TEST_CASE("activation selects the best context within one owner and pins it globally") {
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  publish_default(arbiter);
+  arbiter.publish(context("music", "low", 5), epoch + 1ms);
+  arbiter.publish(context("music", "old", 10), epoch + 2ms);
+  arbiter.publish(context("music", "new", 10), epoch + 3ms);
+  arbiter.publish(context("timer", "urgent", 100), epoch + 4ms);
+
+  const auto activated = arbiter.activate("music", std::nullopt, epoch + 4ms);
+  REQUIRE(activated.has_value());
+  CHECK((*activated == gisland::ContextKey{"music", "new"}));
+  REQUIRE(arbiter.active(epoch + 4ms) != nullptr);
+  CHECK((arbiter.active(epoch + 4ms)->key == gisland::ContextKey{"music", "new"}));
+}
+
+TEST_CASE("activation duration and natural expiration restore normal arbitration") {
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  publish_default(arbiter);
+  arbiter.publish(context("music", "playing", 10, epoch + 20ms), epoch);
+  arbiter.publish(context("timer", "urgent", 100), epoch + 1ms);
+
+  REQUIRE(arbiter.activate("music", epoch + 10ms, epoch + 1ms).has_value());
+  REQUIRE(arbiter.active(epoch + 9ms) != nullptr);
+  CHECK((arbiter.active(epoch + 9ms)->key == gisland::ContextKey{"music", "playing"}));
+  REQUIRE(arbiter.active(epoch + 10ms) != nullptr);
+  CHECK((arbiter.active(epoch + 10ms)->key == gisland::ContextKey{"timer", "urgent"}));
+
+  REQUIRE(arbiter.activate("music", std::nullopt, epoch + 11ms).has_value());
+  REQUIRE(arbiter.active(epoch + 19ms) != nullptr);
+  CHECK((arbiter.active(epoch + 19ms)->key == gisland::ContextKey{"music", "playing"}));
+  REQUIRE(arbiter.active(epoch + 20ms) != nullptr);
+  CHECK((arbiter.active(epoch + 20ms)->key == gisland::ContextKey{"timer", "urgent"}));
+}
+
+TEST_CASE("activation follows same-key updates and clears on dismissal or owner removal") {
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  publish_default(arbiter);
+  arbiter.publish(context("music", "playing", 10), epoch);
+  REQUIRE(arbiter.activate("music", std::nullopt, epoch).has_value());
+
+  arbiter.publish(context("music", "playing", 20), epoch + 1ms);
+  REQUIRE(arbiter.active(epoch + 1ms) != nullptr);
+  CHECK(arbiter.active(epoch + 1ms)->priority == 20);
+
+  CHECK_FALSE(arbiter.dismiss_active("different", epoch + 1ms));
+  CHECK(arbiter.dismiss_active("playing", epoch + 1ms));
+  REQUIRE(arbiter.active(epoch + 1ms) != nullptr);
+  CHECK((arbiter.active(epoch + 1ms)->key == gisland::ContextKey{"clock", "default"}));
+
+  arbiter.publish(context("music", "playing", 10), epoch + 2ms);
+  REQUIRE(arbiter.activate("music", std::nullopt, epoch + 2ms).has_value());
+  arbiter.dismiss_instance("music");
+  REQUIRE(arbiter.active(epoch + 2ms) != nullptr);
+  CHECK((arbiter.active(epoch + 2ms)->key == gisland::ContextKey{"clock", "default"}));
+}
+
+TEST_CASE("rejected activation preserves the existing pin") {
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  publish_default(arbiter);
+  arbiter.publish(context("music", "playing", 10), epoch);
+  REQUIRE(arbiter.activate("music", std::nullopt, epoch).has_value());
+
+  CHECK_FALSE(arbiter.activate("missing", std::nullopt, epoch).has_value());
+  REQUIRE(arbiter.active(epoch) != nullptr);
+  CHECK((arbiter.active(epoch)->key == gisland::ContextKey{"music", "playing"}));
+}

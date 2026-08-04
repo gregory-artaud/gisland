@@ -28,12 +28,16 @@ gisland::AppConfig config() {
   gisland::ModuleInstanceConfig status;
   status.id = "status";
   status.command = {"status-module"};
+  gisland::ModuleInstanceConfig disabled;
+  disabled.id = "disabled";
+  disabled.command = {"disabled-module"};
+  disabled.enabled = false;
   return gisland::AppConfig{
       .monitor = "primary",
       .theme = "default",
       .default_module = "clock",
       .interaction = {},
-      .modules = {std::move(clock), std::move(status)},
+      .modules = {std::move(clock), std::move(status), std::move(disabled)},
   };
 }
 
@@ -193,4 +197,91 @@ TEST_CASE("supervised data flows through runtime into an active configured conte
   CHECK(active->key == gisland::ContextKey{"clock", "configured"});
   CHECK(text(active->compact).value == "14:35");
   supervisor.shutdown();
+}
+
+TEST_CASE("runtime activation overrides global arbitration until its deadline") {
+  using namespace std::chrono_literals;
+  gisland::RuntimeCoordinator runtime{config()};
+  const auto now = gisland::MonotonicTime{} + 1s;
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+  REQUIRE(
+      runtime
+          .consume(message("status",
+                           gisland::PublishMessage{
+                               "alert", 100, std::nullopt,
+                               gisland::SceneNode{gisland::Text{"Warning", "body"}}, std::nullopt},
+                           now + 1ms))
+          .has_value());
+  REQUIRE(runtime.active(now + 1ms).context != nullptr);
+  CHECK(runtime.active(now + 1ms).context->key == gisland::ContextKey{"status", "alert"});
+
+  const auto activated = runtime.activate("clock", 10ms, now + 1ms);
+  REQUIRE(activated.has_value());
+  CHECK((*activated == gisland::ContextKey{"clock", "configured"}));
+  REQUIRE(runtime.active(now + 10ms).context != nullptr);
+  CHECK(runtime.active(now + 10ms).context->key == gisland::ContextKey{"clock", "configured"});
+  REQUIRE(runtime.active(now + 11ms).context != nullptr);
+  CHECK(runtime.active(now + 11ms).context->key == gisland::ContextKey{"status", "alert"});
+}
+
+TEST_CASE("runtime control rejects unknown disabled unavailable and mismatched contexts") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const gisland::MonotonicTime now{};
+
+  CHECK(runtime.activate("missing", std::nullopt, now).error().code ==
+        gisland::RuntimeErrorCode::unknown_instance);
+  CHECK(runtime.activate("disabled", std::nullopt, now).error().code ==
+        gisland::RuntimeErrorCode::disabled_instance);
+  CHECK(runtime.activate("status", std::nullopt, now).error().code ==
+        gisland::RuntimeErrorCode::unavailable_instance);
+  CHECK(runtime.dismiss_active("missing", now).error().code ==
+        gisland::RuntimeErrorCode::unknown_context);
+}
+
+TEST_CASE("runtime dismisses only the matching active context") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const gisland::MonotonicTime now{};
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+
+  CHECK_FALSE(runtime.dismiss_active("other", now).has_value());
+  const auto dismissed = runtime.dismiss_active("configured", now);
+  REQUIRE(dismissed.has_value());
+  CHECK((*dismissed == gisland::ContextKey{"clock", "configured"}));
+  CHECK(runtime.active(now).context == nullptr);
+}
+
+TEST_CASE("runtime module snapshots retain configured order state and availability") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const gisland::MonotonicTime now{};
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+  REQUIRE(runtime
+              .consume(gisland::StateChangedEvent{
+                  "clock", gisland::StateTransition{gisland::ModuleState::starting,
+                                                    gisland::ModuleState::running,
+                                                    gisland::StopCause::requested, now}})
+              .has_value());
+
+  const auto modules = runtime.module_statuses(now);
+  REQUIRE(modules.size() == 3);
+  CHECK(modules[0] ==
+        gisland::RuntimeModuleStatus{"clock", true, gisland::ModuleState::running, true});
+  CHECK(modules[1] ==
+        gisland::RuntimeModuleStatus{"status", true, gisland::ModuleState::stopped, false});
+  CHECK(modules[2] ==
+        gisland::RuntimeModuleStatus{"disabled", false, gisland::ModuleState::stopped, false});
 }

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -78,9 +79,11 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
 RuntimeCoordinator::RuntimeCoordinator(const AppConfig &config)
     : arbiter_(ContextKey{config.default_module, std::string{configured_context_id}}) {
   for (const auto &module : config.modules) {
+    configured_instances_.emplace_back(module.id, module.enabled);
     if (!module.enabled) {
       continue;
     }
+    module_states_.emplace(module.id, ModuleState::stopped);
     enabled_instances_.push_back(module.id);
     if (module.view) {
       views_.emplace(module.id, ModuleViewState{module.view->compact, module.view->expanded});
@@ -94,6 +97,8 @@ std::expected<void, RuntimeError> RuntimeCoordinator::consume(const SupervisorEv
         using Event = std::decay_t<decltype(typed_event)>;
         if constexpr (std::is_same_v<Event, ModuleMessageEvent>) {
           return consume_message(typed_event);
+        } else if constexpr (std::is_same_v<Event, StateChangedEvent>) {
+          module_states_.insert_or_assign(typed_event.instance_id, typed_event.transition.to);
         } else if constexpr (std::is_same_v<Event, ContextsRemovedEvent>) {
           arbiter_.dismiss_instance(typed_event.instance_id);
           ready_instances_.erase(typed_event.instance_id);
@@ -159,6 +164,58 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
 
 RuntimeSelection RuntimeCoordinator::active(MonotonicTime now) {
   return RuntimeSelection{arbiter_.active(now), revision_};
+}
+
+std::expected<ContextKey, RuntimeError>
+RuntimeCoordinator::activate(std::string_view instance_id,
+                             std::optional<std::chrono::milliseconds> duration, MonotonicTime now) {
+  const auto configured = std::ranges::find_if(
+      configured_instances_, [instance_id](const auto &item) { return item.first == instance_id; });
+  if (configured == configured_instances_.end()) {
+    return std::unexpected(runtime_error(RuntimeErrorCode::unknown_instance,
+                                         std::string{instance_id},
+                                         "module instance does not exist"));
+  }
+  if (!configured->second) {
+    return std::unexpected(runtime_error(RuntimeErrorCode::disabled_instance,
+                                         std::string{instance_id}, "module instance is disabled"));
+  }
+  const std::optional<MonotonicTime> deadline =
+      duration ? std::optional{now + *duration} : std::nullopt;
+  auto activated = arbiter_.activate(instance_id, deadline, now);
+  if (!activated) {
+    return std::unexpected(runtime_error(RuntimeErrorCode::unavailable_instance,
+                                         std::string{instance_id},
+                                         "module instance has no available context"));
+  }
+  ++revision_;
+  return *activated;
+}
+
+std::expected<ContextKey, RuntimeError>
+RuntimeCoordinator::dismiss_active(std::string_view context_id, MonotonicTime now) {
+  const PublishedContext *selected = arbiter_.active(now);
+  if (selected == nullptr || selected->key.context_id != context_id) {
+    return std::unexpected(
+        runtime_error(RuntimeErrorCode::unknown_context, "", "active context does not match"));
+  }
+  const ContextKey key = selected->key;
+  static_cast<void>(arbiter_.dismiss_active(context_id, now));
+  ++revision_;
+  return key;
+}
+
+std::vector<RuntimeModuleStatus> RuntimeCoordinator::module_statuses(MonotonicTime now) {
+  std::vector<RuntimeModuleStatus> result;
+  result.reserve(configured_instances_.size());
+  for (const auto &[instance_id, enabled] : configured_instances_) {
+    const auto state = module_states_.find(instance_id);
+    result.push_back({.id = instance_id,
+                      .enabled = enabled,
+                      .state = state == module_states_.end() ? ModuleState::stopped : state->second,
+                      .available = enabled && arbiter_.available(instance_id, now)});
+  }
+  return result;
 }
 
 void RuntimeCoordinator::reject(const ContextKey &key) {

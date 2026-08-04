@@ -492,7 +492,7 @@ TEST_CASE("failure lockout and manual restart are supervised asynchronously") {
   });
   CHECK(count_events<gisland::ProcessStartedEvent>(events, "failing") == 10);
 
-  REQUIRE(supervisor.restart("failing").has_value());
+  REQUIRE(supervisor.restart("failing", 41).has_value());
   collect_until(supervisor, events, [](const auto &observed) {
     return count_events<gisland::ProcessStartedEvent>(observed, "failing") >= 11 &&
            std::ranges::any_of(observed, [](const auto &event) {
@@ -502,7 +502,38 @@ TEST_CASE("failure lockout and manual restart are supervised asynchronously") {
                     state->transition.to == gisland::ModuleState::starting;
            });
   });
+  collect_until(supervisor, events, [](const auto &observed) {
+    return std::ranges::any_of(observed, [](const auto &event) {
+      const auto *completed = std::get_if<gisland::RestartCompletedEvent>(&event);
+      return completed != nullptr && completed->instance_id == "failing" &&
+             completed->generation == 41 && !completed->succeeded;
+    });
+  });
   stop_and_wait(supervisor, events, "failing");
+}
+
+TEST_CASE("explicit restart completion is correlated with its generation") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("ready", "ready")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "ready", gisland::ModuleState::running);
+  });
+
+  REQUIRE(supervisor.restart("ready", 77).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return std::ranges::any_of(observed, [](const auto &event) {
+      const auto *completed = std::get_if<gisland::RestartCompletedEvent>(&event);
+      return completed != nullptr && completed->instance_id == "ready" &&
+             completed->generation == 77 && completed->succeeded &&
+             completed->state == gisland::ModuleState::running;
+    });
+  });
+  CHECK(std::ranges::none_of(events, [](const auto &event) {
+    const auto *completed = std::get_if<gisland::RestartCompletedEvent>(&event);
+    return completed != nullptr && completed->generation != 77;
+  }));
+  stop_and_wait(supervisor, events, "ready");
 }
 
 TEST_CASE("outbound saturation terminates an unresponsive module without blocking caller") {

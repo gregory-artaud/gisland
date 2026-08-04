@@ -75,9 +75,18 @@ struct SupervisorErrorEvent {
   MonotonicTime at;
 };
 
-using SupervisorEvent = std::variant<StateChangedEvent, ProcessStartedEvent, ModuleMessageEvent,
-                                     StderrLogEvent, ProtocolViolationEvent, ContextsRemovedEvent,
-                                     ProcessExitedEvent, SupervisorErrorEvent>;
+struct RestartCompletedEvent {
+  std::string instance_id;
+  std::uint64_t generation;
+  bool succeeded;
+  ModuleState state;
+  MonotonicTime at;
+};
+
+using SupervisorEvent =
+    std::variant<StateChangedEvent, ProcessStartedEvent, ModuleMessageEvent, StderrLogEvent,
+                 ProtocolViolationEvent, ContextsRemovedEvent, ProcessExitedEvent,
+                 SupervisorErrorEvent, RestartCompletedEvent>;
 
 enum class SupervisorCommandError { invalid_request, queue_full, shutting_down };
 
@@ -94,7 +103,8 @@ public:
 
   [[nodiscard]] std::expected<void, SupervisorCommandError> start(ModuleStartRequest request);
   [[nodiscard]] std::expected<void, SupervisorCommandError> stop(std::string instance_id);
-  [[nodiscard]] std::expected<void, SupervisorCommandError> restart(std::string instance_id);
+  [[nodiscard]] std::expected<void, SupervisorCommandError> restart(std::string instance_id,
+                                                                    std::uint64_t generation);
   [[nodiscard]] std::expected<void, SupervisorCommandError> send(std::string instance_id,
                                                                  CoreMessage message);
 

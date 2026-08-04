@@ -122,6 +122,64 @@ TEST_CASE("hover re-entry cancels collapse and preserves animation continuity") 
   CHECK(spring.value() > spring_before);
 }
 
+TEST_CASE("overlay mode combines hover and an explicit open latch") {
+  gisland::OverlayModeController controller{120ms};
+  controller.update(false, true, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+
+  REQUIRE(controller.open(true).has_value());
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  controller.update(false, true, 1.0F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+
+  controller.close();
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("explicit close suppresses hover until the pointer exits") {
+  gisland::OverlayModeController controller{120ms};
+  controller.update(true, true, 0.0F);
+  REQUIRE(controller.mode() == gisland::IslandMode::expanded);
+
+  controller.close();
+  controller.update(true, true, 1.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+  controller.update(false, true, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+  controller.update(true, true, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+
+  controller.close();
+  REQUIRE(controller.open(true).has_value());
+  controller.update(true, true, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+}
+
+TEST_CASE("overlay toggle uses target mode and requires expanded content") {
+  gisland::OverlayModeController controller{120ms};
+  REQUIRE(controller.toggle(true).has_value());
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  REQUIRE(controller.toggle(true).has_value());
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+
+  const auto unavailable = controller.open(false);
+  REQUIRE_FALSE(unavailable.has_value());
+  CHECK(unavailable.error() == gisland::ModeControlError::unavailable_expanded);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("overlay mode preserves explicit open only across expandable contexts") {
+  gisland::OverlayModeController controller{120ms};
+  REQUIRE(controller.open(true).has_value());
+  controller.update(false, true, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+
+  controller.update(false, false, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+  controller.update(false, true, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
 TEST_CASE("content crossfade starts with only compact content visible") {
   const gisland::ContentCrossfade crossfade;
 

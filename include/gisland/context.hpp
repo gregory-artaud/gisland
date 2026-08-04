@@ -5,6 +5,7 @@
 #include <chrono>
 #include <compare>
 #include <cstdint>
+#include <expected>
 #include <map>
 #include <optional>
 #include <string>
@@ -29,6 +30,8 @@ struct PublishedContext {
   std::optional<SceneNode> expanded;
 };
 
+enum class ContextActivationError { unavailable_instance };
+
 class ContextArbiter {
 public:
   explicit ContextArbiter(ContextKey default_context);
@@ -36,6 +39,10 @@ public:
   void publish(PublishedContext context, MonotonicTime now);
   void dismiss(const ContextKey &key);
   void dismiss_instance(std::string_view instance_id);
+  [[nodiscard]] std::expected<ContextKey, ContextActivationError>
+  activate(std::string_view instance_id, std::optional<MonotonicTime> deadline, MonotonicTime now);
+  [[nodiscard]] bool dismiss_active(std::string_view context_id, MonotonicTime now);
+  [[nodiscard]] bool available(std::string_view instance_id, MonotonicTime now);
   [[nodiscard]] const PublishedContext *active(MonotonicTime now);
 
 private:
@@ -43,10 +50,18 @@ private:
     PublishedContext context;
     std::uint64_t sequence;
   };
+  struct Activation {
+    ContextKey key;
+    std::optional<MonotonicTime> deadline;
+  };
+
+  void expire(MonotonicTime now);
+  [[nodiscard]] const Entry *best_for_instance(std::string_view instance_id) const;
 
   ContextKey default_context_;
   std::uint64_t sequence_{0};
   std::map<ContextKey, Entry> contexts_;
+  std::optional<Activation> activation_;
 };
 
 } // namespace gisland

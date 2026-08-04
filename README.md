@@ -63,6 +63,11 @@ Run from an active X11 session:
 ./build/dev/gisland
 ```
 
+`XDG_RUNTIME_DIR` must name an existing writable directory owned by the current user. gisland holds
+`$XDG_RUNTIME_DIR/gisland.lock` for its lifetime and listens on the private
+`$XDG_RUNTIME_DIR/gisland.sock` socket. A second gisland instance using the same runtime directory
+is rejected.
+
 The manual smoke test passes when the window opens, remains responsive, and exits cleanly
 through the window manager close control.
 
@@ -136,7 +141,26 @@ When user configuration is absent, gisland loads the distributed `assets/config.
 selects this module and its declarative compact and expanded templates. A user
 `$XDG_CONFIG_HOME/gisland/config.toml` continues to override the distributed default completely.
 
-Control IPC and hot reload orchestration remain future delivery increments.
+## Control
+
+`gislandctl` controls the running process through the versioned local JSONL protocol:
+
+```bash
+./build/dev/gislandctl open
+./build/dev/gislandctl close
+./build/dev/gislandctl toggle
+./build/dev/gislandctl status
+./build/dev/gislandctl status --json
+./build/dev/gislandctl modules
+./build/dev/gislandctl module restart clock
+./build/dev/gislandctl activate clock
+./build/dev/gislandctl activate clock --duration 5s
+./build/dev/gislandctl dismiss configured
+```
+
+Durations accept positive integer `ms`, `s`, `m`, or `h` units up to 24 hours. Scripts should use
+`status --json`; its result has `format_version: 1`. The control plane intentionally has no `reload`
+command yet. Hot reload remains a separate delivery increment.
 
 ## Repository Layout
 
