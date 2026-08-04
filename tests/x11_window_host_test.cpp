@@ -9,7 +9,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -83,6 +85,25 @@ private:
   return status == Success && actual_type != None;
 }
 
+[[nodiscard]] std::optional<std::uint32_t> cardinal_property(Display *display, Window window,
+                                                             Atom property) {
+  Atom actual_type = None;
+  int actual_format = 0;
+  unsigned long count = 0;
+  unsigned long remaining = 0;
+  unsigned char *bytes = nullptr;
+  const int status = XGetWindowProperty(display, window, property, 0, 1, False, XA_CARDINAL,
+                                        &actual_type, &actual_format, &count, &remaining, &bytes);
+  std::optional<std::uint32_t> value;
+  if (status == Success && actual_type == XA_CARDINAL && actual_format == 32 && count == 1) {
+    value = static_cast<std::uint32_t>(*reinterpret_cast<const unsigned long *>(bytes));
+  }
+  if (bytes != nullptr) {
+    XFree(bytes);
+  }
+  return value;
+}
+
 } // namespace
 
 TEST_CASE("X11 host publishes stable overlay properties without accepting focus") {
@@ -103,7 +124,12 @@ TEST_CASE("X11 host publishes stable overlay properties without accepting focus"
 
   const Atom state = XInternAtom(windows.display(), "_NET_WM_STATE", False);
   const Atom above = XInternAtom(windows.display(), "_NET_WM_STATE_ABOVE", False);
+  const Atom sticky = XInternAtom(windows.display(), "_NET_WM_STATE_STICKY", False);
   CHECK(has_atom(windows.display(), subject, state, above));
+  CHECK(has_atom(windows.display(), subject, state, sticky));
+  const Atom desktop = XInternAtom(windows.display(), "_NET_WM_DESKTOP", False);
+  CHECK(has_property(windows.display(), subject, desktop));
+  CHECK(cardinal_property(windows.display(), subject, desktop) == 0xFFFFFFFFU);
   CHECK_FALSE(has_property(windows.display(), subject,
                            XInternAtom(windows.display(), "_NET_WM_STRUT", False)));
   CHECK_FALSE(has_property(windows.display(), subject,

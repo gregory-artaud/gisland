@@ -119,9 +119,14 @@ std::expected<X11WindowHost, X11WindowError> X11WindowHost::create(void *native_
   }
   const bool configured = checked_request(impl->display, [&] {
     const Atom state = XInternAtom(impl->display, "_NET_WM_STATE", False);
-    const Atom above = XInternAtom(impl->display, "_NET_WM_STATE_ABOVE", False);
+    const Atom states[]{XInternAtom(impl->display, "_NET_WM_STATE_ABOVE", False),
+                        XInternAtom(impl->display, "_NET_WM_STATE_STICKY", False)};
     XChangeProperty(impl->display, impl->window, state, XA_ATOM, 32, PropModeReplace,
-                    reinterpret_cast<const unsigned char *>(&above), 1);
+                    reinterpret_cast<const unsigned char *>(states), 2);
+    const unsigned long all_desktops = 0xFFFFFFFFUL;
+    XChangeProperty(impl->display, impl->window,
+                    XInternAtom(impl->display, "_NET_WM_DESKTOP", False), XA_CARDINAL, 32,
+                    PropModeReplace, reinterpret_cast<const unsigned char *>(&all_desktops), 1);
     XDeleteProperty(impl->display, impl->window,
                     XInternAtom(impl->display, "_NET_WM_STRUT", False));
     XDeleteProperty(impl->display, impl->window,
