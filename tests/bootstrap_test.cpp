@@ -113,11 +113,26 @@ TEST_CASE("bootstrap gives a valid user theme priority over the distributed them
   CHECK(bootstrap->theme.palette().at("accent") == gisland::Rgba{0x11, 0x22, 0x33, 0xFF});
 }
 
+TEST_CASE(
+    "bootstrap uses the distributed clock-calendar configuration when user config is absent") {
+  TemporaryDirectory temporary;
+  const auto bootstrap = gisland::load_runtime_bootstrap(
+      gisland::RuntimeRoots{temporary.path() / "config", GISLAND_TEST_ASSET_ROOT});
+
+  REQUIRE(bootstrap.has_value());
+  CHECK(bootstrap->config_path == std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml");
+  CHECK(bootstrap->config.default_module == "clock");
+  REQUIRE(bootstrap->config.modules.size() == 1);
+  CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
+  REQUIRE(bootstrap->config.modules.front().view.has_value());
+  CHECK(bootstrap->config.modules.front().view->expanded.has_value());
+}
+
 TEST_CASE("bootstrap reports a missing config without creating graphical state") {
   TemporaryDirectory temporary;
   const auto result = gisland::load_runtime_bootstrap(
-      gisland::RuntimeRoots{temporary.path(), GISLAND_TEST_ASSET_ROOT});
+      gisland::RuntimeRoots{temporary.path(), temporary.path() / "distributed"});
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().stage == gisland::BootstrapStage::configuration);
-  CHECK(result.error().path == temporary.path() / "gisland/config.toml");
+  CHECK(result.error().path == temporary.path() / "distributed/config.toml");
 }

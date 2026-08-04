@@ -77,6 +77,25 @@ add_custom_command(
 )
 add_custom_target(gisland_assets DEPENDS "${GISLAND_ASSET_STAMP}")
 
+add_library(gisland_clock_calendar_model STATIC src/clock_calendar.cpp)
+add_library(gisland::clock_calendar_model ALIAS gisland_clock_calendar_model)
+target_compile_features(gisland_clock_calendar_model PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_clock_calendar_model
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+gisland_set_project_options(gisland_clock_calendar_model)
+
+add_executable(gisland_clock_calendar src/clock_calendar_main.cpp)
+set_target_properties(gisland_clock_calendar PROPERTIES OUTPUT_NAME gisland-clock-calendar)
+target_compile_features(gisland_clock_calendar PRIVATE cxx_std_23)
+target_link_libraries(
+  gisland_clock_calendar
+  PRIVATE gisland::clock_calendar_model nlohmann_json::nlohmann_json
+)
+gisland_set_project_options(gisland_clock_calendar)
+
 add_library(
   gisland_app STATIC
   src/application.cpp
@@ -141,6 +160,8 @@ if(BUILD_TESTING)
     gisland_tests
     tests/application_config_test.cpp
     tests/bootstrap_test.cpp
+    tests/clock_calendar_test.cpp
+    tests/clock_calendar_process_test.cpp
     tests/config_test.cpp
     tests/context_test.cpp
     tests/interaction_test.cpp
@@ -162,15 +183,21 @@ if(BUILD_TESTING)
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(
     gisland_tests
-    PRIVATE gisland::app Catch2::Catch2WithMain X11::X11 X11::Xext
+    PRIVATE
+      gisland::app
+      gisland::clock_calendar_model
+      Catch2::Catch2WithMain
+      X11::X11
+      X11::Xext
   )
   target_compile_definitions(
     gisland_tests
     PRIVATE
       GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+      GISLAND_CLOCK_CALENDAR_PATH="${PROJECT_BINARY_DIR}/gisland-clock-calendar"
       GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
   )
-  add_dependencies(gisland_tests fake_module gisland_assets)
+  add_dependencies(gisland_tests fake_module gisland_clock_calendar gisland_assets)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
@@ -187,10 +214,16 @@ if(BUILD_TESTING)
       gisland_application_x11_smoke_tests
       PRIVATE
         GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
+        GISLAND_CLOCK_CALENDAR_PATH="$<TARGET_FILE:gisland_clock_calendar>"
         GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
     )
     gisland_set_project_options(gisland_application_x11_smoke_tests)
-    add_dependencies(gisland_application_x11_smoke_tests gisland fake_module)
+    add_dependencies(
+      gisland_application_x11_smoke_tests
+      gisland
+      gisland_clock_calendar
+      fake_module
+    )
     catch_discover_tests(
       gisland_application_x11_smoke_tests
       TEST_PREFIX "application_x11::"
@@ -267,6 +300,7 @@ set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
   include/gisland/bootstrap.hpp
+  include/gisland/clock_calendar.hpp
   include/gisland/config.hpp
   include/gisland/context.hpp
   include/gisland/interaction.hpp
@@ -288,6 +322,8 @@ set(
   include/gisland/x11_shape.hpp
   src/application.cpp
   src/bootstrap.cpp
+  src/clock_calendar.cpp
+  src/clock_calendar_main.cpp
   src/config.cpp
   src/context.cpp
   src/interaction.cpp
@@ -312,6 +348,8 @@ set(
   tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
   tests/bootstrap_test.cpp
+  tests/clock_calendar_test.cpp
+  tests/clock_calendar_process_test.cpp
   tests/config_test.cpp
   tests/context_test.cpp
   tests/interaction_test.cpp

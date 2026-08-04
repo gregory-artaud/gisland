@@ -1,0 +1,44 @@
+monitor = "primary"
+theme = "default"
+default_module = "clock"
+
+[interaction]
+animation_speed = 1.25
+hover_exit_ms = 120
+
+[[modules]]
+id = "clock"
+command = ["gisland-clock-calendar"]
+enabled = true
+restart = "on-failure"
+
+[modules.options]
+week_start = "monday"
+
+[modules.view.compact]
+type = "row"
+gap = "small"
+children = [
+  { type = "text", value = { bind = "time" }, role = "title" },
+  { type = "text", value = { bind = "date_short" }, role = "muted" }
+]
+
+[modules.view.expanded]
+type = "column"
+gap = "small"
+children = [
+  { type = "row", gap = "small", children = [
+    { type = "button", action_id = "previous-month", accessible_label = "Previous month", content = { type = "icon", name = "chevron-left", accessible_label = "Previous month" } },
+    { type = "spacer", flexible = true },
+    { type = "text", value = { bind = "month_label" }, role = "title" },
+    { type = "spacer", flexible = true },
+    { type = "button", action_id = "today", accessible_label = "Today", content = { type = "text", value = "Today", role = "button" } },
+    { type = "button", action_id = "next-month", accessible_label = "Next month", content = { type = "icon", name = "chevron-right", accessible_label = "Next month" } }
+  ] },
+  { type = "row", gap = "small", children = [
+    { repeat = "weekdays", as = "weekday", template = { type = "text", value = { bind = "weekday" }, role = "caption" } }
+  ] },
+  { repeat = "weeks", as = "week", template = { type = "row", gap = "small", children = [
+    { repeat = "week", as = "calendar_day", template = { type = "text", value = { bind = "calendar_day.label" }, role = { bind = "calendar_day.role" } } }
+  ] } }
+]

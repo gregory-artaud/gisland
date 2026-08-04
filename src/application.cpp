@@ -18,6 +18,7 @@
 #include <expected>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -261,6 +262,21 @@ render_context(const PublishedContext &context, std::uint64_t revision, const Th
   return value != nullptr && *value != '\0' ? std::string{value} : std::move(fallback);
 }
 
+[[nodiscard]] std::string runtime_locale() {
+  return environment_or("LC_ALL", environment_or("LC_TIME", environment_or("LANG", "C")));
+}
+
+[[nodiscard]] std::string runtime_timezone() {
+  if (const char *timezone = std::getenv("TZ"); timezone != nullptr && *timezone != '\0') {
+    return timezone;
+  }
+  try {
+    return std::string{std::chrono::current_zone()->name()};
+  } catch (const std::runtime_error &) {
+    return "UTC";
+  }
+}
+
 void log_supervisor_event(const SupervisorEvent &event) {
   std::visit(
       [](const auto &typed_event) {
@@ -321,8 +337,8 @@ int Application::run() {
 
   ModuleSupervisor supervisor;
   RuntimeCoordinator runtime{bootstrap_.config};
-  const std::string locale = environment_or("LC_ALL", environment_or("LANG", "C"));
-  const std::string timezone = environment_or("TZ", "UTC");
+  const std::string locale = runtime_locale();
+  const std::string timezone = runtime_timezone();
   for (const auto &module : bootstrap_.config.modules) {
     if (!module.enabled) {
       continue;

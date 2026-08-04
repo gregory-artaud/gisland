@@ -54,6 +54,13 @@ size = 16
 weight = 600
 line_height = 1.2
 
+[typography.accent]
+font = "semibold"
+color = "accent"
+size = 16
+weight = 600
+line_height = 1.2
+
 [gaps]
 xsmall = 4
 small = 8

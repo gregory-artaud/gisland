@@ -9,6 +9,7 @@ A C++23 raylib application for Linux/X11.
 - GCC or Clang with C++23 support
 - Git
 - clang-format and clang-tidy for optional quality checks
+- tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
 ### Debian / Ubuntu
@@ -125,8 +126,17 @@ stdin and stdout; stderr is captured as tagged, bounded log events. Module insta
 `always`, `on-failure`, and `never` restart policies with bounded exponential backoff, failure
 lockout, and graceful shutdown escalation to process-group signals.
 
-Rendering and layout integration, X11 overlay behavior, control IPC, hot reload orchestration, and
-the shipped clock/calendar module remain future delivery increments.
+The shipped `gisland-clock-calendar` executable uses the same public protocol as third-party
+modules. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at minute
+boundaries, and handles previous-month, next-month, and today actions. Locale and timezone come
+from the process environment by default. Module options can override `locale`, `timezone`, and
+`week_start` (`monday` or `sunday`).
+
+When user configuration is absent, gisland loads the distributed `assets/config.toml`, which
+selects this module and its declarative compact and expanded templates. A user
+`$XDG_CONFIG_HOME/gisland/config.toml` continues to override the distributed default completely.
+
+Control IPC and hot reload orchestration remain future delivery increments.
 
 ## Repository Layout
 

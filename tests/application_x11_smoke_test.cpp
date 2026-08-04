@@ -31,6 +31,12 @@ public:
     if (pid_ == 0) {
       setenv("XDG_CONFIG_HOME", config_home.c_str(), 1);
       setenv("TZ", "UTC", 1);
+      std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
+      path += ':';
+      if (const char *existing_path = std::getenv("PATH"); existing_path != nullptr) {
+        path += existing_path;
+      }
+      setenv("PATH", path.c_str(), 1);
       if (std::freopen(application_log.c_str(), "w", stderr) == nullptr) {
         _exit(126);
       }
@@ -58,12 +64,15 @@ private:
 
 class TemporaryConfig {
 public:
-  TemporaryConfig() {
+  explicit TemporaryConfig(bool write_config = true) {
     const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     home_ = std::filesystem::temp_directory_path() / ("gisland-smoke-" + std::to_string(suffix));
     action_log_ = home_ / "actions.log";
     application_log_ = home_ / "application.log";
     std::filesystem::create_directories(home_ / "gisland");
+    if (!write_config) {
+      return;
+    }
     std::ofstream config{home_ / "gisland/config.toml"};
     if (!config) {
       throw std::runtime_error{"could not create application smoke config"};
@@ -278,6 +287,42 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   CHECK(attributes.height == 300);
   CHECK(attributes.x == 460);
   CHECK(attributes.y == 8);
+
+  XCloseDisplay(display);
+}
+
+TEST_CASE("application renders the distributed live clock-calendar module") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config{false};
+  ChildProcess child{config.home(), config.application_log()};
+
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  }));
+
+  XWindowAttributes attributes{};
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    return XGetWindowAttributes(display, *window, &attributes) != 0 &&
+           attributes.map_state == IsViewable;
+  }));
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                               attributes.x + (attributes.width / 2), attributes.y + 32,
+                               CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->height >= 300;
+  }));
+  CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
 
   XCloseDisplay(display);
 }
