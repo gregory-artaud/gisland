@@ -51,9 +51,70 @@ raylib 6.0 is fetched automatically during the first configure.
 For an optimized build:
 
 ```bash
-cmake --preset release
+cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
 cmake --build --preset release
 ```
+
+## Install
+
+Choose the final prefix during configuration because generated manifests and the systemd service
+contain absolute executable paths:
+
+```bash
+cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+cmake --build --preset release
+cmake --install build/release
+systemctl --user daemon-reload
+```
+
+The installation owns binaries, the user service, and private distributed resources under
+`$HOME/.local/share/gisland/distributed`. It never writes user configuration or custom modules under
+`$XDG_CONFIG_HOME/gisland` or `$XDG_DATA_HOME/gisland`.
+
+For direct startup, ensure the selected prefix is on `PATH`, then run `gisland`. For systemd startup:
+
+```bash
+systemctl --user import-environment DISPLAY XAUTHORITY
+systemctl --user enable --now gisland.service
+journalctl --user -u gisland.service -f
+```
+
+An i3 configuration can import its X11 environment, start the service, and bind controls without
+global grabs inside gisland:
+
+```i3
+exec --no-startup-id systemctl --user import-environment DISPLAY XAUTHORITY
+exec --no-startup-id systemctl --user start gisland.service
+bindsym $mod+grave exec --no-startup-id gislandctl toggle
+bindsym $mod+Shift+grave exec --no-startup-id gislandctl close
+```
+
+Equivalent sxhkd bindings are ordinary commands:
+
+```text
+super + grave
+    gislandctl toggle
+
+super + shift + grave
+    gislandctl close
+```
+
+Update an existing installation without exposing the running process to a partially installed
+resource set:
+
+```bash
+systemctl --user stop gisland.service
+git pull
+cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+cmake --build --preset release
+cmake --install build/release
+systemctl --user daemon-reload
+systemctl --user start gisland.service
+```
+
+Rollback uses the same sequence after checking out the previous release. Before uninstalling,
+review `build/release/install_manifest.txt`; it lists exactly the core-owned files to remove. Then
+disable the service with `systemctl --user disable --now gisland.service` and reload systemd.
 
 ## Run
 

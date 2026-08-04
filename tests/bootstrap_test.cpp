@@ -81,6 +81,15 @@ TEST_CASE("runtime roots follow XDG config home and HOME fallback") {
   CHECK(missing_home.error().stage == gisland::BootstrapStage::environment);
 }
 
+TEST_CASE("distributed resources follow build and installed executable locations") {
+  CHECK(gisland::resolve_distributed_data(
+            "/work/build/dev/gisland", "/work/build/dev", "/work/build/dev/assets",
+            "/opt/share/gisland/distributed") == "/work/build/dev/assets");
+  CHECK(gisland::resolve_distributed_data(
+            "/opt/bin/gisland", "/work/build/dev", "/work/build/dev/assets",
+            "/opt/share/gisland/distributed") == "/opt/share/gisland/distributed");
+}
+
 TEST_CASE("bootstrap loads config and distributed theme before graphical startup") {
   TemporaryDirectory temporary;
   const auto config_home = temporary.path() / "config";

@@ -35,6 +35,10 @@ struct RuntimeBootstrap {
   RuntimeRoots roots;
 };
 
+[[nodiscard]] std::filesystem::path resolve_distributed_data(
+    const std::filesystem::path &executable, const std::filesystem::path &build_bindir,
+    const std::filesystem::path &build_data, const std::filesystem::path &installed_data);
+
 [[nodiscard]] std::expected<RuntimeRoots, BootstrapError>
 resolve_runtime_roots(std::optional<std::string> xdg_config_home, std::optional<std::string> home,
                       std::optional<std::string> xdg_data_home,

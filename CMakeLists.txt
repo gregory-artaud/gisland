@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(gisland VERSION 0.1.0 LANGUAGES CXX)
+project(gisland VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
@@ -10,6 +10,7 @@ endif()
 
 include(CTest)
 include(FetchContent)
+include(GNUInstallDirs)
 include(cmake/ProjectOptions.cmake)
 
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
@@ -148,7 +149,10 @@ target_link_libraries(
 gisland_set_project_options(gisland_app)
 target_compile_definitions(
   gisland_app
-  PRIVATE GISLAND_DISTRIBUTED_DATA_DIR="${PROJECT_BINARY_DIR}/assets"
+  PRIVATE
+    GISLAND_BUILD_BINDIR="${PROJECT_BINARY_DIR}"
+    GISLAND_BUILD_DATA_DIR="${PROJECT_BINARY_DIR}/assets"
+    GISLAND_INSTALL_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/gisland/distributed"
 )
 
 add_executable(gisland src/main.cpp)
@@ -162,7 +166,44 @@ target_compile_features(gislandctl PRIVATE cxx_std_23)
 target_link_libraries(gislandctl PRIVATE gisland::app)
 gisland_set_project_options(gislandctl)
 
+set(GISLAND_INSTALL_DATA_SUBDIR "${CMAKE_INSTALL_DATADIR}/gisland/distributed")
+configure_file(
+  packaging/clock-calendar.module.toml.in
+  "${PROJECT_BINARY_DIR}/install/module.toml"
+  @ONLY
+)
+configure_file(
+  packaging/gisland.service.in
+  "${PROJECT_BINARY_DIR}/install/gisland.service"
+  @ONLY
+)
+install(
+  TARGETS gisland gislandctl gisland_clock_calendar
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+install(FILES assets/config.toml DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
+install(DIRECTORY assets/fonts assets/themes DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
+install(
+  FILES "${PROJECT_BINARY_DIR}/install/module.toml"
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/clock-calendar"
+)
+install(
+  FILES "${PROJECT_BINARY_DIR}/install/gisland.service"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/systemd/user"
+)
+
 if(BUILD_TESTING)
+  add_test(
+    NAME install_layout
+    COMMAND
+      ${CMAKE_COMMAND}
+      -DBUILD_DIR=${PROJECT_BINARY_DIR}
+      -DSTAGING_DIR=${PROJECT_BINARY_DIR}/install-test
+      -DINSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+      -DBINDIR=${CMAKE_INSTALL_BINDIR}
+      -DDATADIR=${CMAKE_INSTALL_DATADIR}
+      -P ${PROJECT_SOURCE_DIR}/tests/install_layout_test.cmake
+  )
   add_executable(fake_module tests/fake_module.cpp)
   target_compile_features(fake_module PRIVATE cxx_std_23)
   target_link_libraries(fake_module PRIVATE nlohmann_json::nlohmann_json)
@@ -388,9 +429,9 @@ set(
   tests/control_client_test.cpp
   tests/control_dispatcher_test.cpp
   tests/control_test.cpp
-    tests/context_test.cpp
-    tests/file_watcher_test.cpp
-    tests/interaction_test.cpp
+  tests/context_test.cpp
+  tests/file_watcher_test.cpp
+  tests/interaction_test.cpp
   tests/ipc_server_test.cpp
   tests/island_test.cpp
   tests/layout_test.cpp

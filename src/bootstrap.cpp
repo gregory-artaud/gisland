@@ -41,6 +41,15 @@ read_text(const std::filesystem::path &path, BootstrapStage stage) {
 
 } // namespace
 
+std::filesystem::path resolve_distributed_data(const std::filesystem::path &executable,
+                                               const std::filesystem::path &build_bindir,
+                                               const std::filesystem::path &build_data,
+                                               const std::filesystem::path &installed_data) {
+  return executable.parent_path().lexically_normal() == build_bindir.lexically_normal()
+             ? build_data
+             : installed_data;
+}
+
 std::expected<RuntimeRoots, BootstrapError>
 resolve_runtime_roots(std::optional<std::string> xdg_config_home, std::optional<std::string> home,
                       std::optional<std::string> xdg_data_home,
@@ -126,9 +135,15 @@ load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &c
 }
 
 std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap_from_environment() {
+  std::error_code executable_error;
+  const auto executable = std::filesystem::read_symlink("/proc/self/exe", executable_error);
+  const auto distributed_data =
+      executable_error ? std::filesystem::path{GISLAND_INSTALL_DATA_DIR}
+                       : resolve_distributed_data(executable, GISLAND_BUILD_BINDIR,
+                                                  GISLAND_BUILD_DATA_DIR, GISLAND_INSTALL_DATA_DIR);
   auto roots =
       resolve_runtime_roots(environment_value("XDG_CONFIG_HOME"), environment_value("HOME"),
-                            environment_value("XDG_DATA_HOME"), GISLAND_DISTRIBUTED_DATA_DIR);
+                            environment_value("XDG_DATA_HOME"), distributed_data);
   if (!roots) {
     return std::unexpected(roots.error());
   }
