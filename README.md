@@ -187,11 +187,17 @@ font, active layout, render-resource, monitor-placement, and supervisor-queue pr
 returns `reload_rejected` and leaves the running configuration, visible frame, and module processes
 unchanged.
 
+gisland also watches the active configuration, selected theme, and referenced module manifests.
+Exact-file events are debounced until a 100 ms quiet period has elapsed, then use the same
+transactional reload path. Parent directories are watched so atomic editor replacements are
+detected while unrelated temporary files are ignored. Invalid candidates are logged and retained
+files remain watched for a later correction. If filesystem watching becomes unavailable, automatic
+reload is disabled without terminating gisland; `gislandctl reload` remains available.
+
 Unchanged module processes retain their PID and runtime state. Compact or expanded template-only
 changes reuse the latest successful data snapshot without restarting the module. Changes to command,
 options, restart policy, lifecycle timings, environment, or working directory gracefully replace the
-affected process. Added and enabled modules start; removed and disabled modules stop. gisland does not
-watch files or reload automatically.
+affected process. Added and enabled modules start; removed and disabled modules stop.
 
 ## Repository Layout
 

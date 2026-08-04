@@ -105,6 +105,7 @@ add_library(
   src/control_client.cpp
   src/control_dispatcher.cpp
   src/context.cpp
+  src/file_watcher.cpp
   src/interaction.cpp
   src/ipc_server.cpp
   src/island.cpp
@@ -177,8 +178,9 @@ if(BUILD_TESTING)
     tests/control_client_test.cpp
     tests/control_dispatcher_test.cpp
     tests/control_test.cpp
-    tests/context_test.cpp
-    tests/interaction_test.cpp
+  tests/context_test.cpp
+  tests/file_watcher_test.cpp
+  tests/interaction_test.cpp
     tests/ipc_server_test.cpp
     tests/island_test.cpp
     tests/layout_test.cpp
@@ -323,6 +325,7 @@ set(
   include/gisland/control_client.hpp
   include/gisland/control_dispatcher.hpp
   include/gisland/context.hpp
+  include/gisland/file_watcher.hpp
   include/gisland/interaction.hpp
   include/gisland/ipc_server.hpp
   include/gisland/island.hpp
@@ -353,6 +356,7 @@ set(
   src/control_main.cpp
   src/control_dispatcher.cpp
   src/context.cpp
+  src/file_watcher.cpp
   src/interaction.cpp
   src/ipc_server.cpp
   src/island.cpp
@@ -384,8 +388,9 @@ set(
   tests/control_client_test.cpp
   tests/control_dispatcher_test.cpp
   tests/control_test.cpp
-  tests/context_test.cpp
-  tests/interaction_test.cpp
+    tests/context_test.cpp
+    tests/file_watcher_test.cpp
+    tests/interaction_test.cpp
   tests/ipc_server_test.cpp
   tests/island_test.cpp
   tests/layout_test.cpp

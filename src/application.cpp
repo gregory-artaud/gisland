@@ -1,5 +1,6 @@
 #include "gisland/application.hpp"
 #include "gisland/control_dispatcher.hpp"
+#include "gisland/file_watcher.hpp"
 #include "gisland/interaction.hpp"
 #include "gisland/ipc_server.hpp"
 #include "gisland/island.hpp"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <expected>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -96,6 +98,13 @@ public:
                     GetMonitorWidth(monitor),
                     GetMonitorHeight(monitor),
                     true};
+}
+
+[[nodiscard]] std::vector<std::filesystem::path>
+reload_watch_paths(const RuntimeBootstrap &bootstrap) {
+  std::vector<std::filesystem::path> paths{bootstrap.config_path, bootstrap.theme_path};
+  paths.insert(paths.end(), bootstrap.manifest_paths.begin(), bootstrap.manifest_paths.end());
+  return paths;
 }
 
 void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
@@ -421,105 +430,140 @@ int Application::run() {
   refresh_monitor();
   apply_native_canvas();
 
-  ControlDispatcher dispatcher{
-      runtime, mode_controller,
-      [&supervisor](std::string instance_id, std::uint64_t generation) {
-        return supervisor.restart(std::move(instance_id), generation);
-      },
-      ipc->socket_path(),
-      [&](MonotonicTime now) -> std::expected<void, std::string> {
-        auto candidate_bootstrap = load_reload_candidate(bootstrap_);
-        if (!candidate_bootstrap) {
-          return std::unexpected(candidate_bootstrap.error().path.string() + ": " +
-                                 candidate_bootstrap.error().message);
-        }
-        auto plan = plan_reload(bootstrap_.config, candidate_bootstrap->config, locale, timezone);
-        if (!plan) {
-          return std::unexpected(plan.error().message);
-        }
-        auto prepared_runtime = runtime.prepare_reload(*plan);
-        if (!prepared_runtime) {
-          return std::unexpected(prepared_runtime.error().message);
-        }
-        auto candidate_fonts =
-            RaylibFontBook::load(candidate_bootstrap->theme, candidate_bootstrap->asset_root);
-        if (!candidate_fonts) {
-          return std::unexpected(candidate_fonts.error().message);
-        }
+  std::optional<FileWatcher> watcher;
+  if (auto created = FileWatcher::create(reload_watch_paths(bootstrap_)); created) {
+    watcher.emplace(std::move(*created));
+  } else {
+    std::cerr << "automatic reload disabled: " << created.error() << '\n';
+  }
+  ReloadDebouncer reload_debouncer{std::chrono::milliseconds{100}};
 
-        X11Monitor candidate_monitor = monitor;
-        if (host) {
-          auto selected = host->select_output(candidate_bootstrap->config.monitor);
-          if (!selected) {
-            return std::unexpected(selected.error().message);
-          }
-          candidate_monitor = std::move(selected->monitor);
-        }
+  const auto reload_application = [&](MonotonicTime now) -> std::expected<void, std::string> {
+    auto candidate_bootstrap = load_reload_candidate(bootstrap_);
+    if (!candidate_bootstrap) {
+      return std::unexpected(candidate_bootstrap.error().path.string() + ": " +
+                             candidate_bootstrap.error().message);
+    }
+    auto plan = plan_reload(bootstrap_.config, candidate_bootstrap->config, locale, timezone);
+    if (!plan) {
+      return std::unexpected(plan.error().message);
+    }
+    auto prepared_runtime = runtime.prepare_reload(*plan);
+    if (!prepared_runtime) {
+      return std::unexpected(prepared_runtime.error().message);
+    }
+    auto candidate_fonts =
+        RaylibFontBook::load(candidate_bootstrap->theme, candidate_bootstrap->asset_root);
+    if (!candidate_fonts) {
+      return std::unexpected(candidate_fonts.error().message);
+    }
 
-        const auto *const candidate_selection = prepared_runtime->arbiter.active(now);
-        std::optional<RenderedContext> candidate_rendered;
-        if (candidate_selection != nullptr) {
-          auto candidate = render_context(*candidate_selection, prepared_runtime->revision,
-                                          candidate_bootstrap->theme, *candidate_fonts);
-          if (!candidate) {
-            return std::unexpected(candidate.error());
-          }
-          candidate_rendered.emplace(std::move(*candidate));
-        }
-        const auto candidate_canvas =
-            candidate_rendered
-                ? canvas_for(candidate_rendered->compact, candidate_rendered->expanded)
-                : IslandCanvasSize{
-                      static_cast<float>(candidate_bootstrap->theme.views().compact.min_width),
-                      static_cast<float>(candidate_bootstrap->theme.views().compact.min_height)};
-        const int candidate_width =
-            std::max(1, static_cast<int>(std::lround(candidate_canvas.width)));
-        const int candidate_height =
-            std::max(1, static_cast<int>(std::lround(candidate_canvas.height)));
-        if (auto positioned = place_on_monitor(candidate_monitor, candidate_width, candidate_height,
-                                               config_.top_margin);
-            !positioned) {
-          if (candidate_rendered) {
-            unload(*candidate_rendered);
-          }
-          return std::unexpected(positioned.error().message);
-        }
+    X11Monitor candidate_monitor = monitor;
+    if (host) {
+      auto selected = host->select_output(candidate_bootstrap->config.monitor);
+      if (!selected) {
+        return std::unexpected(selected.error().message);
+      }
+      candidate_monitor = std::move(selected->monitor);
+    }
 
-        if (auto queued = supervisor.reconfigure(std::move(plan->supervisor)); !queued) {
-          if (candidate_rendered) {
-            unload(*candidate_rendered);
-          }
-          return std::unexpected("module reconfiguration could not be queued");
-        }
+    const auto *const candidate_selection = prepared_runtime->arbiter.active(now);
+    std::optional<RenderedContext> candidate_rendered;
+    if (candidate_selection != nullptr) {
+      auto candidate = render_context(*candidate_selection, prepared_runtime->revision,
+                                      candidate_bootstrap->theme, *candidate_fonts);
+      if (!candidate) {
+        return std::unexpected(candidate.error());
+      }
+      candidate_rendered.emplace(std::move(*candidate));
+    }
+    const auto candidate_canvas =
+        candidate_rendered
+            ? canvas_for(candidate_rendered->compact, candidate_rendered->expanded)
+            : IslandCanvasSize{
+                  static_cast<float>(candidate_bootstrap->theme.views().compact.min_width),
+                  static_cast<float>(candidate_bootstrap->theme.views().compact.min_height)};
+    const int candidate_width = std::max(1, static_cast<int>(std::lround(candidate_canvas.width)));
+    const int candidate_height =
+        std::max(1, static_cast<int>(std::lround(candidate_canvas.height)));
+    if (auto positioned = place_on_monitor(candidate_monitor, candidate_width, candidate_height,
+                                           config_.top_margin);
+        !positioned) {
+      if (candidate_rendered) {
+        unload(*candidate_rendered);
+      }
+      return std::unexpected(positioned.error().message);
+    }
 
-        runtime.commit_reload(std::move(*prepared_runtime));
-        if (rendered) {
-          unload(*rendered);
-        }
-        rendered = std::move(candidate_rendered);
-        *fonts = std::move(*candidate_fonts);
-        bootstrap_ = std::move(*candidate_bootstrap);
-        monitor = std::move(candidate_monitor);
-        canvas = candidate_canvas;
-        mode_controller.set_exit_tolerance(bootstrap_.config.interaction.hover_exit);
-        if (mode_controller.mode() == IslandMode::expanded && (!rendered || !rendered->expanded)) {
-          mode_controller.close();
-        }
-        if (!rendered) {
-          const auto &compact = bootstrap_.theme.views().compact;
-          current = IslandGeometry{static_cast<float>(compact.min_width),
-                                   static_cast<float>(compact.min_height),
-                                   static_cast<float>(compact.radius)};
-        }
-        placement = place_at_top_center(current, canvas);
-        apply_native_canvas();
-        actions_ready = false;
-        return {};
-      }};
+    if (auto queued = supervisor.reconfigure(std::move(plan->supervisor)); !queued) {
+      if (candidate_rendered) {
+        unload(*candidate_rendered);
+      }
+      return std::unexpected("module reconfiguration could not be queued");
+    }
+
+    runtime.commit_reload(std::move(*prepared_runtime));
+    if (rendered) {
+      unload(*rendered);
+    }
+    rendered = std::move(candidate_rendered);
+    *fonts = std::move(*candidate_fonts);
+    bootstrap_ = std::move(*candidate_bootstrap);
+    monitor = std::move(candidate_monitor);
+    canvas = candidate_canvas;
+    mode_controller.set_exit_tolerance(bootstrap_.config.interaction.hover_exit);
+    if (mode_controller.mode() == IslandMode::expanded && (!rendered || !rendered->expanded)) {
+      mode_controller.close();
+    }
+    if (!rendered) {
+      const auto &compact = bootstrap_.theme.views().compact;
+      current = IslandGeometry{static_cast<float>(compact.min_width),
+                               static_cast<float>(compact.min_height),
+                               static_cast<float>(compact.radius)};
+    }
+    placement = place_at_top_center(current, canvas);
+    apply_native_canvas();
+    actions_ready = false;
+    if (watcher) {
+      if (auto replaced = watcher->replace_paths(reload_watch_paths(bootstrap_)); !replaced) {
+        std::cerr << "automatic reload disabled: " << replaced.error() << '\n';
+        watcher.reset();
+      }
+    }
+    return {};
+  };
+
+  ControlDispatcher dispatcher{runtime, mode_controller,
+                               [&supervisor](std::string instance_id, std::uint64_t generation) {
+                                 return supervisor.restart(std::move(instance_id), generation);
+                               },
+                               ipc->socket_path(),
+                               [&](MonotonicTime now) {
+                                 auto reloaded = reload_application(now);
+                                 if (reloaded) {
+                                   reload_debouncer.clear();
+                                 }
+                                 return reloaded;
+                               }};
 
   while (!WindowShouldClose()) {
     const float delta_seconds = GetFrameTime();
     const MonotonicTime now = std::chrono::steady_clock::now();
+    if (watcher) {
+      auto changed_paths = watcher->poll();
+      if (!changed_paths) {
+        std::cerr << "automatic reload disabled: " << changed_paths.error() << '\n';
+        watcher.reset();
+        reload_debouncer.clear();
+      } else if (*changed_paths) {
+        reload_debouncer.observe(now);
+      }
+    }
+    if (reload_debouncer.consume_due(now)) {
+      if (auto reloaded = reload_application(now); !reloaded) {
+        std::cerr << "automatic reload rejected: " << reloaded.error() << '\n';
+      }
+    }
     for (const auto &event : supervisor.drain_events()) {
       log_supervisor_event(event);
       if (const auto *completed = std::get_if<RestartCompletedEvent>(&event)) {
