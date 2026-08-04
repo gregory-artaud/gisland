@@ -1,7 +1,9 @@
 #include "gisland/config.hpp"
+#include "gisland/module_manifest.hpp"
 
 #include <toml++/toml.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -150,6 +152,30 @@ parse_command(const toml::table &table, std::size_t module_index, std::string_vi
         error_at(source_name, path + "[0]", "executable must not be empty", &(*array)[0]));
   }
   return command;
+}
+
+[[nodiscard]] std::expected<std::vector<std::string>, ConfigError>
+parse_arguments(const toml::table &table, std::size_t module_index, std::string_view source_name) {
+  const auto *node = table.get("arguments");
+  if (node == nullptr) {
+    return std::vector<std::string>{};
+  }
+  const auto *array = node->as_array();
+  const std::string path = "modules[" + std::to_string(module_index) + "].arguments";
+  if (array == nullptr) {
+    return std::unexpected(error_at(source_name, path, "expected an array", node));
+  }
+  std::vector<std::string> arguments;
+  arguments.reserve(array->size());
+  for (std::size_t index = 0; index < array->size(); ++index) {
+    const auto value = (*array)[index].value_exact<std::string>();
+    if (!value) {
+      return std::unexpected(error_at(source_name, path + "[" + std::to_string(index) + "]",
+                                      "expected a string", &(*array)[index]));
+    }
+    arguments.push_back(*value);
+  }
+  return arguments;
 }
 
 [[nodiscard]] std::expected<bool, ConfigError>
@@ -660,7 +686,9 @@ parse_module_view(const toml::table &module, std::size_t index, std::string_view
 }
 
 [[nodiscard]] std::expected<std::vector<ModuleInstanceConfig>, ConfigError>
-parse_modules(const toml::table &root, std::string_view source_name) {
+// Module parsing resolves both shipped manifest references and persisted inline commands.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+parse_modules(const toml::table &root, std::string_view source_name, const ModuleCatalog *catalog) {
   const auto *node = root.get("modules");
   if (node == nullptr) {
     return std::unexpected(error_at(source_name, "modules", "missing required module list"));
@@ -691,7 +719,74 @@ parse_modules(const toml::table &root, std::string_view source_name) {
                                       module_table->get("id")));
     }
 
-    auto command = parse_command(*module_table, index, source_name);
+    const bool has_command = module_table->contains("command");
+    const bool has_module = module_table->contains("module");
+    if (has_command == has_module) {
+      return std::unexpected(error_at(source_name, base_path,
+                                      "exactly one of command or module is required",
+                                      &(*array)[index]));
+    }
+    if (has_command && module_table->contains("arguments")) {
+      return std::unexpected(error_at(source_name, base_path + ".arguments",
+                                      "arguments requires a manifest-backed module",
+                                      module_table->get("arguments")));
+    }
+
+    std::string module_id;
+    std::optional<std::filesystem::path> manifest_path;
+    ProtocolVersion minimum_protocol{1, 0};
+    ProtocolVersion maximum_protocol{1, 1};
+    std::expected<std::vector<std::string>, ConfigError> command =
+        has_command
+            ? parse_command(*module_table, index, source_name)
+            : std::expected<std::vector<std::string>, ConfigError>{std::vector<std::string>{}};
+    const ModuleManifest *manifest = nullptr;
+    if (has_module) {
+      auto reference =
+          required_non_empty_string(*module_table, "module", base_path + ".module", source_name);
+      if (!reference) {
+        return std::unexpected(reference.error());
+      }
+      module_id = *reference;
+      if (catalog == nullptr) {
+        return std::unexpected(error_at(source_name, base_path + ".module",
+                                        "module manifests are unavailable",
+                                        module_table->get("module")));
+      }
+      if (const auto invalid = catalog->errors.find(module_id); invalid != catalog->errors.end()) {
+        return std::unexpected(ConfigError{invalid->second.source.string(), invalid->second.path,
+                                           invalid->second.message, invalid->second.line,
+                                           invalid->second.column});
+      }
+      const auto found = catalog->manifests.find(module_id);
+      if (found == catalog->manifests.end()) {
+        return std::unexpected(error_at(source_name, base_path + ".module",
+                                        "module manifest was not found",
+                                        module_table->get("module")));
+      }
+      manifest = &found->second;
+      if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
+          manifest->minimum_protocol.minor > 1 || manifest->maximum_protocol.minor < 0) {
+        return std::unexpected(error_at(source_name, base_path + ".module",
+                                        "module protocol range is incompatible",
+                                        module_table->get("module")));
+      }
+      minimum_protocol = {1, std::max(0, manifest->minimum_protocol.minor)};
+      maximum_protocol = {1, std::min(1, manifest->maximum_protocol.minor)};
+      auto arguments = parse_arguments(*module_table, index, source_name);
+      if (!arguments) {
+        return std::unexpected(arguments.error());
+      }
+      auto resolved_command = manifest->command;
+      if (resolved_command.front().contains('/') &&
+          std::filesystem::path{resolved_command.front()}.is_relative()) {
+        resolved_command.front() =
+            (manifest->path.parent_path() / resolved_command.front()).lexically_normal().string();
+      }
+      resolved_command.insert(resolved_command.end(), arguments->begin(), arguments->end());
+      command = std::move(resolved_command);
+      manifest_path = manifest->path;
+    }
     auto enabled = parse_enabled(*module_table, index, source_name);
     auto options = parse_options(*module_table, index, source_name);
     auto restart = parse_restart_policy(*module_table, index, source_name);
@@ -707,6 +802,31 @@ parse_modules(const toml::table &root, std::string_view source_name) {
     }
     if (!options.has_value()) {
       return std::unexpected(options.error());
+    }
+    if (manifest != nullptr) {
+      ConfigValue::Table resolved_options = manifest->defaults;
+      for (auto &[key, value] : *options) {
+        resolved_options.insert_or_assign(key, std::move(value));
+      }
+      for (const auto &[key, value] : resolved_options) {
+        const auto schema = manifest->options_schema.find(key);
+        if (schema == manifest->options_schema.end() ||
+            !option_matches_schema(value, schema->second)) {
+          std::string option_path = base_path + ".options.";
+          option_path.append(key);
+          return std::unexpected(error_at(source_name, std::move(option_path),
+                                          "option is absent from or incompatible with the schema"));
+        }
+      }
+      for (const auto &[key, schema] : manifest->options_schema) {
+        if (schema.required && !resolved_options.contains(key)) {
+          std::string option_path = base_path + ".options.";
+          option_path.append(key);
+          return std::unexpected(
+              error_at(source_name, std::move(option_path), "required module option is missing"));
+        }
+      }
+      options = std::move(resolved_options);
     }
     if (!restart.has_value()) {
       return std::unexpected(restart.error());
@@ -726,7 +846,11 @@ parse_modules(const toml::table &root, std::string_view source_name) {
 
     modules.push_back(ModuleInstanceConfig{
         .id = std::move(*id),
+        .module_id = std::move(module_id),
+        .manifest_path = std::move(manifest_path),
         .command = std::move(*command),
+        .minimum_protocol = minimum_protocol,
+        .maximum_protocol = maximum_protocol,
         .enabled = *enabled,
         .options = std::move(*options),
         .restart = *restart,
@@ -786,8 +910,8 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
   return interaction;
 }
 
-[[nodiscard]] std::expected<AppConfig, ConfigError> parse_table(const toml::table &root,
-                                                                std::string_view source_name) {
+[[nodiscard]] std::expected<AppConfig, ConfigError>
+parse_table(const toml::table &root, std::string_view source_name, const ModuleCatalog *catalog) {
   auto monitor = required_non_empty_string(root, "monitor", "monitor", source_name);
   auto theme = required_non_empty_string(root, "theme", "theme", source_name);
   auto default_module =
@@ -807,7 +931,7 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
     return std::unexpected(interaction.error());
   }
 
-  auto modules = parse_modules(root, source_name);
+  auto modules = parse_modules(root, source_name, catalog);
   if (!modules.has_value()) {
     return std::unexpected(modules.error());
   }
@@ -825,8 +949,8 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
                                     root.get("default_module")));
   }
 
-  return AppConfig{std::move(*monitor), std::move(*theme), std::move(*default_module),
-                   std::move(*interaction), std::move(*modules)};
+  return AppConfig{std::move(*monitor), std::move(*theme), std::move(*default_module), *interaction,
+                   std::move(*modules)};
 }
 
 } // namespace
@@ -835,7 +959,23 @@ std::expected<AppConfig, ConfigError> parse_config(std::string_view text,
                                                    std::string_view source_name) {
   try {
     const auto root = toml::parse(text, source_name);
-    return parse_table(root, source_name);
+    return parse_table(root, source_name, nullptr);
+  } catch (const toml::parse_error &error) {
+    return std::unexpected(ConfigError{
+        std::string{source_name},
+        "",
+        std::string{error.description()},
+        static_cast<std::size_t>(error.source().begin.line),
+        static_cast<std::size_t>(error.source().begin.column),
+    });
+  }
+}
+
+std::expected<AppConfig, ConfigError>
+parse_config(std::string_view text, std::string_view source_name, const ModuleCatalog &catalog) {
+  try {
+    const auto root = toml::parse(text, source_name);
+    return parse_table(root, source_name, &catalog);
   } catch (const toml::parse_error &error) {
     return std::unexpected(ConfigError{
         std::string{source_name},
@@ -861,6 +1001,22 @@ std::expected<AppConfig, ConfigError> load_config(const std::filesystem::path &p
         ConfigError{path.string(), "", "unable to read configuration file", 0, 0});
   }
   return parse_config(contents, path.string());
+}
+
+std::expected<AppConfig, ConfigError> load_config(const std::filesystem::path &path,
+                                                  const ModuleCatalog &catalog) {
+  std::ifstream stream{path, std::ios::binary};
+  if (!stream) {
+    return std::unexpected(
+        ConfigError{path.string(), "", "unable to open configuration file", 0, 0});
+  }
+  const std::string contents{std::istreambuf_iterator<char>{stream},
+                             std::istreambuf_iterator<char>{}};
+  if (stream.bad()) {
+    return std::unexpected(
+        ConfigError{path.string(), "", "unable to read configuration file", 0, 0});
+  }
+  return parse_config(contents, path.string(), catalog);
 }
 
 } // namespace gisland

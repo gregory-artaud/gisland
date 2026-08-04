@@ -131,6 +131,25 @@ stdin and stdout; stderr is captured as tagged, bounded log events. Module insta
 `always`, `on-failure`, and `never` restart policies with bounded exponential backoff, failure
 lockout, and graceful shutdown escalation to process-group signals.
 
+Installed modules are discovered from `$XDG_DATA_HOME/gisland/modules/` (defaulting to
+`~/.local/share/gisland/modules/`) and the distributed `modules/` directory. Each module occupies
+`<module-id>/module.toml`; a user directory overrides a distributed directory with the same ID.
+Installing a manifest never enables it. Instances opt in by stable module ID:
+
+```toml
+[[modules]]
+id = "clock"
+module = "clock-calendar"
+arguments = []
+enabled = true
+```
+
+The manifest declares human-readable metadata, a command vector, its supported protocol range,
+default options, and an option schema. Configured values are merged over defaults and validated
+before any process starts. A missing, malformed, or protocol-incompatible referenced manifest
+rejects startup or reload; malformed unreferenced manifests do not terminate gisland. Existing
+instances with an explicit `command` remain supported and bypass discovery.
+
 The shipped `gisland-clock-calendar` executable uses the same public protocol as third-party
 modules. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at minute
 boundaries, and handles previous-month, next-month, and today actions. Locale and timezone come

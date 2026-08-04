@@ -1,4 +1,5 @@
 #include "gisland/bootstrap.hpp"
+#include "gisland/module_manifest.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -42,6 +43,7 @@ read_text(const std::filesystem::path &path, BootstrapStage stage) {
 
 std::expected<RuntimeRoots, BootstrapError>
 resolve_runtime_roots(std::optional<std::string> xdg_config_home, std::optional<std::string> home,
+                      std::optional<std::string> xdg_data_home,
                       std::filesystem::path distributed_data) {
   std::filesystem::path config_home;
   if (xdg_config_home && !xdg_config_home->empty()) {
@@ -56,7 +58,20 @@ resolve_runtime_roots(std::optional<std::string> xdg_config_home, std::optional<
     return std::unexpected(bootstrap_error(BootstrapStage::environment, config_home,
                                            "configuration home must be absolute"));
   }
-  return RuntimeRoots{std::move(config_home), std::move(distributed_data)};
+  std::filesystem::path data_home;
+  if (xdg_data_home && !xdg_data_home->empty()) {
+    data_home = *xdg_data_home;
+  } else if (home && !home->empty()) {
+    data_home = std::filesystem::path{*home} / ".local/share";
+  } else {
+    return std::unexpected(
+        bootstrap_error(BootstrapStage::environment, {}, "XDG_DATA_HOME and HOME are unset"));
+  }
+  if (!data_home.is_absolute()) {
+    return std::unexpected(
+        bootstrap_error(BootstrapStage::environment, data_home, "data home must be absolute"));
+  }
+  return RuntimeRoots{std::move(config_home), std::move(data_home), std::move(distributed_data)};
 }
 
 std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap(const RuntimeRoots &roots) {
@@ -70,7 +85,9 @@ std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap(const Run
 
 std::expected<RuntimeBootstrap, BootstrapError>
 load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &config_path) {
-  auto config = load_config(config_path);
+  const auto catalog = discover_module_catalog(roots.data_home / "gisland/modules",
+                                               roots.distributed_data / "modules");
+  auto config = load_config(config_path, catalog);
   if (!config) {
     return std::unexpected(bootstrap_error(BootstrapStage::configuration, config_path,
                                            config.error().path + ": " + config.error().message));
@@ -91,19 +108,27 @@ load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &c
     return std::unexpected(bootstrap_error(BootstrapStage::theme, theme_path,
                                            theme.error().path + ": " + theme.error().message));
   }
+  std::vector<std::filesystem::path> manifest_paths;
+  for (const auto &module : config->modules) {
+    if (module.manifest_path) {
+      manifest_paths.push_back(*module.manifest_path);
+    }
+  }
   return RuntimeBootstrap{
       .config = std::move(*config),
       .theme = std::move(*theme),
       .asset_root = asset_root,
       .config_path = config_path,
       .theme_path = theme_path,
+      .manifest_paths = std::move(manifest_paths),
       .roots = roots,
   };
 }
 
 std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap_from_environment() {
-  auto roots = resolve_runtime_roots(environment_value("XDG_CONFIG_HOME"),
-                                     environment_value("HOME"), GISLAND_DISTRIBUTED_DATA_DIR);
+  auto roots =
+      resolve_runtime_roots(environment_value("XDG_CONFIG_HOME"), environment_value("HOME"),
+                            environment_value("XDG_DATA_HOME"), GISLAND_DISTRIBUTED_DATA_DIR);
   if (!roots) {
     return std::unexpected(roots.error());
   }

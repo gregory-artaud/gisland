@@ -64,8 +64,8 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
           },
       .init =
           InitMessage{
-              .minimum = {1, 0},
-              .maximum = {1, 1},
+              .minimum = config.minimum_protocol,
+              .maximum = config.maximum_protocol,
               .instance_id = config.id,
               .capabilities = std::move(capabilities),
               .configuration = config_json(config.options),

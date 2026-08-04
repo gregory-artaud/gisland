@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gisland/protocol.hpp"
 #include "gisland/scene_template.hpp"
 
 #include <chrono>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace gisland {
+
+struct ModuleCatalog;
 
 struct ConfigValue {
   using Array = std::vector<ConfigValue>;
@@ -37,7 +40,11 @@ struct ModuleTimings {
 
 struct ModuleInstanceConfig {
   std::string id;
+  std::string module_id;
+  std::optional<std::filesystem::path> manifest_path;
   std::vector<std::string> command;
+  ProtocolVersion minimum_protocol{1, 0};
+  ProtocolVersion maximum_protocol{1, 1};
   bool enabled{true};
   ConfigValue::Table options;
   RestartPolicy restart{RestartPolicy::on_failure};
@@ -74,7 +81,11 @@ struct ConfigError {
 
 [[nodiscard]] std::expected<AppConfig, ConfigError> parse_config(std::string_view text,
                                                                  std::string_view source_name);
+[[nodiscard]] std::expected<AppConfig, ConfigError>
+parse_config(std::string_view text, std::string_view source_name, const ModuleCatalog &catalog);
 
 [[nodiscard]] std::expected<AppConfig, ConfigError> load_config(const std::filesystem::path &path);
+[[nodiscard]] std::expected<AppConfig, ConfigError> load_config(const std::filesystem::path &path,
+                                                                const ModuleCatalog &catalog);
 
 } // namespace gisland

@@ -117,7 +117,8 @@ TEST_CASE("reload candidate reuses the startup config path and resolves a change
                           "[[modules]]\n"
                           "id = \"clock\"\n"
                           "command = [\"/bin/true\"]\n");
-  auto current = gisland::load_runtime_bootstrap({config_home, distributed});
+  auto current =
+      gisland::load_runtime_bootstrap({config_home, temporary.path() / "data", distributed});
   REQUIRE(current.has_value());
 
   std::ifstream default_theme{distributed / "themes/default.toml"};

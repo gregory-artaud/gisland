@@ -8,7 +8,7 @@ hover_exit_ms = 120
 
 [[modules]]
 id = "clock"
-command = ["gisland-clock-calendar"]
+module = "clock-calendar"
 enabled = true
 restart = "on-failure"
 

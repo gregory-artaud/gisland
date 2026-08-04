@@ -154,9 +154,12 @@ bool equal_template(const SceneTemplate &left, const SceneTemplate &right) {
 
 [[nodiscard]] bool equal_process_config(const ModuleInstanceConfig &left,
                                         const ModuleInstanceConfig &right) {
-  return left.command == right.command && equal_config_table(left.options, right.options) &&
-         left.restart == right.restart && equal_timings(left.timings, right.timings) &&
-         left.environment == right.environment && left.working_directory == right.working_directory;
+  return left.module_id == right.module_id && left.manifest_path == right.manifest_path &&
+         left.command == right.command && left.minimum_protocol == right.minimum_protocol &&
+         left.maximum_protocol == right.maximum_protocol &&
+         equal_config_table(left.options, right.options) && left.restart == right.restart &&
+         equal_timings(left.timings, right.timings) && left.environment == right.environment &&
+         left.working_directory == right.working_directory;
 }
 
 } // namespace

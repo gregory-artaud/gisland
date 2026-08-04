@@ -1,0 +1,22 @@
+id = "clock-calendar"
+name = "Clock and Calendar"
+description = "Localized live clock and monthly calendar"
+command = ["gisland-clock-calendar"]
+
+[protocol]
+major = 1
+minimum_minor = 1
+maximum_minor = 1
+
+[defaults]
+week_start = "monday"
+
+[options_schema.locale]
+type = "string"
+
+[options_schema.timezone]
+type = "string"
+
+[options_schema.week_start]
+type = "string"
+allowed = ["monday", "sunday"]

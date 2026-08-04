@@ -61,19 +61,22 @@ command = ["/bin/true"]
 } // namespace
 
 TEST_CASE("runtime roots follow XDG config home and HOME fallback") {
-  const auto explicit_roots = gisland::resolve_runtime_roots(
-      std::string{"/tmp/custom-config"}, std::string{"/home/user"}, "/opt/gisland");
+  const auto explicit_roots =
+      gisland::resolve_runtime_roots(std::string{"/tmp/custom-config"}, std::string{"/home/user"},
+                                     std::string{"/tmp/custom-data"}, "/opt/gisland");
   REQUIRE(explicit_roots.has_value());
   CHECK(explicit_roots->config_home == "/tmp/custom-config");
+  CHECK(explicit_roots->data_home == "/tmp/custom-data");
   CHECK(explicit_roots->distributed_data == "/opt/gisland");
 
-  const auto fallback_roots =
-      gisland::resolve_runtime_roots(std::nullopt, std::string{"/home/user"}, "/usr/share/gisland");
+  const auto fallback_roots = gisland::resolve_runtime_roots(
+      std::nullopt, std::string{"/home/user"}, std::nullopt, "/usr/share/gisland");
   REQUIRE(fallback_roots.has_value());
   CHECK(fallback_roots->config_home == "/home/user/.config");
+  CHECK(fallback_roots->data_home == "/home/user/.local/share");
 
-  const auto missing_home =
-      gisland::resolve_runtime_roots(std::nullopt, std::nullopt, "/usr/share/gisland");
+  const auto missing_home = gisland::resolve_runtime_roots(std::nullopt, std::nullopt, std::nullopt,
+                                                           "/usr/share/gisland");
   REQUIRE_FALSE(missing_home.has_value());
   CHECK(missing_home.error().stage == gisland::BootstrapStage::environment);
 }
@@ -82,7 +85,8 @@ TEST_CASE("bootstrap loads config and distributed theme before graphical startup
   TemporaryDirectory temporary;
   const auto config_home = temporary.path() / "config";
   write_file(config_home / "gisland/config.toml", config_text);
-  const gisland::RuntimeRoots roots{config_home, GISLAND_TEST_ASSET_ROOT};
+  const gisland::RuntimeRoots roots{config_home, temporary.path() / "data",
+                                    GISLAND_TEST_ASSET_ROOT};
 
   const auto bootstrap = gisland::load_runtime_bootstrap(roots);
   REQUIRE(bootstrap.has_value());
@@ -105,8 +109,8 @@ TEST_CASE("bootstrap gives a valid user theme priority over the distributed them
   user_theme.replace(accent, 7, "#112233");
   write_file(config_home / "gisland/themes/default.toml", user_theme);
 
-  const auto bootstrap =
-      gisland::load_runtime_bootstrap(gisland::RuntimeRoots{config_home, GISLAND_TEST_ASSET_ROOT});
+  const auto bootstrap = gisland::load_runtime_bootstrap(
+      gisland::RuntimeRoots{config_home, temporary.path() / "data", GISLAND_TEST_ASSET_ROOT});
   REQUIRE(bootstrap.has_value());
   CHECK(bootstrap->theme_path == config_home / "gisland/themes/default.toml");
   CHECK(bootstrap->asset_root == config_home / "gisland");
@@ -116,22 +120,24 @@ TEST_CASE("bootstrap gives a valid user theme priority over the distributed them
 TEST_CASE(
     "bootstrap uses the distributed clock-calendar configuration when user config is absent") {
   TemporaryDirectory temporary;
-  const auto bootstrap = gisland::load_runtime_bootstrap(
-      gisland::RuntimeRoots{temporary.path() / "config", GISLAND_TEST_ASSET_ROOT});
+  const auto bootstrap = gisland::load_runtime_bootstrap(gisland::RuntimeRoots{
+      temporary.path() / "config", temporary.path() / "data", GISLAND_TEST_ASSET_ROOT});
 
   REQUIRE(bootstrap.has_value());
   CHECK(bootstrap->config_path == std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml");
   CHECK(bootstrap->config.default_module == "clock");
   REQUIRE(bootstrap->config.modules.size() == 1);
+  CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
   CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
+  REQUIRE(bootstrap->manifest_paths.size() == 1);
   REQUIRE(bootstrap->config.modules.front().view.has_value());
   CHECK(bootstrap->config.modules.front().view->expanded.has_value());
 }
 
 TEST_CASE("bootstrap reports a missing config without creating graphical state") {
   TemporaryDirectory temporary;
-  const auto result = gisland::load_runtime_bootstrap(
-      gisland::RuntimeRoots{temporary.path(), temporary.path() / "distributed"});
+  const auto result = gisland::load_runtime_bootstrap(gisland::RuntimeRoots{
+      temporary.path(), temporary.path() / "data", temporary.path() / "distributed"});
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().stage == gisland::BootstrapStage::configuration);
   CHECK(result.error().path == temporary.path() / "distributed/config.toml");

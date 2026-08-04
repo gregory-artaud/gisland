@@ -111,6 +111,7 @@ add_library(
   src/layout.cpp
   src/line_buffer.cpp
   src/module_lifecycle.cpp
+  src/module_manifest.cpp
   src/module_supervisor.cpp
   src/posix_process_backend.cpp
   src/protocol.cpp
@@ -183,6 +184,7 @@ if(BUILD_TESTING)
     tests/layout_test.cpp
     tests/line_buffer_test.cpp
     tests/module_lifecycle_test.cpp
+    tests/module_manifest_test.cpp
     tests/module_supervisor_test.cpp
     tests/posix_process_backend_test.cpp
     tests/protocol_serialization_test.cpp
@@ -327,6 +329,7 @@ set(
   include/gisland/layout.hpp
   include/gisland/line_buffer.hpp
   include/gisland/module_lifecycle.hpp
+  include/gisland/module_manifest.hpp
   include/gisland/module_supervisor.hpp
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
@@ -357,6 +360,7 @@ set(
   src/line_buffer.cpp
   src/main.cpp
   src/module_lifecycle.cpp
+  src/module_manifest.cpp
   src/module_supervisor.cpp
   src/posix_process_backend.cpp
   src/protocol.cpp
@@ -387,6 +391,7 @@ set(
   tests/layout_test.cpp
   tests/line_buffer_test.cpp
   tests/module_lifecycle_test.cpp
+  tests/module_manifest_test.cpp
   tests/module_supervisor_test.cpp
   tests/posix_process_backend_test.cpp
   tests/protocol_serialization_test.cpp
