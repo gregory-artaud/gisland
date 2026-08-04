@@ -122,7 +122,8 @@ TEST_CASE("control responses parse back into typed values and reject malformed e
   const gisland::ControlResponse original{gisland::ControlStatus{
       .mode = gisland::IslandMode::compact,
       .active_context = gisland::ActiveContextStatus{"clock", "configured", 0},
-      .modules = {{"clock", gisland::ControlModuleState::running, true}},
+      .modules = {{"clock", gisland::ControlModuleState::running, true},
+                  {"weather", gisland::ControlModuleState::disabled, false}},
       .socket = "/run/user/1000/gisland.sock",
   }};
   const auto parsed =
@@ -131,7 +132,8 @@ TEST_CASE("control responses parse back into typed values and reject malformed e
   const auto &status = std::get<gisland::ControlStatus>(parsed->value());
   CHECK(status.mode == gisland::IslandMode::compact);
   CHECK(status.modules == std::vector<gisland::ModuleControlStatus>{
-                              {"clock", gisland::ControlModuleState::running, true}});
+                              {"clock", gisland::ControlModuleState::running, true},
+                              {"weather", gisland::ControlModuleState::disabled, false}});
 
   for (const std::string &record : {
            std::string{"{}"},

@@ -42,16 +42,16 @@ constexpr std::chrono::milliseconds maximum_duration = 24h;
 
 [[nodiscard]] std::expected<Json, ControlError> parse_json(std::string_view line) {
   bool duplicate = false;
-  std::vector<std::set<std::string>> keys;
-  const auto callback = [&duplicate, &keys](int depth, Json::parse_event_t event, Json &parsed) {
-    const auto index = static_cast<std::size_t>(std::max(depth, 0));
-    if (keys.size() <= index) {
-      keys.resize(index + 1);
-    }
+  std::vector<std::set<std::string>> object_keys;
+  const auto callback = [&duplicate, &object_keys](int /*depth*/, Json::parse_event_t event,
+                                                   Json &parsed) {
     if (event == Json::parse_event_t::object_start) {
-      keys[index].clear();
+      object_keys.emplace_back();
     } else if (event == Json::parse_event_t::key) {
-      duplicate = !keys[index].insert(parsed.get<std::string>()).second || duplicate;
+      duplicate = object_keys.empty() ||
+                  !object_keys.back().insert(parsed.get<std::string>()).second || duplicate;
+    } else if (event == Json::parse_event_t::object_end && !object_keys.empty()) {
+      object_keys.pop_back();
     }
     return true;
   };
