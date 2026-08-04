@@ -4,6 +4,7 @@
 #include "gisland/context.hpp"
 #include "gisland/island.hpp"
 #include "gisland/module_supervisor.hpp"
+#include "gisland/reload.hpp"
 #include "gisland/scene_template.hpp"
 
 #include <cstdint>
@@ -56,6 +57,17 @@ struct RuntimeModuleStatus {
   bool operator==(const RuntimeModuleStatus &) const = default;
 };
 
+struct PreparedRuntimeReload {
+  ContextArbiter arbiter;
+  std::vector<std::pair<std::string, bool>> configured_instances;
+  std::map<std::string, ModuleState> module_states;
+  std::map<std::string, ModuleViewState> views;
+  std::vector<std::string> enabled_instances;
+  std::set<std::string> ready_instances;
+  std::map<std::string, Visibility> visibility;
+  std::uint64_t revision;
+};
+
 [[nodiscard]] ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
                                                            std::string locale,
                                                            std::string timezone);
@@ -72,6 +84,9 @@ public:
   [[nodiscard]] std::expected<ContextKey, RuntimeError> dismiss_active(std::string_view context_id,
                                                                        MonotonicTime now);
   [[nodiscard]] std::vector<RuntimeModuleStatus> module_statuses(MonotonicTime now);
+  [[nodiscard]] std::expected<PreparedRuntimeReload, RuntimeError>
+  prepare_reload(const ReloadPlan &plan) const;
+  void commit_reload(PreparedRuntimeReload prepared) noexcept;
   void reject(const ContextKey &key);
   [[nodiscard]] std::vector<VisibilityUpdate> visibility_updates(MonotonicTime now,
                                                                  IslandMode mode);

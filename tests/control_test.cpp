@@ -17,6 +17,7 @@ TEST_CASE("control requests parse into exact typed commands") {
       {R"({"version":1,"command":"toggle"})", gisland::ToggleControl{}},
       {R"({"version":1,"command":"status"})", gisland::StatusControl{}},
       {R"({"version":1,"command":"modules"})", gisland::ModulesControl{}},
+      {R"({"version":1,"command":"reload"})", gisland::ReloadControl{}},
       {R"({"version":1,"command":"module-restart","instance":"clock"})",
        gisland::RestartModuleControl{"clock"}},
       {R"({"version":1,"command":"activate","instance":"clock"})",
@@ -158,6 +159,10 @@ TEST_CASE("gislandctl grammar parses commands and bounded durations") {
   REQUIRE(restart.has_value());
   CHECK(std::get<gisland::RestartModuleControl>(restart->command).instance_id == "clock");
 
+  const auto reload = gisland::parse_control_arguments({"reload"});
+  REQUIRE(reload.has_value());
+  CHECK(std::holds_alternative<gisland::ReloadControl>(reload->command));
+
   for (const auto &[value, duration] :
        std::vector<std::pair<std::string, std::chrono::milliseconds>>{
            {"1ms", 1ms}, {"5s", 5s}, {"2m", 2min}, {"24h", 24h}}) {
@@ -169,7 +174,7 @@ TEST_CASE("gislandctl grammar parses commands and bounded durations") {
 
   for (const std::vector<std::string> &arguments : {
            std::vector<std::string>{},
-           {"reload"},
+           {"reload", "extra"},
            {"open", "--json"},
            {"module", "restart"},
            {"activate", "clock", "--duration", "0s"},

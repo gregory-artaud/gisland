@@ -115,6 +115,7 @@ add_library(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp
+  src/reload.cpp
   src/runtime.cpp
   src/scene.cpp
   src/scene_template.cpp
@@ -186,6 +187,7 @@ if(BUILD_TESTING)
     tests/posix_process_backend_test.cpp
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
+    tests/reload_test.cpp
     tests/runtime_test.cpp
     tests/scene_test.cpp
     tests/scene_template_test.cpp
@@ -329,6 +331,7 @@ set(
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
+  include/gisland/reload.hpp
   include/gisland/runtime.hpp
   include/gisland/scene.hpp
   include/gisland/scene_template.hpp
@@ -358,6 +361,7 @@ set(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp
+  src/reload.cpp
   src/runtime.cpp
   src/scene.cpp
   src/scene_template.cpp
@@ -387,6 +391,7 @@ set(
   tests/posix_process_backend_test.cpp
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
+  tests/reload_test.cpp
   tests/runtime_test.cpp
   tests/raylib_renderer_test.cpp
   tests/scene_test.cpp

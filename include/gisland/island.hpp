@@ -37,6 +37,7 @@ public:
                                120});
   void update(bool hovered, float delta_seconds);
   void collapse();
+  void set_exit_tolerance(std::chrono::milliseconds exit_tolerance);
   [[nodiscard]] IslandMode mode() const;
 
 private:
@@ -56,6 +57,7 @@ public:
   [[nodiscard]] std::expected<void, ModeControlError> open(bool has_expanded);
   void close();
   [[nodiscard]] std::expected<void, ModeControlError> toggle(bool has_expanded);
+  void set_exit_tolerance(std::chrono::milliseconds exit_tolerance);
   [[nodiscard]] IslandMode mode() const;
 
 private:

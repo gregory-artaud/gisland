@@ -65,6 +65,11 @@ std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap(const Run
   const auto config_path = std::filesystem::is_regular_file(user_config, filesystem_error)
                                ? user_config
                                : roots.distributed_data / "config.toml";
+  return load_runtime_bootstrap(roots, config_path);
+}
+
+std::expected<RuntimeBootstrap, BootstrapError>
+load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &config_path) {
   auto config = load_config(config_path);
   if (!config) {
     return std::unexpected(bootstrap_error(BootstrapStage::configuration, config_path,
@@ -73,6 +78,7 @@ std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap(const Run
 
   const auto user_theme = roots.config_home / "gisland/themes" / (config->theme + ".toml");
   const auto distributed_theme = roots.distributed_data / "themes" / (config->theme + ".toml");
+  std::error_code filesystem_error;
   const bool has_user_theme = std::filesystem::is_regular_file(user_theme, filesystem_error);
   const auto theme_path = has_user_theme ? user_theme : distributed_theme;
   const auto asset_root = has_user_theme ? roots.config_home / "gisland" : roots.distributed_data;
@@ -91,6 +97,7 @@ std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap(const Run
       .asset_root = asset_root,
       .config_path = config_path,
       .theme_path = theme_path,
+      .roots = roots,
   };
 }
 

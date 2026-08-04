@@ -203,3 +203,52 @@ TEST_CASE("control dispatcher correlates pending restart generations") {
   CHECK(error(dispatcher.dispatch(gisland::RestartModuleControl{"disabled"}, now)).code ==
         gisland::ControlErrorCode::unavailable_instance);
 }
+
+TEST_CASE(
+    "control dispatcher reports reload rejection and exposes successful mutation immediately") {
+  const gisland::MonotonicTime now{};
+  auto application = config();
+  gisland::RuntimeCoordinator runtime{application};
+  gisland::OverlayModeController mode;
+  bool reject = true;
+  gisland::ControlDispatcher dispatcher{
+      runtime, mode,
+      [](std::string, std::uint64_t) -> std::expected<void, gisland::SupervisorCommandError> {
+        return {};
+      },
+      "/tmp/gisland.sock",
+      [&](gisland::MonotonicTime) -> std::expected<void, std::string> {
+        if (reject) {
+          return std::unexpected("candidate configuration is invalid");
+        }
+        auto candidate = application;
+        candidate.modules[2].enabled = true;
+        candidate.modules = {candidate.modules[2], candidate.modules[0], candidate.modules[1]};
+        const auto plan = gisland::plan_reload(application, candidate, "C", "UTC");
+        if (!plan) {
+          return std::unexpected(plan.error().message);
+        }
+        auto prepared = runtime.prepare_reload(*plan);
+        if (!prepared) {
+          return std::unexpected(prepared.error().message);
+        }
+        runtime.commit_reload(std::move(*prepared));
+        application = std::move(candidate);
+        return {};
+      }};
+
+  const auto rejected = dispatcher.dispatch(gisland::ReloadControl{}, now);
+  REQUIRE(std::holds_alternative<gisland::ControlError>(rejected.value()));
+  CHECK(error(rejected).code == gisland::ControlErrorCode::reload_rejected);
+  CHECK(error(rejected).message == "candidate configuration is invalid");
+  CHECK(runtime.module_statuses(now)[0].id == "clock");
+
+  reject = false;
+  CHECK(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::ReloadControl{}, now).value()));
+  const auto status =
+      std::get<gisland::ControlStatus>(dispatcher.dispatch(gisland::StatusControl{}, now).value());
+  REQUIRE(status.modules.size() == 3);
+  CHECK(status.modules[0] ==
+        gisland::ModuleControlStatus{"disabled", gisland::ControlModuleState::stopped, false});
+}

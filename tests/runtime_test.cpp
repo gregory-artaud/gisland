@@ -285,3 +285,110 @@ TEST_CASE("runtime module snapshots retain configured order state and availabili
   CHECK(modules[2] ==
         gisland::RuntimeModuleStatus{"disabled", false, gisland::ModuleState::stopped, false});
 }
+
+TEST_CASE(
+    "runtime reload preserves unchanged state and removes affected state in candidate order") {
+  using namespace std::chrono_literals;
+  auto current = config();
+  gisland::RuntimeCoordinator runtime{current};
+  const auto now = gisland::MonotonicTime{} + 5s;
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+  REQUIRE(
+      runtime
+          .consume(message("status",
+                           gisland::PublishMessage{
+                               "alert", 10, std::nullopt,
+                               gisland::SceneNode{gisland::Text{"Warning", "body"}}, std::nullopt},
+                           now))
+          .has_value());
+  REQUIRE(runtime
+              .consume(gisland::StateChangedEvent{
+                  "clock", gisland::StateTransition{gisland::ModuleState::starting,
+                                                    gisland::ModuleState::running,
+                                                    gisland::StopCause::requested, now}})
+              .has_value());
+  REQUIRE(runtime.activate("clock", 10s, now).has_value());
+
+  auto candidate = current;
+  candidate.default_module = "disabled";
+  candidate.modules[1].command = {"new-status-module"};
+  candidate.modules[2].enabled = true;
+  candidate.modules = {candidate.modules[2], candidate.modules[0], candidate.modules[1]};
+  const auto plan = gisland::plan_reload(current, candidate, "C", "UTC");
+  REQUIRE(plan.has_value());
+  auto prepared = runtime.prepare_reload(*plan);
+  REQUIRE(prepared.has_value());
+  runtime.commit_reload(std::move(*prepared));
+
+  const auto modules = runtime.module_statuses(now + 1s);
+  REQUIRE(modules.size() == 3);
+  CHECK(modules[0] ==
+        gisland::RuntimeModuleStatus{"disabled", true, gisland::ModuleState::stopped, false});
+  CHECK(modules[1] ==
+        gisland::RuntimeModuleStatus{"clock", true, gisland::ModuleState::running, true});
+  CHECK(modules[2] ==
+        gisland::RuntimeModuleStatus{"status", true, gisland::ModuleState::stopped, false});
+  REQUIRE(runtime.active(now + 1s).context != nullptr);
+  CHECK(runtime.active(now + 1s).context->key == gisland::ContextKey{"clock", "configured"});
+
+  REQUIRE(runtime.consume(gisland::ContextsRemovedEvent{"status", now + 2s}).has_value());
+  CHECK(runtime.module_statuses(now + 2s)[2].available == false);
+}
+
+TEST_CASE("runtime preflights view reloads from retained snapshots without mutating on rejection") {
+  auto current = config();
+  gisland::RuntimeCoordinator runtime{current};
+  const auto now = gisland::MonotonicTime{} + std::chrono::seconds{6};
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+
+  auto invalid_candidate = current;
+  invalid_candidate.modules[0].view = gisland::ModuleInstanceConfig::View{
+      .compact = text_template("missing"), .expanded = text_template("details")};
+  const auto invalid_plan = gisland::plan_reload(current, invalid_candidate, "C", "UTC");
+  REQUIRE(invalid_plan.has_value());
+  CHECK_FALSE(runtime.prepare_reload(*invalid_plan).has_value());
+  REQUIRE(runtime.active(now).context != nullptr);
+  CHECK(text(runtime.active(now).context->compact).value == "12:34");
+
+  auto candidate = current;
+  candidate.modules[0].view = gisland::ModuleInstanceConfig::View{
+      .compact = text_template("details"), .expanded = text_template("details")};
+  const auto plan = gisland::plan_reload(current, candidate, "C", "UTC");
+  REQUIRE(plan.has_value());
+  auto prepared = runtime.prepare_reload(*plan);
+  REQUIRE(prepared.has_value());
+  runtime.commit_reload(std::move(*prepared));
+  REQUIRE(runtime.active(now).context != nullptr);
+  CHECK(text(runtime.active(now).context->compact).value == "Monday");
+}
+
+TEST_CASE("runtime view removal discards only the configured snapshot context") {
+  auto current = config();
+  gisland::RuntimeCoordinator runtime{current};
+  const gisland::MonotonicTime now{};
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+
+  auto candidate = current;
+  candidate.modules[0].view.reset();
+  const auto plan = gisland::plan_reload(current, candidate, "C", "UTC");
+  REQUIRE(plan.has_value());
+  auto prepared = runtime.prepare_reload(*plan);
+  REQUIRE(prepared.has_value());
+  runtime.commit_reload(std::move(*prepared));
+  CHECK(runtime.active(now).context == nullptr);
+}

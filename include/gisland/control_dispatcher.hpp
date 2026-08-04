@@ -14,11 +14,13 @@ namespace gisland {
 
 using RestartRequest = std::function<std::expected<void, SupervisorCommandError>(
     std::string instance_id, std::uint64_t generation)>;
+using ReloadRequest = std::function<std::expected<void, std::string>(MonotonicTime now)>;
 
 class ControlDispatcher final {
 public:
   ControlDispatcher(RuntimeCoordinator &runtime, OverlayModeController &mode,
-                    RestartRequest request_restart, std::string socket_path);
+                    RestartRequest request_restart, std::string socket_path,
+                    ReloadRequest request_reload = {});
 
   [[nodiscard]] ControlResponse dispatch(const ControlCommand &command, MonotonicTime now);
   void consume(const RestartCompletedEvent &event);
@@ -31,6 +33,7 @@ private:
   RuntimeCoordinator &runtime_;
   OverlayModeController &mode_;
   RestartRequest request_restart_;
+  ReloadRequest request_reload_;
   std::string socket_path_;
   std::uint64_t next_restart_generation_{1};
   std::map<std::string, std::uint64_t> pending_restarts_;

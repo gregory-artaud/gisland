@@ -65,10 +65,14 @@ struct SendCommand {
   CoreMessage message;
 };
 
+struct ReconfigureCommand {
+  SupervisorReconfiguration reconfiguration;
+};
+
 struct ShutdownCommand {};
 
-using Command =
-    std::variant<StartCommand, StopCommand, RestartCommand, SendCommand, ShutdownCommand>;
+using Command = std::variant<StartCommand, StopCommand, RestartCommand, SendCommand,
+                             ReconfigureCommand, ShutdownCommand>;
 
 [[nodiscard]] StopCause stop_cause(const ExitStatus &status) {
   if (status.kind == ExitKind::signaled) {
@@ -109,6 +113,7 @@ struct Instance {
   bool ready{false};
   bool restart_after_stop{false};
   std::optional<std::uint64_t> restart_generation;
+  std::optional<ModuleStartRequest> replacement_request;
   bool contexts_removed{true};
   bool stdout_eof{false};
   bool stderr_eof{false};
@@ -265,6 +270,8 @@ private:
               handle_restart(typed_command.instance_id, typed_command.generation, now);
             } else if constexpr (std::is_same_v<Type, SendCommand>) {
               handle_send(typed_command.instance_id, typed_command.message, now);
+            } else if constexpr (std::is_same_v<Type, ReconfigureCommand>) {
+              handle_reconfigure(std::move(typed_command.reconfiguration), now);
             } else {
               begin_global_shutdown(now);
             }
@@ -400,11 +407,87 @@ private:
     }
   }
 
+  void cancel_restart(Instance &instance, MonotonicTime now) {
+    instance.restart_after_stop = false;
+    complete_restart(instance, false, instance.lifecycle.state(), now);
+  }
+
+  void start_replacement_if_quiescent(const std::string &instance_id, MonotonicTime now) {
+    const auto existing = instances_.find(instance_id);
+    if (existing == instances_.end() || existing->second->process.has_value() ||
+        !existing->second->replacement_request ||
+        (existing->second->lifecycle.state() != ModuleState::stopped &&
+         existing->second->lifecycle.state() != ModuleState::failed)) {
+      return;
+    }
+    // Presence is established immediately above before ownership moves to the new instance.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    auto request = std::move(*existing->second->replacement_request);
+    instances_.erase(existing);
+    handle_start(std::move(request), now);
+  }
+
+  void erase_pending_reconfiguration_start(const std::string &instance_id) {
+    std::erase_if(pending_reconfiguration_starts_, [&instance_id](const auto &request) {
+      return request.instance_id == instance_id;
+    });
+  }
+
+  void queue_or_start_reconfiguration(ModuleStartRequest request, MonotonicTime now) {
+    const auto pending = std::ranges::find(pending_reconfiguration_starts_, request.instance_id,
+                                           &ModuleStartRequest::instance_id);
+    if (pending != pending_reconfiguration_starts_.end()) {
+      *pending = std::move(request);
+      return;
+    }
+    if (active_instance_count() >= ModuleSupervisor::maximum_instances) {
+      pending_reconfiguration_starts_.push_back(std::move(request));
+      return;
+    }
+    handle_start(std::move(request), now);
+  }
+
+  void start_pending_reconfiguration(MonotonicTime now) {
+    while (!global_shutdown_ && !pending_reconfiguration_starts_.empty() &&
+           active_instance_count() < ModuleSupervisor::maximum_instances) {
+      auto request = std::move(pending_reconfiguration_starts_.front());
+      pending_reconfiguration_starts_.pop_front();
+      handle_start(std::move(request), now);
+    }
+  }
+
+  void handle_reconfigure(SupervisorReconfiguration reconfiguration, MonotonicTime now) {
+    for (const auto &instance_id : reconfiguration.stop_instances) {
+      erase_pending_reconfiguration_start(instance_id);
+      const auto existing = instances_.find(instance_id);
+      if (existing == instances_.end()) {
+        continue;
+      }
+      cancel_restart(*existing->second, now);
+      existing->second->replacement_request.reset();
+      handle_stop(instance_id, now, false);
+    }
+
+    for (auto &request : reconfiguration.start_or_replace) {
+      const std::string instance_id = request.instance_id;
+      const auto existing = instances_.find(instance_id);
+      if (existing == instances_.end()) {
+        queue_or_start_reconfiguration(std::move(request), now);
+        continue;
+      }
+      cancel_restart(*existing->second, now);
+      existing->second->replacement_request = std::move(request);
+      handle_stop(instance_id, now, false);
+      start_replacement_if_quiescent(instance_id, now);
+    }
+  }
+
   void begin_global_shutdown(MonotonicTime now) {
     if (global_shutdown_) {
       return;
     }
     global_shutdown_ = true;
+    pending_reconfiguration_starts_.clear();
     for (auto &[instance_id, instance] : instances_) {
       static_cast<void>(instance_id);
       handle_stop(instance->request.instance_id, now, false);
@@ -680,7 +763,27 @@ private:
     }
   }
 
+  void handle_reaped_instance(Instance &instance, std::vector<std::string> &replacements,
+                              MonotonicTime now) {
+    if (instance.replacement_request && instance.lifecycle.state() == ModuleState::stopped) {
+      replacements.push_back(instance.request.instance_id);
+      return;
+    }
+    if (instance.restart_after_stop && !global_shutdown_ &&
+        instance.lifecycle.state() == ModuleState::stopped) {
+      instance.restart_after_stop = false;
+      start_existing(instance, now);
+    }
+    if (global_shutdown_ && instance.lifecycle.state() == ModuleState::backoff) {
+      const auto stopped = instance.lifecycle.stop(now);
+      if (stopped.has_value()) {
+        emit_transition(instance, *stopped);
+      }
+    }
+  }
+
   void reap_instances(MonotonicTime now) {
+    std::vector<std::string> replacements;
     for (auto &[instance_id, instance_pointer] : instances_) {
       static_cast<void>(instance_id);
       auto &instance = *instance_pointer;
@@ -712,19 +815,12 @@ private:
           ProcessExitedEvent{instance.request.instance_id, pid, exit_status, effective_cause, now});
       emit_transitions(instance, transitions);
       instance.process.reset();
-
-      if (instance.restart_after_stop && !global_shutdown_ &&
-          instance.lifecycle.state() == ModuleState::stopped) {
-        instance.restart_after_stop = false;
-        start_existing(instance, now);
-      }
-      if (global_shutdown_ && instance.lifecycle.state() == ModuleState::backoff) {
-        const auto stopped = instance.lifecycle.stop(now);
-        if (stopped.has_value()) {
-          emit_transition(instance, *stopped);
-        }
-      }
+      handle_reaped_instance(instance, replacements, now);
     }
+    for (const auto &instance_id : replacements) {
+      start_replacement_if_quiescent(instance_id, now);
+    }
+    start_pending_reconfiguration(now);
   }
 
   void handle_protocol_line(Instance &instance, const std::string &line, MonotonicTime now) {
@@ -990,6 +1086,7 @@ private:
 
   ProcessBackend backend_;
   std::map<std::string, std::unique_ptr<Instance>> instances_;
+  std::deque<ModuleStartRequest> pending_reconfiguration_starts_;
   int wake_descriptor_{-1};
   std::jthread thread_;
   bool global_shutdown_{false};
@@ -1038,6 +1135,23 @@ std::expected<void, SupervisorCommandError> ModuleSupervisor::send(std::string i
     return std::unexpected(SupervisorCommandError::invalid_request);
   }
   return implementation_->enqueue(SendCommand{std::move(instance_id), std::move(message)});
+}
+
+std::expected<void, SupervisorCommandError>
+ModuleSupervisor::reconfigure(SupervisorReconfiguration reconfiguration) {
+  std::set<std::string, std::less<>> instance_ids;
+  for (const auto &instance_id : reconfiguration.stop_instances) {
+    if (instance_id.empty() || !instance_ids.insert(instance_id).second) {
+      return std::unexpected(SupervisorCommandError::invalid_request);
+    }
+  }
+  for (const auto &request : reconfiguration.start_or_replace) {
+    if (request.instance_id.empty() || request.process.argv.empty() ||
+        request.process.argv.front().empty() || !instance_ids.insert(request.instance_id).second) {
+      return std::unexpected(SupervisorCommandError::invalid_request);
+    }
+  }
+  return implementation_->enqueue(ReconfigureCommand{std::move(reconfiguration)});
 }
 
 std::vector<SupervisorEvent> ModuleSupervisor::drain_events() {

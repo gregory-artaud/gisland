@@ -39,6 +39,7 @@ public:
   void publish(PublishedContext context, MonotonicTime now);
   void dismiss(const ContextKey &key);
   void dismiss_instance(std::string_view instance_id);
+  void set_default(ContextKey default_context);
   [[nodiscard]] std::expected<ContextKey, ContextActivationError>
   activate(std::string_view instance_id, std::optional<MonotonicTime> deadline, MonotonicTime now);
   [[nodiscard]] bool dismiss_active(std::string_view context_id, MonotonicTime now);

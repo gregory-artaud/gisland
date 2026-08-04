@@ -152,6 +152,7 @@ selects this module and its declarative compact and expanded templates. A user
 ./build/dev/gislandctl status
 ./build/dev/gislandctl status --json
 ./build/dev/gislandctl modules
+./build/dev/gislandctl reload
 ./build/dev/gislandctl module restart clock
 ./build/dev/gislandctl activate clock
 ./build/dev/gislandctl activate clock --duration 5s
@@ -159,8 +160,19 @@ selects this module and its declarative compact and expanded templates. A user
 ```
 
 Durations accept positive integer `ms`, `s`, `m`, or `h` units up to 24 hours. Scripts should use
-`status --json`; its result has `format_version: 1`. The control plane intentionally has no `reload`
-command yet. Hot reload remains a separate delivery increment.
+`status --json`; its result has `format_version: 1`.
+
+`reload` explicitly rereads the configuration path selected at startup and resolves the selected
+theme from the same user and distributed roots. It is transactional through configuration, theme,
+font, active layout, render-resource, monitor-placement, and supervisor-queue preflight. A rejection
+returns `reload_rejected` and leaves the running configuration, visible frame, and module processes
+unchanged.
+
+Unchanged module processes retain their PID and runtime state. Compact or expanded template-only
+changes reuse the latest successful data snapshot without restarting the module. Changes to command,
+options, restart policy, lifecycle timings, environment, or working directory gracefully replace the
+affected process. Added and enabled modules start; removed and disabled modules stop. gisland does not
+watch files or reload automatically.
 
 ## Repository Layout
 

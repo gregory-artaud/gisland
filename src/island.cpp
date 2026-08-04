@@ -132,6 +132,10 @@ HoverController::HoverController(std::chrono::milliseconds exit_tolerance)
     : exit_tolerance_seconds_(
           std::max(std::chrono::duration<float>{exit_tolerance}.count(), 0.0F)) {}
 
+void HoverController::set_exit_tolerance(std::chrono::milliseconds exit_tolerance) {
+  exit_tolerance_seconds_ = std::max(std::chrono::duration<float>{exit_tolerance}.count(), 0.0F);
+}
+
 void HoverController::update(bool hovered, float delta_seconds) {
   if (hovered) {
     mode_ = IslandMode::expanded;
@@ -200,6 +204,10 @@ std::expected<void, ModeControlError> OverlayModeController::toggle(bool has_exp
 
 IslandMode OverlayModeController::mode() const {
   return explicit_open_ ? IslandMode::expanded : hover_.mode();
+}
+
+void OverlayModeController::set_exit_tolerance(std::chrono::milliseconds exit_tolerance) {
+  hover_.set_exit_tolerance(exit_tolerance);
 }
 
 std::vector<IslandMaskRow> rounded_mask_rows(const IslandGeometry &geometry) {

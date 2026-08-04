@@ -22,6 +22,11 @@ struct ModuleStartRequest {
   ModuleTimings timings;
 };
 
+struct SupervisorReconfiguration {
+  std::vector<std::string> stop_instances;
+  std::vector<ModuleStartRequest> start_or_replace;
+};
+
 struct StateChangedEvent {
   std::string instance_id;
   StateTransition transition;
@@ -107,6 +112,8 @@ public:
                                                                     std::uint64_t generation);
   [[nodiscard]] std::expected<void, SupervisorCommandError> send(std::string instance_id,
                                                                  CoreMessage message);
+  [[nodiscard]] std::expected<void, SupervisorCommandError>
+  reconfigure(SupervisorReconfiguration reconfiguration);
 
   [[nodiscard]] std::vector<SupervisorEvent> drain_events();
   [[nodiscard]] std::vector<SupervisorEvent> wait_for_events(std::chrono::milliseconds timeout);

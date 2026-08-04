@@ -536,6 +536,95 @@ TEST_CASE("explicit restart completion is correlated with its generation") {
   stop_and_wait(supervisor, events, "ready");
 }
 
+TEST_CASE(
+    "grouped supervisor reconfiguration preserves unchanged processes and replaces in order") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("stable", "ready")).has_value());
+  REQUIRE(supervisor.start(fake_request("changed", "ready")).has_value());
+  REQUIRE(supervisor.start(fake_request("removed", "ready")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "stable", gisland::ModuleState::running) &&
+           has_state(observed, "changed", gisland::ModuleState::running) &&
+           has_state(observed, "removed", gisland::ModuleState::running);
+  });
+  const auto stable_started = event_index(events, [](const auto &event) {
+    const auto *started = std::get_if<gisland::ProcessStartedEvent>(&event);
+    return started != nullptr && started->instance_id == "stable";
+  });
+  REQUIRE(stable_started.has_value());
+  const std::size_t stable_started_index = stable_started.value_or(events.size());
+  const pid_t stable_pid = std::get<gisland::ProcessStartedEvent>(events[stable_started_index]).pid;
+
+  REQUIRE(supervisor
+              .reconfigure(gisland::SupervisorReconfiguration{
+                  .stop_instances = {"removed"},
+                  .start_or_replace = {fake_request("changed", "ready"),
+                                       fake_request("added", "ready")},
+              })
+              .has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return count_events<gisland::ProcessStartedEvent>(observed, "changed") == 2 &&
+           has_state(observed, "added", gisland::ModuleState::running) &&
+           has_state(observed, "removed", gisland::ModuleState::stopped);
+  });
+
+  CHECK(count_events<gisland::ProcessStartedEvent>(events, "stable") == 1);
+  CHECK(std::get<gisland::ProcessStartedEvent>(events[stable_started_index]).pid == stable_pid);
+  CHECK(count_events<gisland::ContextsRemovedEvent>(events, "stable") == 0);
+  const auto changed_exit = event_index(events, [](const auto &event) {
+    const auto *exited = std::get_if<gisland::ProcessExitedEvent>(&event);
+    return exited != nullptr && exited->instance_id == "changed";
+  });
+  const auto changed_replacement = event_index(events, [](const auto &event) {
+    const auto *started = std::get_if<gisland::ProcessStartedEvent>(&event);
+    return started != nullptr && started->instance_id == "changed";
+  });
+  REQUIRE(changed_exit.has_value());
+  REQUIRE(changed_replacement.has_value());
+  const std::size_t changed_replacement_index = changed_replacement.value_or(events.size());
+  const auto second_changed_start = std::ranges::find_if(
+      events.begin() + static_cast<std::ptrdiff_t>(changed_replacement_index + 1), events.end(),
+      [](const auto &event) {
+        const auto *started = std::get_if<gisland::ProcessStartedEvent>(&event);
+        return started != nullptr && started->instance_id == "changed";
+      });
+  REQUIRE(second_changed_start != events.end());
+  CHECK(changed_exit.value_or(events.size()) <
+        static_cast<std::size_t>(std::distance(events.begin(), second_changed_start)));
+  supervisor.shutdown();
+}
+
+TEST_CASE("grouped supervisor reconfiguration cancels an affected explicit restart") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("changed", "ready")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "changed", gisland::ModuleState::running);
+  });
+
+  REQUIRE(supervisor.restart("changed", 91).has_value());
+  REQUIRE(supervisor
+              .reconfigure(gisland::SupervisorReconfiguration{
+                  .stop_instances = {},
+                  .start_or_replace = {fake_request("changed", "ready")},
+              })
+              .has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return std::ranges::any_of(observed,
+                               [](const auto &event) {
+                                 const auto *completed =
+                                     std::get_if<gisland::RestartCompletedEvent>(&event);
+                                 return completed != nullptr &&
+                                        completed->instance_id == "changed" &&
+                                        completed->generation == 91 && !completed->succeeded;
+                               }) &&
+           count_events<gisland::ProcessStartedEvent>(observed, "changed") == 2 &&
+           has_state(observed, "changed", gisland::ModuleState::running);
+  });
+  supervisor.shutdown();
+}
+
 TEST_CASE("outbound saturation terminates an unresponsive module without blocking caller") {
   gisland::ModuleSupervisor supervisor;
   EventLog events;
@@ -668,4 +757,35 @@ TEST_CASE(
     CHECK(::waitpid(pid, nullptr, WNOHANG) == -1);
     CHECK(errno == ECHILD);
   }
+}
+
+TEST_CASE("grouped reconfiguration defers additions until stopping capacity is released") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  for (std::size_t index = 0; index < gisland::ModuleSupervisor::maximum_instances; ++index) {
+    REQUIRE(
+        supervisor.start(fake_request("capacity-" + std::to_string(index), "ready")).has_value());
+  }
+  collect_until(
+      supervisor, events,
+      [](const auto &observed) {
+        return count_events<gisland::ProcessStartedEvent>(observed, "capacity-31") == 1;
+      },
+      5s);
+
+  REQUIRE(supervisor
+              .reconfigure(gisland::SupervisorReconfiguration{
+                  .stop_instances = {"capacity-0"},
+                  .start_or_replace = {fake_request("capacity-added", "ready")},
+              })
+              .has_value());
+  collect_until(
+      supervisor, events,
+      [](const auto &observed) {
+        return has_state(observed, "capacity-0", gisland::ModuleState::stopped) &&
+               has_state(observed, "capacity-added", gisland::ModuleState::running);
+      },
+      5s);
+  CHECK(count_events<gisland::ProcessStartedEvent>(events, "capacity-added") == 1);
+  supervisor.shutdown();
 }

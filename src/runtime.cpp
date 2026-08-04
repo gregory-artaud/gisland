@@ -1,6 +1,7 @@
 #include "gisland/runtime.hpp"
 
 #include <chrono>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -199,7 +200,7 @@ RuntimeCoordinator::dismiss_active(std::string_view context_id, MonotonicTime no
     return std::unexpected(
         runtime_error(RuntimeErrorCode::unknown_context, "", "active context does not match"));
   }
-  const ContextKey key = selected->key;
+  ContextKey key = selected->key;
   static_cast<void>(arbiter_.dismiss_active(context_id, now));
   ++revision_;
   return key;
@@ -216,6 +217,107 @@ std::vector<RuntimeModuleStatus> RuntimeCoordinator::module_statuses(MonotonicTi
                       .available = enabled && arbiter_.available(instance_id, now)});
   }
   return result;
+}
+
+std::expected<PreparedRuntimeReload, RuntimeError>
+// Reload preflight intentionally stages every preserved and replaced runtime collection together.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+RuntimeCoordinator::prepare_reload(const ReloadPlan &plan) const {
+  PreparedRuntimeReload prepared{
+      .arbiter = arbiter_,
+      .configured_instances = {},
+      .module_states = {},
+      .views = {},
+      .enabled_instances = {},
+      .ready_instances = ready_instances_,
+      .visibility = visibility_,
+      .revision = revision_ + 1,
+  };
+  prepared.configured_instances.reserve(plan.candidate.modules.size());
+  prepared.enabled_instances.reserve(plan.candidate.modules.size());
+  for (const auto &change : plan.changes) {
+    if (change.kind == ModuleReloadKind::unchanged ||
+        change.kind == ModuleReloadKind::view_updated) {
+      continue;
+    }
+    prepared.arbiter.dismiss_instance(change.instance_id);
+    prepared.ready_instances.erase(change.instance_id);
+    prepared.visibility.erase(change.instance_id);
+  }
+
+  for (const auto &module : plan.candidate.modules) {
+    prepared.configured_instances.emplace_back(module.id, module.enabled);
+    if (!module.enabled) {
+      continue;
+    }
+    prepared.enabled_instances.push_back(module.id);
+    const auto change = std::ranges::find_if(
+        plan.changes, [&module](const auto &item) { return item.instance_id == module.id; });
+    const bool preserves_state =
+        change != plan.changes.end() && (change->kind == ModuleReloadKind::unchanged ||
+                                         change->kind == ModuleReloadKind::view_updated);
+    const auto state = module_states_.find(module.id);
+    prepared.module_states.emplace(module.id, preserves_state && state != module_states_.end()
+                                                  ? state->second
+                                                  : ModuleState::stopped);
+
+    if (!module.view) {
+      if (change != plan.changes.end() && change->kind == ModuleReloadKind::view_updated) {
+        prepared.arbiter.dismiss({module.id, std::string{configured_context_id}});
+      }
+      continue;
+    }
+    if (change != plan.changes.end() && change->kind == ModuleReloadKind::unchanged) {
+      const auto current_view = views_.find(module.id);
+      if (current_view != views_.end()) {
+        prepared.views.emplace(module.id, current_view->second);
+      }
+      continue;
+    }
+
+    ModuleViewState candidate_view{module.view->compact, module.view->expanded};
+    if (change != plan.changes.end() && change->kind == ModuleReloadKind::view_updated) {
+      const auto current_view = views_.find(module.id);
+      if (current_view != views_.end() && current_view->second.snapshot()) {
+        // Presence is established immediately above before copying into candidate state.
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        auto applied = candidate_view.apply(*current_view->second.snapshot());
+        if (!applied) {
+          return std::unexpected(runtime_error(RuntimeErrorCode::invalid_snapshot, module.id,
+                                               "snapshot failed at template '" +
+                                                   applied.error().template_path + "' and data '" +
+                                                   applied.error().data_path + "'"));
+        }
+      }
+      if (const auto &views = candidate_view.views(); views) {
+        prepared.arbiter.publish(
+            PublishedContext{
+                .key = {module.id, std::string{configured_context_id}},
+                .priority = 0,
+                .expires_at = std::nullopt,
+                .compact = views->compact,
+                .expanded = views->expanded,
+            },
+            MonotonicTime{});
+      } else {
+        prepared.arbiter.dismiss({module.id, std::string{configured_context_id}});
+      }
+    }
+    prepared.views.emplace(module.id, std::move(candidate_view));
+  }
+  prepared.arbiter.set_default({plan.candidate.default_module, std::string{configured_context_id}});
+  return prepared;
+}
+
+void RuntimeCoordinator::commit_reload(PreparedRuntimeReload prepared) noexcept {
+  arbiter_ = std::move(prepared.arbiter);
+  configured_instances_ = std::move(prepared.configured_instances);
+  module_states_ = std::move(prepared.module_states);
+  views_ = std::move(prepared.views);
+  enabled_instances_ = std::move(prepared.enabled_instances);
+  ready_instances_ = std::move(prepared.ready_instances);
+  visibility_ = std::move(prepared.visibility);
+  revision_ = prepared.revision;
 }
 
 void RuntimeCoordinator::reject(const ContextKey &key) {

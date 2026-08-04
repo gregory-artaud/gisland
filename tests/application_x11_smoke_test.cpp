@@ -61,6 +61,8 @@ public:
     }
   }
 
+  [[nodiscard]] pid_t pid() const { return pid_; }
+
 private:
   pid_t pid_;
 };
@@ -118,6 +120,7 @@ public:
   [[nodiscard]] const std::filesystem::path &home() const { return home_; }
   [[nodiscard]] const std::filesystem::path &action_log() const { return action_log_; }
   [[nodiscard]] const std::filesystem::path &application_log() const { return application_log_; }
+  [[nodiscard]] std::filesystem::path config_path() const { return home_ / "gisland/config.toml"; }
 
 private:
   std::filesystem::path home_;
@@ -128,6 +131,25 @@ private:
 [[nodiscard]] std::string read_text(const std::filesystem::path &path) {
   std::ifstream stream{path};
   return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+}
+
+void write_text(const std::filesystem::path &path, std::string_view content) {
+  std::ofstream stream{path};
+  if (!stream) {
+    throw std::runtime_error{"could not write application smoke fixture"};
+  }
+  stream << content;
+}
+
+[[nodiscard]] std::optional<pid_t> first_child_pid(pid_t parent) {
+  const auto path = std::filesystem::path{"/proc"} / std::to_string(parent) / "task" /
+                    std::to_string(parent) / "children";
+  std::ifstream stream{path};
+  pid_t child = 0;
+  if (stream >> child) {
+    return child;
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] std::optional<Window> find_gisland_window(Display *display) {
@@ -258,6 +280,53 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   CHECK(snapshot.active_context->instance_id == "clock");
   REQUIRE(snapshot.modules.size() == 1);
   CHECK(snapshot.modules[0].state == gisland::ControlModuleState::running);
+
+  std::optional<pid_t> module_pid;
+  REQUIRE(wait_until([&] {
+    module_pid = first_child_pid(child.pid());
+    return module_pid.has_value();
+  }));
+  const std::string original_config = read_text(config.config_path());
+  write_text(config.config_path(), "not valid TOML = [\n");
+  const auto rejected = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                      gisland::ReloadControl{});
+  REQUIRE(rejected.has_value());
+  REQUIRE(std::holds_alternative<gisland::ControlError>(rejected->value()));
+  CHECK(std::get<gisland::ControlError>(rejected->value()).code ==
+        gisland::ControlErrorCode::reload_rejected);
+  const auto retained = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                      gisland::StatusControl{});
+  REQUIRE(retained.has_value());
+  CHECK(std::get<gisland::ControlStatus>(retained->value()).modules.size() == 1);
+
+  std::string view_updated_config = original_config;
+  const auto binding = view_updated_config.find("{ bind = \"time\" }");
+  REQUIRE(binding != std::string::npos);
+  view_updated_config.replace(binding, std::string_view{"{ bind = \"time\" }"}.size(),
+                              "\"Reloaded\"");
+  write_text(config.config_path(), view_updated_config);
+  const auto view_reloaded = gisland::send_control_command(
+      (config.home() / "gisland.sock").string(), gisland::ReloadControl{});
+  REQUIRE(view_reloaded.has_value());
+  CHECK(std::holds_alternative<gisland::EmptyControlResult>(view_reloaded->value()));
+  REQUIRE(wait_until([&] { return first_child_pid(child.pid()) == module_pid; }));
+
+  write_text(config.config_path(), view_updated_config + "\n[[modules]]\n"
+                                                         "id = \"disabled\"\n"
+                                                         "command = [\"/bin/true\"]\n"
+                                                         "enabled = false\n");
+  const auto module_reloaded = gisland::send_control_command(
+      (config.home() / "gisland.sock").string(), gisland::ReloadControl{});
+  REQUIRE(module_reloaded.has_value());
+  CHECK(std::holds_alternative<gisland::EmptyControlResult>(module_reloaded->value()));
+  const auto reloaded_status = gisland::send_control_command(
+      (config.home() / "gisland.sock").string(), gisland::StatusControl{});
+  REQUIRE(reloaded_status.has_value());
+  const auto &reloaded_snapshot = std::get<gisland::ControlStatus>(reloaded_status->value());
+  REQUIRE(reloaded_snapshot.modules.size() == 2);
+  CHECK(reloaded_snapshot.modules[0].id == "clock");
+  CHECK(reloaded_snapshot.modules[1] ==
+        gisland::ModuleControlStatus{"disabled", gisland::ControlModuleState::disabled, false});
 
   REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
                                         gisland::OpenControl{})

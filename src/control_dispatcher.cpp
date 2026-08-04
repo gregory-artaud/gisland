@@ -54,9 +54,10 @@ namespace {
 } // namespace
 
 ControlDispatcher::ControlDispatcher(RuntimeCoordinator &runtime, OverlayModeController &mode,
-                                     RestartRequest request_restart, std::string socket_path)
+                                     RestartRequest request_restart, std::string socket_path,
+                                     ReloadRequest request_reload)
     : runtime_(runtime), mode_(mode), request_restart_(std::move(request_restart)),
-      socket_path_(std::move(socket_path)) {}
+      request_reload_(std::move(request_reload)), socket_path_(std::move(socket_path)) {}
 
 ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, MonotonicTime now) {
   return std::visit(
@@ -82,6 +83,14 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
           return status(now);
         } else if constexpr (std::is_same_v<Command, ModulesControl>) {
           return ControlResponse{ModulesStatus{modules(now)}};
+        } else if constexpr (std::is_same_v<Command, ReloadControl>) {
+          if (!request_reload_) {
+            return control_error(ControlErrorCode::reload_rejected, "reload is unavailable");
+          }
+          const auto reloaded = request_reload_(now);
+          if (!reloaded) {
+            return control_error(ControlErrorCode::reload_rejected, reloaded.error());
+          }
         } else if constexpr (std::is_same_v<Command, RestartModuleControl>) {
           return restart(typed_command.instance_id, now);
         } else if constexpr (std::is_same_v<Command, ActivateControl>) {

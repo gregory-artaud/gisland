@@ -124,12 +124,12 @@ request_duration(const Json &request) {
 }
 
 [[nodiscard]] std::optional<ControlErrorCode> parse_error_code(std::string_view name) {
-  for (const auto code :
-       {ControlErrorCode::invalid_request, ControlErrorCode::unsupported_version,
-        ControlErrorCode::unknown_command, ControlErrorCode::unknown_instance,
-        ControlErrorCode::unavailable_instance, ControlErrorCode::unavailable_context,
-        ControlErrorCode::unknown_context, ControlErrorCode::invalid_duration,
-        ControlErrorCode::restart_rejected, ControlErrorCode::internal_error}) {
+  for (const auto code : {ControlErrorCode::invalid_request, ControlErrorCode::unsupported_version,
+                          ControlErrorCode::unknown_command, ControlErrorCode::unknown_instance,
+                          ControlErrorCode::unavailable_instance,
+                          ControlErrorCode::unavailable_context, ControlErrorCode::unknown_context,
+                          ControlErrorCode::invalid_duration, ControlErrorCode::restart_rejected,
+                          ControlErrorCode::reload_rejected, ControlErrorCode::internal_error}) {
     if (control_error_code_name(code) == name) {
       return code;
     }
@@ -240,7 +240,7 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
 
   const std::set<std::string, std::less<>> basic_fields{"command", "version"};
   if (command == "open" || command == "close" || command == "toggle" || command == "status" ||
-      command == "modules") {
+      command == "modules" || command == "reload") {
     if (!has_exact_fields(*parsed, basic_fields)) {
       return fail(ControlErrorCode::invalid_request, "request has an unexpected property");
     }
@@ -255,6 +255,9 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
     }
     if (command == "status") {
       return ControlCommand{StatusControl{}};
+    }
+    if (command == "reload") {
+      return ControlCommand{ReloadControl{}};
     }
     return ControlCommand{ModulesControl{}};
   }
@@ -322,6 +325,8 @@ std::string serialize_control_request(const ControlCommand &command) {
           result["command"] = "status";
         } else if constexpr (std::is_same_v<Type, ModulesControl>) {
           result["command"] = "modules";
+        } else if constexpr (std::is_same_v<Type, ReloadControl>) {
+          result["command"] = "reload";
         } else if constexpr (std::is_same_v<Type, RestartModuleControl>) {
           result["command"] = "module-restart";
           result["instance"] = typed.instance_id;
@@ -475,6 +480,9 @@ parse_control_arguments(const std::vector<std::string> &arguments) {
     if (arguments[0] == "modules") {
       return ControlInvocation{ModulesControl{}};
     }
+    if (arguments[0] == "reload") {
+      return ControlInvocation{ReloadControl{}};
+    }
   }
   if (arguments.size() == 2 && arguments[0] == "status" && arguments[1] == "--json") {
     return ControlInvocation{StatusControl{}, true};
@@ -520,6 +528,8 @@ std::string_view control_error_code_name(ControlErrorCode code) {
     return "invalid_duration";
   case ControlErrorCode::restart_rejected:
     return "restart_rejected";
+  case ControlErrorCode::reload_rejected:
+    return "reload_rejected";
   case ControlErrorCode::internal_error:
     return "internal_error";
   }

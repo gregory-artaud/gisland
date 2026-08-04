@@ -29,6 +29,7 @@ struct RuntimeBootstrap {
   std::filesystem::path asset_root;
   std::filesystem::path config_path;
   std::filesystem::path theme_path;
+  RuntimeRoots roots;
 };
 
 [[nodiscard]] std::expected<RuntimeRoots, BootstrapError>
@@ -36,6 +37,8 @@ resolve_runtime_roots(std::optional<std::string> xdg_config_home, std::optional<
                       std::filesystem::path distributed_data);
 [[nodiscard]] std::expected<RuntimeBootstrap, BootstrapError>
 load_runtime_bootstrap(const RuntimeRoots &roots);
+[[nodiscard]] std::expected<RuntimeBootstrap, BootstrapError>
+load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &config_path);
 [[nodiscard]] std::expected<RuntimeBootstrap, BootstrapError>
 load_runtime_bootstrap_from_environment();
 

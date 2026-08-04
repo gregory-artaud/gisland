@@ -27,6 +27,9 @@ struct StatusControl {
 struct ModulesControl {
   bool operator==(const ModulesControl &) const = default;
 };
+struct ReloadControl {
+  bool operator==(const ReloadControl &) const = default;
+};
 struct RestartModuleControl {
   std::string instance_id;
   bool operator==(const RestartModuleControl &) const = default;
@@ -43,7 +46,7 @@ struct DismissControl {
 
 using ControlCommand =
     std::variant<OpenControl, CloseControl, ToggleControl, StatusControl, ModulesControl,
-                 RestartModuleControl, ActivateControl, DismissControl>;
+                 ReloadControl, RestartModuleControl, ActivateControl, DismissControl>;
 
 enum class ControlErrorCode {
   invalid_request,
@@ -55,6 +58,7 @@ enum class ControlErrorCode {
   unknown_context,
   invalid_duration,
   restart_rejected,
+  reload_rejected,
   internal_error
 };
 

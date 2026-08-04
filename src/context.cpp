@@ -41,6 +41,10 @@ void ContextArbiter::dismiss_instance(std::string_view instance_id) {
   }
 }
 
+void ContextArbiter::set_default(ContextKey default_context) {
+  default_context_ = std::move(default_context);
+}
+
 void ContextArbiter::expire(MonotonicTime now) {
   for (auto iterator = contexts_.begin(); iterator != contexts_.end();) {
     const auto &expiration = iterator->second.context.expires_at;
