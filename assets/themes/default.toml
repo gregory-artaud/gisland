@@ -52,14 +52,14 @@ font = "semibold"
 color = "foreground"
 size = 12
 weight = 600
-line_height = 1.1
+line_height = 1.0
 
 [typography.compact-secondary]
 font = "regular"
 color = "muted"
 size = 12
 weight = 400
-line_height = 1.1
+line_height = 1.0
 
 [typography.current]
 font = "semibold"

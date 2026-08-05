@@ -109,7 +109,8 @@ public:
 
 [[nodiscard]] gisland::SceneNode compact_time_date() {
   return gisland::SceneNode{
-      gisland::Row{{text("14:32", "compact-primary"), text("ven. 31 juil.", "compact-secondary")},
+      gisland::Row{{text("14:32", "compact-primary"), gisland::SceneNode{gisland::Spacer{true, {}}},
+                    text("ven. 31 juil.", "compact-secondary")},
                    "center",
                    "small"}};
 }

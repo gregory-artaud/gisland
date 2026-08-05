@@ -152,11 +152,11 @@ TEST_CASE(
   CHECK(bootstrap->config.modules.front().view->expanded.has_value());
   const auto &compact =
       std::get<gisland::TemplateRow>(bootstrap->config.modules.front().view->compact.value);
-  REQUIRE(compact.children.size() == 2);
+  REQUIRE(compact.children.size() == 3);
   const auto &primary = std::get<gisland::TemplateText>(
       std::get<gisland::SceneTemplatePtr>(compact.children[0])->value);
   const auto &secondary = std::get<gisland::TemplateText>(
-      std::get<gisland::SceneTemplatePtr>(compact.children[1])->value);
+      std::get<gisland::SceneTemplatePtr>(compact.children[2])->value);
   CHECK(std::get<std::string>(primary.role) == "compact-primary");
   CHECK(std::get<std::string>(secondary.role) == "compact-secondary");
 }

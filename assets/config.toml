@@ -20,6 +20,7 @@ type = "row"
 gap = "small"
 children = [
   { type = "text", value = { bind = "time" }, role = "compact-primary" },
+  { type = "spacer", flexible = true },
   { type = "text", value = { bind = "date_short" }, role = "compact-secondary" }
 ]
 
