@@ -16,6 +16,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -28,6 +29,17 @@ struct FontKey {
   int base_size;
 
   auto operator<=>(const FontKey &) const = default;
+};
+
+struct PreparedImageKey {
+  std::string resource_id;
+  int width;
+  int height;
+  ImageFit fit;
+  ImageShape shape;
+  int radius;
+
+  auto operator<=>(const PreparedImageKey &) const = default;
 };
 
 [[nodiscard]] int base_size(const TypographyRole &role) {
@@ -73,6 +85,97 @@ checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t he
   }
   const double diameter = std::max(0.0, static_cast<double>(radius) * 2.0);
   return static_cast<float>(std::clamp(diameter / static_cast<double>(short_edge), 0.0, 1.0));
+}
+
+[[nodiscard]] PreparedImageKey image_key(const ImageDrawCommand &command) {
+  return PreparedImageKey{
+      command.resource_id,   command.bounds.width,
+      command.bounds.height, command.style.fit,
+      command.style.shape,   static_cast<int>(std::lround(command.style.radius))};
+}
+
+[[nodiscard]] bool inside_mask(int x, int y, int width, int height, ImageShape shape,
+                               double radius) {
+  if (shape == ImageShape::rectangle) {
+    return true;
+  }
+  const double pixel_x = static_cast<double>(x) + 0.5;
+  const double pixel_y = static_cast<double>(y) + 0.5;
+  if (shape == ImageShape::circle) {
+    const double center_x = static_cast<double>(width) / 2.0;
+    const double center_y = static_cast<double>(height) / 2.0;
+    const double delta_x = pixel_x - center_x;
+    const double delta_y = pixel_y - center_y;
+    const double circle_radius = static_cast<double>(std::min(width, height)) / 2.0;
+    return (delta_x * delta_x) + (delta_y * delta_y) <= circle_radius * circle_radius;
+  }
+  const double bounded_radius =
+      std::clamp(radius, 0.0, static_cast<double>(std::min(width, height)) / 2.0);
+  const double closest_x =
+      std::clamp(pixel_x, bounded_radius, static_cast<double>(width) - bounded_radius);
+  const double closest_y =
+      std::clamp(pixel_y, bounded_radius, static_cast<double>(height) - bounded_radius);
+  const double delta_x = pixel_x - closest_x;
+  const double delta_y = pixel_y - closest_y;
+  return (delta_x * delta_x) + (delta_y * delta_y) <= bounded_radius * bounded_radius;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> prepare_image_pixels(const ImageResource &resource,
+                                                             const ImageDrawCommand &command) {
+  const int output_width = command.bounds.width;
+  const int output_height = command.bounds.height;
+  std::vector<std::uint8_t> output(static_cast<std::size_t>(output_width) *
+                                   static_cast<std::size_t>(output_height) * 4U);
+  const double scale_x = static_cast<double>(output_width) / resource.width;
+  const double scale_y = static_cast<double>(output_height) / resource.height;
+  const double scale = command.style.fit == ImageFit::cover ? std::max(scale_x, scale_y)
+                                                            : std::min(scale_x, scale_y);
+  const double rendered_width = static_cast<double>(resource.width) * scale;
+  const double rendered_height = static_cast<double>(resource.height) * scale;
+  const double offset_x = (static_cast<double>(output_width) - rendered_width) / 2.0;
+  const double offset_y = (static_cast<double>(output_height) - rendered_height) / 2.0;
+
+  const auto source_channel = [&](int x, int y, std::size_t channel) {
+    const std::size_t index =
+        (static_cast<std::size_t>(y) * resource.width + static_cast<std::size_t>(x)) * 4U + channel;
+    return static_cast<double>(resource.pixels->at(index));
+  };
+  for (int y = 0; y < output_height; ++y) {
+    for (int x = 0; x < output_width; ++x) {
+      const std::size_t output_index =
+          (static_cast<std::size_t>(y) * static_cast<std::size_t>(output_width) +
+           static_cast<std::size_t>(x)) *
+          4U;
+      const double center_x = static_cast<double>(x) + 0.5;
+      const double center_y = static_cast<double>(y) + 0.5;
+      if (center_x < offset_x || center_x >= offset_x + rendered_width || center_y < offset_y ||
+          center_y >= offset_y + rendered_height ||
+          !inside_mask(x, y, output_width, output_height, command.style.shape,
+                       command.style.radius)) {
+        continue;
+      }
+
+      const double source_x = std::clamp((center_x - offset_x) / scale - 0.5, 0.0,
+                                         static_cast<double>(resource.width - 1U));
+      const double source_y = std::clamp((center_y - offset_y) / scale - 0.5, 0.0,
+                                         static_cast<double>(resource.height - 1U));
+      const int x0 = static_cast<int>(std::floor(source_x));
+      const int y0 = static_cast<int>(std::floor(source_y));
+      const int x1 = std::min(x0 + 1, static_cast<int>(resource.width) - 1);
+      const int y1 = std::min(y0 + 1, static_cast<int>(resource.height) - 1);
+      const double fraction_x = source_x - x0;
+      const double fraction_y = source_y - y0;
+      for (std::size_t channel = 0; channel < 4; ++channel) {
+        const double top =
+            std::lerp(source_channel(x0, y0, channel), source_channel(x1, y0, channel), fraction_x);
+        const double bottom =
+            std::lerp(source_channel(x0, y1, channel), source_channel(x1, y1, channel), fraction_x);
+        output[output_index + channel] =
+            static_cast<std::uint8_t>(std::lround(std::lerp(top, bottom, fraction_y)));
+      }
+    }
+  }
+  return output;
 }
 
 [[nodiscard]] std::expected<void, RendererError> draw_shadow(const RoundedView &view,
@@ -260,6 +363,43 @@ struct RaylibFontBook::Impl {
   }
 };
 
+struct RaylibImageBook::Impl {
+  struct PreparedSignature {
+    std::uint32_t source_width;
+    std::uint32_t source_height;
+    std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+    int output_width;
+    int output_height;
+    ImageRole style;
+    std::size_t texture_index;
+  };
+
+  std::map<std::string, ImageResource, std::less<>> resources;
+  std::map<PreparedImageKey, std::size_t> bindings;
+  std::vector<PreparedSignature> signatures;
+  std::vector<Texture2D> textures;
+
+  ~Impl() {
+    if (!IsWindowReady()) {
+      return;
+    }
+    for (const auto texture : textures) {
+      UnloadTexture(texture);
+    }
+  }
+
+  [[nodiscard]] std::expected<const Texture2D *, RendererError>
+  find(const ImageDrawCommand &command) const {
+    const auto binding = bindings.find(image_key(command));
+    if (binding == bindings.end() || binding->second >= textures.size()) {
+      return std::unexpected(renderer_error(RendererErrorCode::missing_resource,
+                                            std::filesystem::path{command.resource_id},
+                                            "prepared image resource is not loaded"));
+    }
+    return &textures[binding->second];
+  }
+};
+
 RaylibFontBook::RaylibFontBook(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 RaylibFontBook::RaylibFontBook(RaylibFontBook &&) noexcept = default;
@@ -283,7 +423,7 @@ RaylibFontBook::load(const Theme &theme, const std::filesystem::path &asset_root
   impl->marker_color = Color{static_cast<unsigned char>((marker_seed >> 0U) | 1U),
                              static_cast<unsigned char>((marker_seed >> 8U) | 1U),
                              static_cast<unsigned char>((marker_seed >> 16U) | 1U), 255};
-  Image marker_image = GenImageColor(1, 1, impl->marker_color);
+  ::Image marker_image = GenImageColor(1, 1, impl->marker_color);
   impl->context_marker = LoadTextureFromImage(marker_image);
   UnloadImage(marker_image);
   if (!IsTextureValid(impl->context_marker)) {
@@ -399,6 +539,90 @@ MeasuredGlyphs RaylibFontBook::measure_codepoint(std::string_view font_resource,
 
 std::size_t RaylibFontBook::loaded_font_count() const noexcept { return impl_->fonts.size(); }
 
+RaylibImageBook::RaylibImageBook(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+
+RaylibImageBook::RaylibImageBook(RaylibImageBook &&) noexcept = default;
+
+RaylibImageBook &RaylibImageBook::operator=(RaylibImageBook &&) noexcept = default;
+
+RaylibImageBook::~RaylibImageBook() = default;
+
+std::expected<RaylibImageBook, RendererError>
+RaylibImageBook::load(const std::vector<ImageResource> &resources) {
+  if (!IsWindowReady()) {
+    return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
+                                          "raylib window must exist before loading images"));
+  }
+  auto impl = std::make_unique<Impl>();
+  for (const auto &resource : resources) {
+    const std::size_t expected = static_cast<std::size_t>(resource.width) * resource.height * 4U;
+    if (resource.width == 0 || resource.height == 0 || resource.pixels == nullptr ||
+        resource.pixels->size() != expected || resource.format != ImageFormat::rgba8 ||
+        !impl->resources.emplace(resource.id, resource).second) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_resource,
+                                            std::filesystem::path{resource.id},
+                                            "invalid typed image resource"));
+    }
+  }
+  return RaylibImageBook{std::move(impl)};
+}
+
+std::expected<void, RendererError> RaylibImageBook::prepare(const LayoutPlan &plan) {
+  for (const auto &content : plan.content) {
+    const auto *command = std::get_if<ImageDrawCommand>(&content);
+    if (command == nullptr) {
+      continue;
+    }
+    const auto key = image_key(*command);
+    if (impl_->bindings.contains(key)) {
+      continue;
+    }
+    const auto resource = impl_->resources.find(command->resource_id);
+    if (resource == impl_->resources.end()) {
+      return std::unexpected(renderer_error(RendererErrorCode::missing_resource,
+                                            std::filesystem::path{command->resource_id},
+                                            "image resource is not part of the context"));
+    }
+    if (command->bounds.width <= 0 || command->bounds.height <= 0) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_geometry,
+                                            std::filesystem::path{command->resource_id},
+                                            "prepared image dimensions must be positive"));
+    }
+    const auto shared = std::ranges::find_if(impl_->signatures, [&](const auto &signature) {
+      return signature.source_width == resource->second.width &&
+             signature.source_height == resource->second.height &&
+             signature.output_width == command->bounds.width &&
+             signature.output_height == command->bounds.height &&
+             signature.style == command->style && *signature.pixels == *resource->second.pixels;
+    });
+    if (shared != impl_->signatures.end()) {
+      impl_->bindings.emplace(key, shared->texture_index);
+      continue;
+    }
+    auto pixels = prepare_image_pixels(resource->second, *command);
+    ::Image image{pixels.data(), command->bounds.width, command->bounds.height, 1,
+                  PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    Texture2D texture = LoadTextureFromImage(image);
+    if (!IsTextureValid(texture)) {
+      return std::unexpected(renderer_error(RendererErrorCode::image_load_failed,
+                                            std::filesystem::path{command->resource_id},
+                                            "raylib failed to load the prepared image texture"));
+    }
+    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+    const std::size_t index = impl_->textures.size();
+    impl_->textures.push_back(texture);
+    impl_->bindings.emplace(key, index);
+    impl_->signatures.push_back(Impl::PreparedSignature{
+        resource->second.width, resource->second.height, resource->second.pixels,
+        command->bounds.width, command->bounds.height, command->style, index});
+  }
+  return {};
+}
+
+std::size_t RaylibImageBook::loaded_texture_count() const noexcept {
+  return impl_->textures.size();
+}
+
 std::expected<void, RendererError> RaylibPainter::draw_surface(const LayoutPlan &plan,
                                                                RenderOrigin origin) const {
   if (!IsWindowReady()) {
@@ -466,6 +690,18 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
                        Vector2{static_cast<float>(rendered_bounds->x),
                                static_cast<float>(rendered_bounds->y)},
                        static_cast<float>(command.typography.size), 0.0F, color(command.color));
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>, ImageDrawCommand>) {
+            if (images_ == nullptr) {
+              return std::unexpected(renderer_error(RendererErrorCode::missing_resource,
+                                                    std::filesystem::path{command.resource_id},
+                                                    "image resource is not loaded"));
+            }
+            const auto texture = images_->impl_->find(command);
+            if (!texture) {
+              return std::unexpected(texture.error());
+            }
+            const Scissor scissor{*rendered_clip};
+            DrawTexture(**texture, rendered_bounds->x, rendered_bounds->y, WHITE);
           } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
                                               ProgressDrawCommand>) {
             auto rendered_track = translated(command.track, origin);

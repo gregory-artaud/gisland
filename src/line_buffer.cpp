@@ -19,9 +19,7 @@ LineBuffer LineBuffer::standard_error(std::size_t maximum_line_bytes) {
 }
 
 LineBuffer::LineBuffer(std::size_t maximum_line_bytes, bool truncate, bool reject_nul)
-    : maximum_line_bytes_(maximum_line_bytes), truncate_(truncate), reject_nul_(reject_nul) {
-  current_.reserve(maximum_line_bytes);
-}
+    : maximum_line_bytes_(maximum_line_bytes), truncate_(truncate), reject_nul_(reject_nul) {}
 
 std::expected<std::vector<BufferedLine>, LineBufferError>
 LineBuffer::append(std::span<const std::byte> bytes) {
@@ -68,7 +66,6 @@ BufferedLine LineBuffer::take_line() {
   }
   BufferedLine line{std::move(current_), truncated_};
   current_.clear();
-  current_.reserve(maximum_line_bytes_);
   truncated_ = false;
   return line;
 }

@@ -22,7 +22,7 @@ struct LineBufferError {
 
 class LineBuffer {
 public:
-  static constexpr std::size_t default_protocol_limit = std::size_t{1024} * 1024U;
+  static constexpr std::size_t default_protocol_limit = std::size_t{8} * 1024U * 1024U;
   static constexpr std::size_t default_stderr_limit = std::size_t{64} * 1024U;
 
   [[nodiscard]] static LineBuffer protocol(std::size_t maximum_line_bytes = default_protocol_limit);

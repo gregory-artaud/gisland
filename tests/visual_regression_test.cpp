@@ -9,10 +9,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -115,6 +117,22 @@ public:
                    "small"}};
 }
 
+[[nodiscard]] gisland::SceneNode compact_notification_image() {
+  return gisland::SceneNode{gisland::Row{
+      {gisland::SceneNode{gisland::Image{"app-icon", "notification-icon", "Example application"}},
+       text("Image ready", "compact-primary"), gisland::SceneNode{gisland::Spacer{true, {}}},
+       text("now", "compact-secondary")},
+      "center",
+      "small"}};
+}
+
+[[nodiscard]] std::vector<gisland::ImageResource> notification_resources() {
+  const auto pixels = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{
+      255, 64,  64, 255, 255, 64,  64, 255, 64, 96,  255, 255, 64, 96,  255, 255,
+      255, 192, 64, 255, 255, 192, 64, 255, 64, 224, 160, 255, 64, 224, 160, 255});
+  return {gisland::ImageResource{"app-icon", gisland::ImageFormat::rgba8, 4, 2, pixels}};
+}
+
 [[nodiscard]] gisland::SceneNode calendar_cell(std::string value, bool current = false) {
   return text(std::move(value), current ? "current" : "body");
 }
@@ -164,7 +182,8 @@ public:
                                           "body", "end"}};
 }
 
-[[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode) {
+[[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode,
+                                   const std::vector<gisland::ImageResource> &resources = {}) {
   const auto theme = load_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
   REQUIRE(fonts.has_value());
@@ -172,10 +191,13 @@ public:
   REQUIRE(plan.has_value());
   REQUIRE(plan->view.bounds.width <= image_width);
   REQUIRE(plan->view.bounds.height <= image_height);
+  auto images = gisland::RaylibImageBook::load(resources);
+  REQUIRE(images.has_value());
+  REQUIRE(images->prepare(*plan).has_value());
 
   const gisland::RenderOrigin origin{(image_width - plan->view.bounds.width) / 2,
                                      (image_height - plan->view.bounds.height) / 2};
-  const gisland::RaylibPainter painter{*fonts};
+  const gisland::RaylibPainter painter{*fonts, *images};
   RenderTexture2D target = LoadRenderTexture(image_width, image_height);
   REQUIRE(IsRenderTextureValid(target));
   BeginTextureMode(target);
@@ -217,8 +239,9 @@ void export_failure_artifacts(std::string_view name, const Image &actual, const 
   UnloadImage(diff);
 }
 
-void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisland::ViewMode mode) {
-  Image actual = render_fixture(scene, mode);
+void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisland::ViewMode mode,
+                   const std::vector<gisland::ImageResource> &resources = {}) {
+  Image actual = render_fixture(scene, mode, resources);
   const auto baseline = baseline_root() / (std::string{name} + ".png");
   const char *update = std::getenv("GISLAND_UPDATE_BASELINES");
   const char *approved_update = std::getenv("GISLAND_BASELINE_UPDATE_TARGET");
@@ -268,6 +291,11 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: all v1 primitives gallery") {
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: compact time and date capsule") {
   check_fixture("compact-time-date", compact_time_date(), gisland::ViewMode::compact);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: dynamic image cropped into a circle") {
+  check_fixture("dynamic-image-circle", compact_notification_image(), gisland::ViewMode::compact,
+                notification_resources());
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: expanded July 2026 calendar") {

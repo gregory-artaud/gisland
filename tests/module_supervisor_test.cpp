@@ -226,6 +226,37 @@ TEST_CASE("supervisor emits data snapshots only after capability negotiation") {
   }
 }
 
+TEST_CASE("supervisor emits image publications only after capability negotiation") {
+  SECTION("negotiated images are emitted") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("image", "image");
+    request.init.maximum = {.major = 1, .minor = 2};
+    request.init.capabilities.emplace_back("context-images");
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, "image");
+    });
+    stop_and_wait(supervisor, events, "image");
+  }
+
+  SECTION("images without capability are violations") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("unnegotiated-image", "image-without-capability");
+    request.init.maximum = {.major = 1, .minor = 2};
+    request.init.capabilities.emplace_back("context-images");
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return count_events<gisland::ProtocolViolationEvent>(observed, "unnegotiated-image") > 0;
+    });
+    CHECK_FALSE(has_message<gisland::PublishMessage>(events, "unnegotiated-image"));
+    stop_and_wait(supervisor, events, "unnegotiated-image");
+  }
+}
+
 TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
   gisland::ModuleSupervisor supervisor;
   EventLog events;

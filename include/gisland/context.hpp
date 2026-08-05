@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace gisland {
 
@@ -28,6 +29,7 @@ struct PublishedContext {
   std::optional<MonotonicTime> expires_at;
   SceneNode compact;
   std::optional<SceneNode> expanded;
+  std::vector<ImageResource> resources{};
 };
 
 enum class ContextActivationError { unavailable_instance };
@@ -44,6 +46,7 @@ public:
   activate(std::string_view instance_id, std::optional<MonotonicTime> deadline, MonotonicTime now);
   [[nodiscard]] bool dismiss_active(std::string_view context_id, MonotonicTime now);
   [[nodiscard]] bool available(std::string_view instance_id, MonotonicTime now);
+  [[nodiscard]] const PublishedContext *find(const ContextKey &key, MonotonicTime now);
   [[nodiscard]] const PublishedContext *active(MonotonicTime now);
 
 private:

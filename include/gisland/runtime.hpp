@@ -87,12 +87,14 @@ public:
   [[nodiscard]] std::expected<PreparedRuntimeReload, RuntimeError>
   prepare_reload(const ReloadPlan &plan) const;
   void commit_reload(PreparedRuntimeReload prepared) noexcept;
-  void reject(const ContextKey &key);
+  void accept(const ContextKey &key);
+  void reject(const ContextKey &key, MonotonicTime now = {});
   [[nodiscard]] std::vector<VisibilityUpdate> visibility_updates(MonotonicTime now,
                                                                  IslandMode mode);
 
 private:
   [[nodiscard]] std::expected<void, RuntimeError> consume_message(const ModuleMessageEvent &event);
+  void remember_replacement(const ContextKey &key, MonotonicTime now);
 
   ContextArbiter arbiter_;
   std::vector<std::pair<std::string, bool>> configured_instances_;
@@ -101,6 +103,7 @@ private:
   std::vector<std::string> enabled_instances_;
   std::set<std::string> ready_instances_;
   std::map<std::string, Visibility> visibility_;
+  std::map<ContextKey, std::optional<PublishedContext>> pending_replacements_;
   std::uint64_t revision_{};
 };
 

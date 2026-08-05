@@ -41,6 +41,12 @@ color = "muted"
 size = 20
 line_height = 1
 
+[images.notification-icon]
+width = 24
+height = 24
+fit = "cover"
+shape = "circle"
+
 [gaps]
 normal = 4
 small = 2
@@ -257,6 +263,32 @@ TEST_CASE("icon layout resolves the semantic glyph without raylib types") {
   CHECK(icon.typography.size == 10.0);
   CHECK(icon.bounds == gisland::Rect{4, 5, 10, 10});
   CHECK(icon.accessible_label == "Calendar");
+}
+
+TEST_CASE("image layout resolves semantic geometry without intrinsic pixel dimensions") {
+  const auto result = gisland::layout_scene(
+      gisland::SceneNode{gisland::Image{"app-icon", "notification-icon", "Firefox"}}, make_theme(),
+      gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->content.size() == 1);
+  const auto &image = command_at<gisland::ImageDrawCommand>(*result, 0);
+  CHECK(image.resource_id == "app-icon");
+  CHECK(image.bounds == gisland::Rect{4, 4, 24, 24});
+  CHECK(image.clip == gisland::Rect{4, 4, 32, 24});
+  CHECK(image.style.fit == gisland::ImageFit::cover);
+  CHECK(image.style.shape == gisland::ImageShape::circle);
+  CHECK(image.accessible_label == "Firefox");
+}
+
+TEST_CASE("image layout rejects unknown semantic roles with an exact path") {
+  const auto result = gisland::layout_scene(
+      gisland::SceneNode{gisland::Image{"app-icon", "missing", "Application"}}, make_theme(),
+      gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().code == gisland::LayoutErrorCode::unknown_image_role);
+  CHECK(result.error().path == "/role");
 }
 
 TEST_CASE("rows and columns preserve painter order and apply cross-axis alignment") {

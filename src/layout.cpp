@@ -41,6 +41,7 @@ struct MeasuredNode {
   Alignment alignment{Alignment::center};
   const TypographyRole *typography{};
   const IconGlyph *icon{};
+  const ImageRole *image_role{};
   std::string text;
   std::string font_resource;
   Rgba color{};
@@ -247,6 +248,30 @@ private:
       return std::unexpected(error(LayoutErrorCode::unknown_role, path, "unknown typography role"));
     }
     return &iterator->second;
+  }
+
+  [[nodiscard]] std::expected<MeasuredNode, LayoutError>
+  measure_primitive(const SceneNode &scene, const Image &image, const std::string &path) const {
+    const auto role = theme_.images().find(image.role);
+    if (role == theme_.images().end()) {
+      return std::unexpected(error(LayoutErrorCode::unknown_image_role, path + "/role",
+                                   "unknown semantic image role"));
+    }
+    auto width = rounded_pixel(role->second.width, path + "/role");
+    auto height = rounded_pixel(role->second.height, path + "/role");
+    if (!width) {
+      return std::unexpected(width.error());
+    }
+    if (!height) {
+      return std::unexpected(height.error());
+    }
+    MeasuredNode result{&scene, path};
+    result.width = *width;
+    result.height = *height;
+    result.minimum_width = *width;
+    result.minimum_height = *height;
+    result.image_role = &role->second;
+    return result;
   }
 
   [[nodiscard]] std::expected<std::string, LayoutError>
@@ -687,6 +712,28 @@ private:
     commands.emplace_back(IconDrawCommand{Rect{assigned.x, *y, node.width, node.height}, *clipped,
                                           node.font_resource, *node.typography,
                                           node.icon->codepoint, node.color, icon.accessible_label});
+    return {};
+  }
+
+  [[nodiscard]] static std::expected<void, LayoutError>
+  place_primitive(const MeasuredNode &node, const Image &image, Rect assigned, Rect clip,
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> & /*interactions*/) {
+    if (assigned.width < node.width || assigned.height < node.height) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "image cannot fit the assigned bounds"));
+    }
+    auto y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    if (!y) {
+      return std::unexpected(y.error());
+    }
+    auto clipped = intersect(clip, assigned, node.path);
+    if (!clipped) {
+      return std::unexpected(clipped.error());
+    }
+    commands.emplace_back(ImageDrawCommand{Rect{assigned.x, *y, node.width, node.height}, *clipped,
+                                           image.resource_id, *node.image_role,
+                                           image.accessible_label});
     return {};
   }
 

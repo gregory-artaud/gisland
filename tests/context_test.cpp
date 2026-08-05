@@ -3,9 +3,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -194,4 +197,21 @@ TEST_CASE("rejected activation preserves the existing pin") {
   CHECK_FALSE(arbiter.activate("missing", std::nullopt, epoch).has_value());
   REQUIRE(arbiter.active(epoch) != nullptr);
   CHECK((arbiter.active(epoch)->key == gisland::ContextKey{"music", "playing"}));
+}
+
+TEST_CASE("published contexts own immutable image resources") {
+  auto published = context("notifications", "download", 10);
+  auto pixels =
+      std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{255, 0, 0, 255});
+  published.resources.push_back(
+      gisland::ImageResource{"icon", gisland::ImageFormat::rgba8, 1, 1, pixels});
+
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  arbiter.publish(std::move(published), epoch);
+
+  const auto *active = arbiter.active(epoch);
+  REQUIRE(active != nullptr);
+  REQUIRE(active->resources.size() == 1);
+  CHECK(active->resources.front().pixels == pixels);
+  CHECK(active->resources.front().pixels->at(0) == 255);
 }

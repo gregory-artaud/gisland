@@ -73,6 +73,19 @@ struct IconGlyph {
   char32_t codepoint;
 };
 
+enum class ImageFit { contain, cover };
+enum class ImageShape { rectangle, rounded, circle };
+
+struct ImageRole {
+  double width;
+  double height;
+  ImageFit fit;
+  ImageShape shape;
+  double radius;
+
+  bool operator==(const ImageRole &) const = default;
+};
+
 struct ThemeError {
   std::string source;
   std::string path;
@@ -88,6 +101,7 @@ public:
   using PixelTokens = std::map<std::string, double>;
   using FontResources = std::map<std::string, std::string>;
   using Icons = std::map<std::string, IconGlyph>;
+  using ImageRoles = std::map<std::string, ImageRole>;
 
   [[nodiscard]] const Palette &palette() const noexcept { return palette_; }
   [[nodiscard]] const Typography &typography() const noexcept { return typography_; }
@@ -98,11 +112,12 @@ public:
   [[nodiscard]] const AnimationStyle &animation() const noexcept { return animation_; }
   [[nodiscard]] const FontResources &fonts() const noexcept { return fonts_; }
   [[nodiscard]] const Icons &icons() const noexcept { return icons_; }
+  [[nodiscard]] const ImageRoles &images() const noexcept { return images_; }
 
 private:
   Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
         ThemeViews views, ShadowStyle shadow, AnimationStyle animation, FontResources fonts,
-        Icons icons);
+        Icons icons, ImageRoles images);
 
   Palette palette_;
   Typography typography_;
@@ -113,6 +128,7 @@ private:
   AnimationStyle animation_;
   FontResources fonts_;
   Icons icons_;
+  ImageRoles images_;
 
   friend std::expected<Theme, ThemeError> parse_theme(std::string_view text,
                                                       std::string_view source_name);

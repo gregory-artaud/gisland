@@ -85,6 +85,14 @@ struct IconDrawCommand {
   std::string accessible_label;
 };
 
+struct ImageDrawCommand {
+  Rect bounds;
+  Rect clip;
+  std::string resource_id;
+  ImageRole style;
+  std::string accessible_label;
+};
+
 struct ProgressDrawCommand {
   Rect bounds;
   Rect clip;
@@ -101,8 +109,8 @@ struct ButtonDecorationDrawCommand {
   bool enabled;
 };
 
-using ContentDrawCommand = std::variant<TextDrawCommand, IconDrawCommand, ProgressDrawCommand,
-                                        ButtonDecorationDrawCommand>;
+using ContentDrawCommand = std::variant<TextDrawCommand, IconDrawCommand, ImageDrawCommand,
+                                        ProgressDrawCommand, ButtonDecorationDrawCommand>;
 
 struct InteractionTarget {
   Rect bounds;
@@ -122,6 +130,7 @@ struct LayoutPlan {
 
 enum class LayoutErrorCode {
   unknown_role,
+  unknown_image_role,
   unknown_gap,
   unknown_spacer,
   unknown_icon,

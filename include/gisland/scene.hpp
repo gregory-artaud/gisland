@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
@@ -21,6 +22,22 @@ struct Text {
 struct Icon {
   std::string name;
   std::string accessible_label;
+};
+
+struct Image {
+  std::string resource_id;
+  std::string role;
+  std::string accessible_label;
+};
+
+enum class ImageFormat { rgba8 };
+
+struct ImageResource {
+  std::string id;
+  ImageFormat format;
+  std::uint32_t width;
+  std::uint32_t height;
+  std::shared_ptr<const std::vector<std::uint8_t>> pixels;
 };
 
 struct Spacer {
@@ -63,7 +80,7 @@ struct Button {
 };
 
 struct SceneNode {
-  using Value = std::variant<Text, Icon, Row, Column, Spacer, Progress, Button>;
+  using Value = std::variant<Text, Icon, Image, Row, Column, Spacer, Progress, Button>;
 
   Value value;
 };

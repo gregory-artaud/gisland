@@ -76,6 +76,10 @@ TEST_CASE("protocol lines reject embedded NUL and overflow") {
   }
 }
 
+TEST_CASE("protocol records are bounded at 8 MiB") {
+  CHECK(gisland::LineBuffer::default_protocol_limit == std::size_t{8} * 1024U * 1024U);
+}
+
 TEST_CASE("stderr lines truncate explicitly at 64 KiB and continue decoding") {
   constexpr std::size_t limit = std::size_t{64} * 1024U;
   auto buffer = gisland::LineBuffer::standard_error();

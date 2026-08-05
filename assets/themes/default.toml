@@ -75,6 +75,12 @@ size = 16
 weight = 600
 line_height = 1.2
 
+[images.notification-icon]
+width = 24
+height = 24
+fit = "cover"
+shape = "circle"
+
 [gaps]
 xsmall = 4
 small = 8

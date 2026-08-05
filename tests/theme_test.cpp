@@ -35,6 +35,12 @@ font = "ui"
 color = "muted"
 size = 24.5
 
+[images.notification-icon]
+width = 24
+height = 24
+fit = "cover"
+shape = "circle"
+
 [gaps]
 normal = 8
 small = 4.5
@@ -103,6 +109,10 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->typography().at("body").weight == 450);
   CHECK(result->typography().at("body").line_height == 1.25);
   CHECK(result->typography().at("title").color == "muted");
+  CHECK(result->images().at("notification-icon").width == 24.0);
+  CHECK(result->images().at("notification-icon").height == 24.0);
+  CHECK(result->images().at("notification-icon").fit == gisland::ImageFit::cover);
+  CHECK(result->images().at("notification-icon").shape == gisland::ImageShape::circle);
   CHECK(result->gaps().at("small") == 4.5);
   CHECK(result->spacers().at("normal") == 12.0);
   CHECK(result->views().compact.padding_horizontal == 10.0);
@@ -122,6 +132,48 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
+}
+
+TEST_CASE("theme parses every image fit and shape") {
+  const auto contained = gisland::parse_theme(
+      replace_once(std::string{valid_theme}, "fit = \"cover\"\nshape = \"circle\"",
+                   "fit = \"contain\"\nshape = \"rectangle\""),
+      "contained-image.toml");
+  REQUIRE(contained.has_value());
+  CHECK(contained->images().at("notification-icon").fit == gisland::ImageFit::contain);
+  CHECK(contained->images().at("notification-icon").shape == gisland::ImageShape::rectangle);
+
+  const auto rounded = gisland::parse_theme(
+      replace_once(std::string{valid_theme}, "fit = \"cover\"\nshape = \"circle\"",
+                   "fit = \"cover\"\nshape = \"rounded\"\nradius = 6"),
+      "rounded-image.toml");
+  REQUIRE(rounded.has_value());
+  CHECK(rounded->images().at("notification-icon").shape == gisland::ImageShape::rounded);
+  CHECK(rounded->images().at("notification-icon").radius == 6.0);
+}
+
+TEST_CASE("theme rejects invalid image roles with exact paths") {
+  const auto check_invalid = [](const std::string &text, std::string_view path) {
+    const auto result = gisland::parse_theme(text, "image.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == path);
+  };
+
+  check_invalid(replace_once(std::string{valid_theme}, "width = 24", "width = 0"),
+                "images.notification-icon.width");
+  check_invalid(replace_once(std::string{valid_theme}, "height = 24", "height = 513"),
+                "images.notification-icon.height");
+  check_invalid(replace_once(std::string{valid_theme}, "fit = \"cover\"", "fit = \"stretch\""),
+                "images.notification-icon.fit");
+  check_invalid(replace_once(std::string{valid_theme}, "shape = \"circle\"", "shape = \"ellipse\""),
+                "images.notification-icon.shape");
+  check_invalid(replace_once(std::string{valid_theme}, "height = 24", "height = 20"),
+                "images.notification-icon.height");
+  check_invalid(replace_once(std::string{valid_theme}, "shape = \"circle\"", "shape = \"rounded\""),
+                "images.notification-icon.radius");
+  check_invalid(replace_once(std::string{valid_theme}, "shape = \"circle\"",
+                             "shape = \"circle\"\nradius = 4"),
+                "images.notification-icon.radius");
 }
 
 TEST_CASE("theme parses an explicit RGBA shadow color") {

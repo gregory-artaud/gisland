@@ -12,6 +12,7 @@ TEST_CASE("a row containing every primitive is a valid scene") {
   std::vector<gisland::SceneNode> children;
   children.emplace_back(gisland::Text{"14:32", "body"});
   children.emplace_back(gisland::Icon{"clock", "Current time"});
+  children.emplace_back(gisland::Image{"cover", "notification-icon", "Album cover"});
   children.emplace_back(gisland::Spacer{true, ""});
   children.emplace_back(gisland::Progress{0.5, "Half complete", "accent"});
   children.emplace_back(gisland::Button{gisland::SceneNode{gisland::Text{"Open", "label"}}, "open",
@@ -98,6 +99,8 @@ TEST_CASE("scene display strings are bounded by UTF-8 byte count") {
   };
 
   check(gisland::SceneNode{gisland::Icon{"clock", oversized}}, "/accessible_label");
+  check(gisland::SceneNode{gisland::Image{"cover", "notification-icon", oversized}},
+        "/accessible_label");
   check(gisland::SceneNode{gisland::Progress{0.5, oversized, "accent"}}, "/label");
   check(gisland::SceneNode{gisland::Button{gisland::SceneNode{gisland::Text{"x", "body"}}, "open",
                                            true, oversized}},
@@ -116,6 +119,9 @@ TEST_CASE("scene semantic strings are bounded with exact paths") {
   check(gisland::SceneNode{gisland::Text{"x", oversized}}, "/role");
   check(gisland::SceneNode{gisland::Text{"x", "body", oversized}}, "/truncation");
   check(gisland::SceneNode{gisland::Icon{oversized, "Clock"}}, "/name");
+  check(gisland::SceneNode{gisland::Image{oversized, "notification-icon", "Cover"}},
+        "/resource_id");
+  check(gisland::SceneNode{gisland::Image{"cover", oversized, "Cover"}}, "/role");
   check(gisland::SceneNode{gisland::Spacer{false, oversized}}, "/size_token");
   check(gisland::SceneNode{gisland::Progress{0.5, "Half", oversized}}, "/state");
   check(gisland::SceneNode{gisland::Row{{}, oversized, "normal"}}, "/alignment");

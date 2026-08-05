@@ -17,6 +17,7 @@ enum class RendererErrorCode {
   invalid_resource,
   font_load_failed,
   font_not_loaded,
+  image_load_failed,
   invalid_geometry
 };
 
@@ -32,6 +33,7 @@ struct RenderOrigin {
 };
 
 class RaylibPainter;
+class RaylibImageBook;
 
 class RaylibFontBook final : public GlyphMetrics {
 public:
@@ -66,9 +68,35 @@ private:
   friend class RaylibPainter;
 };
 
+class RaylibImageBook final {
+public:
+  [[nodiscard]] static std::expected<RaylibImageBook, RendererError>
+  load(const std::vector<ImageResource> &resources);
+
+  RaylibImageBook(const RaylibImageBook &) = delete;
+  RaylibImageBook &operator=(const RaylibImageBook &) = delete;
+  RaylibImageBook(RaylibImageBook &&) noexcept;
+  RaylibImageBook &operator=(RaylibImageBook &&) noexcept;
+  ~RaylibImageBook();
+
+  [[nodiscard]] std::expected<void, RendererError> prepare(const LayoutPlan &plan);
+  [[nodiscard]] std::size_t loaded_texture_count() const noexcept;
+
+private:
+  struct Impl;
+
+  explicit RaylibImageBook(std::unique_ptr<Impl> impl) noexcept;
+
+  std::unique_ptr<Impl> impl_;
+
+  friend class RaylibPainter;
+};
+
 class RaylibPainter final {
 public:
   explicit RaylibPainter(const RaylibFontBook &fonts) noexcept : fonts_(fonts) {}
+  RaylibPainter(const RaylibFontBook &fonts, const RaylibImageBook &images) noexcept
+      : fonts_(fonts), images_(&images) {}
 
   [[nodiscard]] std::expected<void, RendererError> draw_surface(const LayoutPlan &plan,
                                                                 RenderOrigin origin = {}) const;
@@ -77,6 +105,7 @@ public:
 
 private:
   const RaylibFontBook &fonts_;
+  const RaylibImageBook *images_{};
 };
 
 } // namespace gisland

@@ -245,7 +245,19 @@ render_context(const PublishedContext &context, std::uint64_t revision, const Th
     }
     expanded = std::move(*candidate);
   }
-  const RaylibPainter painter{fonts};
+  auto images = RaylibImageBook::load(context.resources);
+  if (!images) {
+    return std::unexpected(images.error().message);
+  }
+  if (auto prepared = images->prepare(*compact); !prepared) {
+    return std::unexpected(prepared.error().message);
+  }
+  if (expanded) {
+    if (auto prepared = images->prepare(*expanded); !prepared) {
+      return std::unexpected(prepared.error().message);
+    }
+  }
+  const RaylibPainter painter{fonts, *images};
   auto compact_content = render_content(*compact, painter);
   if (!compact_content) {
     return std::unexpected(compact_content.error());
@@ -591,12 +603,13 @@ int Application::run() {
       if (!candidate) {
         std::cerr << '[' << selection.context->key.instance_id << "] layout: " << candidate.error()
                   << '\n';
-        runtime.reject(selection.context->key);
+        runtime.reject(selection.context->key, now);
         if (rendered) {
           unload(*rendered);
           rendered.reset();
         }
       } else {
+        runtime.accept(selection.context->key);
         if (rendered) {
           unload(*rendered);
         }

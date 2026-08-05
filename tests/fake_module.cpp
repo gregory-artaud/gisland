@@ -386,6 +386,42 @@ void read_init() {
     }
     return EXIT_SUCCESS;
   }
+  if (mode == "image" || mode == "image-without-capability") {
+    read_init();
+    nlohmann::json ready{
+        {"type", "ready"},
+        {"protocol_major", 1},
+        {"protocol_minor", 2},
+    };
+    if (mode == "image") {
+      ready["capabilities"] = {"context-images"};
+    }
+    write_json(ready);
+    write_json({
+        {"type", "publish"},
+        {"context_id", "image"},
+        {"priority", 8},
+        {"resources",
+         {{{"id", "icon"},
+           {"format", "rgba8"},
+           {"width", 1},
+           {"height", 1},
+           {"data", "/wAA/w=="}}}},
+        {"compact",
+         {{"type", "image"},
+          {"resource_id", "icon"},
+          {"role", "notification-icon"},
+          {"accessible_label", "Application"}}},
+    });
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
   if (mode == "interactive-data") {
     return interactive_data();
   }

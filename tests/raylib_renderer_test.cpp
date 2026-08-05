@@ -7,14 +7,17 @@
 
 #include <raylib.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -46,6 +49,12 @@ line_height = 1
 font = "ui"
 size = 32
 line_height = 1
+
+[images.notification-icon]
+width = 24
+height = 24
+fit = "cover"
+shape = "circle"
 
 [gaps]
 normal = 4
@@ -323,6 +332,39 @@ TEST_CASE_METHOD(HiddenWindow, "painter keeps surface and ordered content operat
   CHECK(colored_pixels(content, gisland::Rect{38, 36, 40, 24}) > 0);
   CHECK(colored_pixels(content, gisland::Rect{90, 36, 24, 24}) > 0);
   UnloadImage(content);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "image book center-crops and masks dynamic images") {
+  const auto theme = make_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  const auto pixels = std::make_shared<const std::vector<std::uint8_t>>(
+      std::vector<std::uint8_t>{255, 0, 0, 255, 0, 0, 255, 255});
+  const std::vector resources{
+      gisland::ImageResource{"icon", gisland::ImageFormat::rgba8, 2, 1, pixels},
+      gisland::ImageResource{"same-icon", gisland::ImageFormat::rgba8, 2, 1, pixels}};
+  auto images = gisland::RaylibImageBook::load(resources);
+  REQUIRE(images.has_value());
+  const gisland::LayoutPlan plan{
+      gisland::RoundedView{gisland::Rect{0, 0, 32, 32}, 0, 0, {}, {}},
+      {gisland::ImageDrawCommand{gisland::Rect{8, 8, 24, 24}, gisland::Rect{8, 8, 24, 24}, "icon",
+                                 theme.images().at("notification-icon"), "Application"},
+       gisland::ImageDrawCommand{gisland::Rect{40, 8, 24, 24}, gisland::Rect{40, 8, 24, 24},
+                                 "same-icon", theme.images().at("notification-icon"),
+                                 "Application"}}};
+  REQUIRE(images->prepare(plan).has_value());
+  CHECK(images->loaded_texture_count() == 1);
+  const gisland::RaylibPainter painter{*fonts, *images};
+
+  ::Image rendered = render_image([&] { REQUIRE(painter.draw_content(plan).has_value()); });
+
+  CHECK(GetImageColor(rendered, 8, 8).a == 0);
+  CHECK(GetImageColor(rendered, 31, 8).a == 0);
+  const Color left = GetImageColor(rendered, 12, 20);
+  const Color right = GetImageColor(rendered, 27, 20);
+  CHECK(left.r > left.b);
+  CHECK(right.b > right.r);
+  UnloadImage(rendered);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "painter reports a command font absent from the book") {

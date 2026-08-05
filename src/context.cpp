@@ -101,6 +101,12 @@ bool ContextArbiter::available(std::string_view instance_id, MonotonicTime now) 
   return best_for_instance(instance_id) != nullptr;
 }
 
+const PublishedContext *ContextArbiter::find(const ContextKey &key, MonotonicTime now) {
+  expire(now);
+  const auto iterator = contexts_.find(key);
+  return iterator == contexts_.end() ? nullptr : &iterator->second.context;
+}
+
 const PublishedContext *ContextArbiter::active(MonotonicTime now) {
   expire(now);
   if (activation_) {

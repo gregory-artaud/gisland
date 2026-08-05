@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -18,6 +19,10 @@ namespace gisland {
 namespace {
 
 using Json = nlohmann::json;
+
+constexpr std::size_t maximum_image_resources = 16;
+constexpr std::uint32_t maximum_image_dimension = 512;
+constexpr std::size_t maximum_image_bytes = std::size_t{4} * 1024U * 1024U;
 
 [[nodiscard]] ProtocolError error_at(std::string path, std::string message) {
   return ProtocolError{std::move(path), std::move(message)};
@@ -185,6 +190,23 @@ parse_children(const Json &object, const std::string &path) {
   return SceneNode{Icon{std::move(*name), std::move(*accessible_label)}};
 }
 
+[[nodiscard]] std::expected<SceneNode, ProtocolError> parse_image(const Json &object,
+                                                                  const std::string &path) {
+  auto resource_id = required_string(object, "resource_id", path);
+  auto role = required_string(object, "role", path);
+  auto accessible_label = required_string(object, "accessible_label", path);
+  if (!resource_id) {
+    return std::unexpected(resource_id.error());
+  }
+  if (!role) {
+    return std::unexpected(role.error());
+  }
+  if (!accessible_label) {
+    return std::unexpected(accessible_label.error());
+  }
+  return SceneNode{Image{std::move(*resource_id), std::move(*role), std::move(*accessible_label)}};
+}
+
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_spacer(const Json &object,
                                                                    const std::string &path) {
   auto flexible = optional_bool(object, "flexible", true, path);
@@ -291,6 +313,9 @@ parse_children(const Json &object, const std::string &path) {
   if (*type == "icon") {
     return parse_icon(object, path);
   }
+  if (*type == "image") {
+    return parse_image(object, path);
+  }
   if (*type == "row") {
     return parse_row(object, path);
   }
@@ -334,6 +359,173 @@ parse_children(const Json &object, const std::string &path) {
     return std::nullopt;
   }
   return error_at(path + validation.error().path, scene_error_message(validation.error().code));
+}
+
+[[nodiscard]] int base64_value(char value) {
+  if (value >= 'A' && value <= 'Z') {
+    return value - 'A';
+  }
+  if (value >= 'a' && value <= 'z') {
+    return value - 'a' + 26;
+  }
+  if (value >= '0' && value <= '9') {
+    return value - '0' + 52;
+  }
+  if (value == '+') {
+    return 62;
+  }
+  if (value == '/') {
+    return 63;
+  }
+  return -1;
+}
+
+[[nodiscard]] std::expected<std::vector<std::uint8_t>, ProtocolError>
+decode_base64(std::string_view encoded, std::size_t expected_size, const std::string &path) {
+  if (encoded.size() % 4U != 0) {
+    return std::unexpected(error_at(path, "invalid base64 length"));
+  }
+  std::size_t padding = 0;
+  if (!encoded.empty() && encoded.back() == '=') {
+    padding = 1;
+    if (encoded.size() >= 2 && encoded[encoded.size() - 2] == '=') {
+      padding = 2;
+    }
+  }
+  const std::size_t decoded_size = (encoded.size() / 4U) * 3U - padding;
+  if (decoded_size != expected_size) {
+    return std::unexpected(error_at(path, "decoded image byte count does not match dimensions"));
+  }
+
+  std::vector<std::uint8_t> decoded;
+  decoded.reserve(decoded_size);
+  for (std::size_t offset = 0; offset < encoded.size(); offset += 4) {
+    const bool final = offset + 4 == encoded.size();
+    const bool third_padding = encoded[offset + 2] == '=';
+    const bool fourth_padding = encoded[offset + 3] == '=';
+    if ((!final && (third_padding || fourth_padding)) || (third_padding && !fourth_padding)) {
+      return std::unexpected(error_at(path, "invalid base64 padding"));
+    }
+    const int first = base64_value(encoded[offset]);
+    const int second = base64_value(encoded[offset + 1]);
+    const int third = third_padding ? 0 : base64_value(encoded[offset + 2]);
+    const int fourth = fourth_padding ? 0 : base64_value(encoded[offset + 3]);
+    if (first < 0 || second < 0 || third < 0 || fourth < 0) {
+      return std::unexpected(error_at(path, "invalid base64 character"));
+    }
+    if ((third_padding && (second & 0x0F) != 0) ||
+        (fourth_padding && !third_padding && (third & 0x03) != 0)) {
+      return std::unexpected(error_at(path, "non-canonical base64 padding bits"));
+    }
+    decoded.push_back(static_cast<std::uint8_t>((first << 2) | (second >> 4)));
+    if (!third_padding) {
+      decoded.push_back(static_cast<std::uint8_t>((second << 4) | (third >> 2)));
+    }
+    if (!fourth_padding) {
+      decoded.push_back(static_cast<std::uint8_t>((third << 6) | fourth));
+    }
+  }
+  return decoded;
+}
+
+[[nodiscard]] std::expected<std::vector<ImageResource>, ProtocolError>
+parse_image_resources(const Json &object) {
+  const auto iterator = object.find("resources");
+  if (iterator == object.end()) {
+    return std::vector<ImageResource>{};
+  }
+  if (!iterator->is_array()) {
+    return std::unexpected(error_at("/resources", "expected an array"));
+  }
+  if (iterator->size() > maximum_image_resources) {
+    return std::unexpected(error_at("/resources", "too many image resources"));
+  }
+
+  std::vector<ImageResource> resources;
+  resources.reserve(iterator->size());
+  std::set<std::string> identifiers;
+  std::size_t total_bytes = 0;
+  for (std::size_t index = 0; index < iterator->size(); ++index) {
+    const auto &resource = iterator->at(index);
+    const std::string path = "/resources/" + std::to_string(index);
+    auto id = required_string(resource, "id", path);
+    auto format = required_string(resource, "format", path);
+    auto width = required_integer<std::int64_t>(resource, "width", path);
+    auto height = required_integer<std::int64_t>(resource, "height", path);
+    auto data = required_string(resource, "data", path);
+    if (!id) {
+      return std::unexpected(id.error());
+    }
+    if (id->empty() || id->size() > 128) {
+      return std::unexpected(error_at(path + "/id", "resource ID must contain 1 to 128 bytes"));
+    }
+    if (!identifiers.insert(*id).second) {
+      return std::unexpected(error_at(path + "/id", "resource ID must be unique"));
+    }
+    if (!format) {
+      return std::unexpected(format.error());
+    }
+    if (*format != "rgba8") {
+      return std::unexpected(error_at(path + "/format", "unsupported image format"));
+    }
+    if (!width) {
+      return std::unexpected(width.error());
+    }
+    if (*width < 1 || *width > maximum_image_dimension) {
+      return std::unexpected(error_at(path + "/width", "image width must be between 1 and 512"));
+    }
+    if (!height) {
+      return std::unexpected(height.error());
+    }
+    if (*height < 1 || *height > maximum_image_dimension) {
+      return std::unexpected(error_at(path + "/height", "image height must be between 1 and 512"));
+    }
+    if (!data) {
+      return std::unexpected(data.error());
+    }
+    const auto byte_count =
+        static_cast<std::size_t>(*width) * static_cast<std::size_t>(*height) * 4U;
+    if (byte_count > maximum_image_bytes - total_bytes) {
+      return std::unexpected(error_at("/resources", "decoded image resources exceed 4 MiB"));
+    }
+    auto pixels = decode_base64(*data, byte_count, path + "/data");
+    if (!pixels) {
+      return std::unexpected(pixels.error());
+    }
+    total_bytes += byte_count;
+    resources.push_back(
+        ImageResource{std::move(*id), ImageFormat::rgba8, static_cast<std::uint32_t>(*width),
+                      static_cast<std::uint32_t>(*height),
+                      std::make_shared<const std::vector<std::uint8_t>>(std::move(*pixels))});
+  }
+  return resources;
+}
+
+[[nodiscard]] std::optional<ProtocolError>
+validate_image_references(const SceneNode &scene, const std::set<std::string> &resources,
+                          const std::string &path) {
+  return std::visit(
+      [&resources, &path](const auto &primitive) -> std::optional<ProtocolError> {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, Image>) {
+          if (!resources.contains(primitive.resource_id)) {
+            return error_at(path + "/resource_id", "image resource is not in this publication");
+          }
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          for (std::size_t index = 0; index < primitive.children.size(); ++index) {
+            if (auto result =
+                    validate_image_references(*primitive.children[index], resources,
+                                              path + "/children/" + std::to_string(index));
+                result) {
+              return result;
+            }
+          }
+        } else if constexpr (std::is_same_v<Primitive, Button>) {
+          return validate_image_references(*primitive.content, resources, path + "/content");
+        }
+        return std::nullopt;
+      },
+      scene.value);
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_ready(const Json &object) {
@@ -417,6 +609,10 @@ parse_children(const Json &object, const std::string &path) {
   if (!compact_field.has_value()) {
     return std::unexpected(compact_field.error());
   }
+  auto resources = parse_image_resources(object);
+  if (!resources) {
+    return std::unexpected(resources.error());
+  }
 
   std::optional<std::chrono::milliseconds> expires_in;
   if (object.contains("expires_in_ms")) {
@@ -453,8 +649,22 @@ parse_children(const Json &object, const std::string &path) {
     expanded = std::move(*parsed_expanded);
   }
 
+  std::set<std::string> resource_ids;
+  for (const auto &resource : *resources) {
+    resource_ids.insert(resource.id);
+  }
+  if (auto reference_error = validate_image_references(*compact, resource_ids, "/compact")) {
+    return std::unexpected(std::move(*reference_error));
+  }
+  if (expanded) {
+    if (auto reference_error = validate_image_references(*expanded, resource_ids, "/expanded")) {
+      return std::unexpected(std::move(*reference_error));
+    }
+  }
+
   return ModuleMessage{PublishMessage{std::move(*context_id), *priority, expires_in,
-                                      std::move(*compact), std::move(expanded)}};
+                                      std::move(*compact), std::move(expanded),
+                                      std::move(*resources)}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_action_result(const Json &object) {

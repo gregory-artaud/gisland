@@ -422,3 +422,47 @@ TEST_CASE("application renders the distributed live clock-calendar module") {
 
   XCloseDisplay(display);
 }
+
+TEST_CASE("application renders a dynamic image from an external module") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config;
+  write_text(config.config_path(), "monitor = \"primary\"\n"
+                                   "theme = \"default\"\n"
+                                   "default_module = \"image\"\n"
+                                   "[[modules]]\n"
+                                   "id = \"image\"\n"
+                                   "command = [\"" GISLAND_FAKE_MODULE_PATH "\", \"image\"]\n"
+                                   "restart = \"never\"\n");
+  ChildProcess child{config.home(), config.application_log()};
+
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  }));
+
+  XWindowAttributes attributes{};
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    return XGetWindowAttributes(display, *window, &attributes) != 0 &&
+           attributes.map_state == IsViewable;
+  }));
+  const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                    gisland::StatusControl{});
+  REQUIRE(status.has_value());
+  const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+  REQUIRE(snapshot.active_context.has_value());
+  CHECK(snapshot.active_context->instance_id == "image");
+  REQUIRE(wait_until([&] {
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width == 230 && shape->height == 32;
+  }));
+  CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
+
+  XCloseDisplay(display);
+}

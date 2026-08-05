@@ -54,6 +54,9 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
   if (config.view) {
     capabilities.emplace_back("data-snapshots");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 2}) {
+    capabilities.emplace_back("context-images");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =
@@ -102,6 +105,9 @@ std::expected<void, RuntimeError> RuntimeCoordinator::consume(const SupervisorEv
           module_states_.insert_or_assign(typed_event.instance_id, typed_event.transition.to);
         } else if constexpr (std::is_same_v<Event, ContextsRemovedEvent>) {
           arbiter_.dismiss_instance(typed_event.instance_id);
+          std::erase_if(pending_replacements_, [&typed_event](const auto &entry) {
+            return entry.first.instance_id == typed_event.instance_id;
+          });
           ready_instances_.erase(typed_event.instance_id);
           visibility_.erase(typed_event.instance_id);
           ++revision_;
@@ -119,6 +125,8 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
         if constexpr (std::is_same_v<Message, ReadyMessage>) {
           ready_instances_.insert(event.instance_id);
         } else if constexpr (std::is_same_v<Message, PublishMessage>) {
+          const ContextKey key{event.instance_id, message.context_id};
+          remember_replacement(key, event.at);
           arbiter_.publish(
               PublishedContext{
                   .key = {event.instance_id, message.context_id},
@@ -127,11 +135,14 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                                                    : std::nullopt,
                   .compact = message.compact,
                   .expanded = message.expanded,
+                  .resources = message.resources,
               },
               event.at);
           ++revision_;
         } else if constexpr (std::is_same_v<Message, DismissMessage>) {
-          arbiter_.dismiss(ContextKey{event.instance_id, message.context_id});
+          const ContextKey key{event.instance_id, message.context_id};
+          pending_replacements_.erase(key);
+          arbiter_.dismiss(key);
           ++revision_;
         } else if constexpr (std::is_same_v<Message, DataMessage>) {
           auto view = views_.find(event.instance_id);
@@ -147,6 +158,8 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                                   "' and data '" + applied.error().data_path + "'"));
           }
           const auto &instantiated = *view->second.views();
+          const ContextKey key{event.instance_id, std::string{configured_context_id}};
+          remember_replacement(key, event.at);
           arbiter_.publish(
               PublishedContext{
                   .key = {event.instance_id, std::string{configured_context_id}},
@@ -163,8 +176,21 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
       event.message);
 }
 
+void RuntimeCoordinator::remember_replacement(const ContextKey &key, MonotonicTime now) {
+  if (pending_replacements_.contains(key)) {
+    return;
+  }
+  const auto *previous = arbiter_.find(key, now);
+  pending_replacements_.emplace(
+      key, previous == nullptr ? std::nullopt : std::optional<PublishedContext>{*previous});
+}
+
 RuntimeSelection RuntimeCoordinator::active(MonotonicTime now) {
-  return RuntimeSelection{arbiter_.active(now), revision_};
+  const PublishedContext *selected = arbiter_.active(now);
+  std::erase_if(pending_replacements_, [this, now](const auto &entry) {
+    return arbiter_.find(entry.first, now) == nullptr;
+  });
+  return RuntimeSelection{selected, revision_};
 }
 
 std::expected<ContextKey, RuntimeError>
@@ -317,11 +343,25 @@ void RuntimeCoordinator::commit_reload(PreparedRuntimeReload prepared) noexcept 
   enabled_instances_ = std::move(prepared.enabled_instances);
   ready_instances_ = std::move(prepared.ready_instances);
   visibility_ = std::move(prepared.visibility);
+  pending_replacements_.clear();
   revision_ = prepared.revision;
 }
 
-void RuntimeCoordinator::reject(const ContextKey &key) {
-  arbiter_.dismiss(key);
+void RuntimeCoordinator::accept(const ContextKey &key) { pending_replacements_.erase(key); }
+
+void RuntimeCoordinator::reject(const ContextKey &key, MonotonicTime now) {
+  const ContextKey owned_key{key.instance_id, key.context_id};
+  const auto pending = pending_replacements_.find(owned_key);
+  std::optional<PublishedContext> replacement;
+  if (pending != pending_replacements_.end()) {
+    replacement = std::move(pending->second);
+    pending_replacements_.erase(pending);
+  }
+  if (replacement.has_value()) {
+    arbiter_.publish(std::move(replacement).value(), now);
+  } else {
+    arbiter_.dismiss(owned_key);
+  }
   ++revision_;
 }
 

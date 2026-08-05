@@ -3,10 +3,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -112,6 +115,51 @@ TEST_CASE("runtime arbitrates direct publications, dismissals, and rejected layo
   CHECK(runtime.active(now).context == nullptr);
 }
 
+TEST_CASE("runtime rejection restores the last accepted context resources atomically") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const auto now = gisland::MonotonicTime{} + std::chrono::seconds{2};
+  const auto key = gisland::ContextKey{"status", "alert"};
+  const auto old_pixels =
+      std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{255, 0, 0, 255});
+  REQUIRE(
+      runtime
+          .consume(message(
+              "status",
+              gisland::PublishMessage{
+                  "alert",
+                  10,
+                  std::nullopt,
+                  gisland::SceneNode{gisland::Image{"icon", "notification-icon", "Application"}},
+                  std::nullopt,
+                  {gisland::ImageResource{"icon", gisland::ImageFormat::rgba8, 1, 1, old_pixels}}},
+              now))
+          .has_value());
+  runtime.accept(key);
+
+  REQUIRE(runtime
+              .consume(message(
+                  "status",
+                  gisland::PublishMessage{
+                      "alert",
+                      20,
+                      std::nullopt,
+                      gisland::SceneNode{gisland::Image{"icon", "missing-role", "Application"}},
+                      std::nullopt,
+                      {gisland::ImageResource{"icon", gisland::ImageFormat::rgba8, 1, 1,
+                                              std::make_shared<const std::vector<std::uint8_t>>(
+                                                  std::vector<std::uint8_t>{0, 0, 255, 255})}}},
+                  now + std::chrono::milliseconds{1}))
+              .has_value());
+
+  runtime.reject(key, now + std::chrono::milliseconds{1});
+
+  const auto retained = runtime.active(now + std::chrono::milliseconds{1});
+  REQUIRE(retained.context != nullptr);
+  CHECK(retained.context->priority == 10);
+  REQUIRE(retained.context->resources.size() == 1);
+  CHECK(retained.context->resources.front().pixels == old_pixels);
+}
+
 TEST_CASE("runtime removes stopped instances and emits only changed ready visibility") {
   gisland::RuntimeCoordinator runtime{config()};
   const auto now = gisland::MonotonicTime{} + std::chrono::seconds{3};
@@ -161,8 +209,8 @@ TEST_CASE("runtime start requests preserve process config and offer snapshot cap
   CHECK(request.process.environment == module.environment);
   CHECK(request.process.working_directory == module.working_directory);
   CHECK(request.init.minimum == gisland::ProtocolVersion{1, 0});
-  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 1});
-  CHECK(request.init.capabilities == std::vector<std::string>{"data-snapshots"});
+  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 2});
+  CHECK(request.init.capabilities == std::vector<std::string>{"data-snapshots", "context-images"});
   CHECK(request.init.configuration == nlohmann::json{{"format", "24h"}, {"week_start", 1}});
   CHECK(request.init.locale == "fr_FR.UTF-8");
   CHECK(request.init.timezone == "Europe/Paris");

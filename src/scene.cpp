@@ -77,6 +77,17 @@ private:
     return validate_text(icon.accessible_label, path + "/accessible_label");
   }
 
+  [[nodiscard]] static SceneValidation validate_primitive(const Image &image, std::size_t /*depth*/,
+                                                          const std::string &path) {
+    if (auto result = validate_identifier(image.resource_id, path + "/resource_id"); !result) {
+      return result;
+    }
+    if (auto result = validate_identifier(image.role, path + "/role"); !result) {
+      return result;
+    }
+    return validate_text(image.accessible_label, path + "/accessible_label");
+  }
+
   [[nodiscard]] static SceneValidation
   validate_primitive(const Spacer &spacer, std::size_t /*depth*/, const std::string &path) {
     return validate_identifier(spacer.size_token, path + "/size_token");

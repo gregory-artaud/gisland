@@ -3,8 +3,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <variant>
+#include <vector>
 
 TEST_CASE("a publish line is parsed into typed scenes") {
   constexpr auto line = R"({
@@ -88,6 +91,76 @@ TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
   CHECK(std::holds_alternative<gisland::Spacer>(row->children[1]->value));
   CHECK(std::holds_alternative<gisland::Progress>(row->children[2]->value));
   CHECK(std::holds_alternative<gisland::Button>(row->children[3]->value));
+}
+
+TEST_CASE("a publish line decodes context-owned RGBA8 image resources") {
+  constexpr auto line = R"({
+    "type": "publish",
+    "context_id": "notification",
+    "priority": 20,
+    "resources": [
+      {"id":"app-icon","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="}
+    ],
+    "compact": {
+      "type":"image",
+      "resource_id":"app-icon",
+      "role":"notification-icon",
+      "accessible_label":"Firefox"
+    }
+  })";
+
+  const auto result = gisland::parse_module_message(line);
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  REQUIRE(publish->resources.size() == 1);
+  const auto &resource = publish->resources.front();
+  CHECK(resource.id == "app-icon");
+  CHECK(resource.format == gisland::ImageFormat::rgba8);
+  CHECK(resource.width == 1);
+  CHECK(resource.height == 1);
+  REQUIRE(resource.pixels != nullptr);
+  CHECK(*resource.pixels == std::vector<std::uint8_t>{255, 0, 0, 255});
+  const auto *image = std::get_if<gisland::Image>(&publish->compact.value);
+  REQUIRE(image != nullptr);
+  CHECK(image->resource_id == "app-icon");
+  CHECK(image->role == "notification-icon");
+}
+
+TEST_CASE("image resources reject malformed payloads and references") {
+  const auto check = [](std::string_view resources, std::string_view resource_id,
+                        std::string_view expected_path) {
+    const auto line =
+        std::string{R"({"type":"publish","context_id":"x","priority":0,"resources":)"} +
+        std::string{resources} + R"(,"compact":{"type":"image","resource_id":")" +
+        std::string{resource_id} + R"(","role":"notification-icon","accessible_label":"Icon"}})";
+    const auto result = gisland::parse_module_message(line);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == expected_path);
+  };
+
+  SECTION("strict base64") {
+    check(R"([{"id":"icon","format":"rgba8","width":1,"height":1,"data":"@@=="}])", "icon",
+          "/resources/0/data");
+  }
+  SECTION("positive dimensions") {
+    check(R"([{"id":"icon","format":"rgba8","width":0,"height":1,"data":""}])", "icon",
+          "/resources/0/width");
+  }
+  SECTION("exact byte count") {
+    check(R"([{"id":"icon","format":"rgba8","width":2,"height":1,"data":"/wAA/w=="}])", "icon",
+          "/resources/0/data");
+  }
+  SECTION("unique identifiers") {
+    check(
+        R"([{"id":"icon","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="},{"id":"icon","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="}])",
+        "icon", "/resources/1/id");
+  }
+  SECTION("local references") {
+    check(R"([{"id":"other","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="}])", "icon",
+          "/compact/resource_id");
+  }
 }
 
 TEST_CASE("ready dismiss action-result and log lines are parsed into typed messages") {

@@ -55,6 +55,7 @@ struct PublishMessage {
   std::optional<std::chrono::milliseconds> expires_in;
   SceneNode compact;
   std::optional<SceneNode> expanded;
+  std::vector<ImageResource> resources{};
 };
 
 struct DismissMessage {

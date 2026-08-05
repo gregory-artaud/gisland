@@ -869,6 +869,14 @@ private:
                        ProtocolError{"/type", "data-snapshots capability was not negotiated"}, now);
       return;
     }
+    if (const auto *publish = std::get_if<PublishMessage>(&*message);
+        publish != nullptr && !publish->resources.empty() &&
+        !instance.negotiated_capabilities.contains("context-images")) {
+      record_violation(instance,
+                       ProtocolError{"/resources", "context-images capability was not negotiated"},
+                       now);
+      return;
+    }
 
     instance.consecutive_violations = 0;
     emit(ModuleMessageEvent{instance.request.instance_id, *message, now});
@@ -890,6 +898,12 @@ private:
         record_violation(instance,
                          ProtocolError{"/capabilities", "capability was not offered by the core"},
                          now);
+        return false;
+      }
+      if (capability == "context-images" && selected < ProtocolVersion{1, 2}) {
+        record_violation(
+            instance,
+            ProtocolError{"/capabilities", "context-images requires protocol version 1.2"}, now);
         return false;
       }
     }

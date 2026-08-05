@@ -286,6 +286,49 @@ Existing themes may continue to use `padding = 14` as a uniform shorthand. Do no
 shorthand with axis-specific fields. Theme changes are validated and applied transactionally by the
 existing hot-reload path.
 
+## Dynamic Images
+
+Protocol 1.2 adds the optional `context-images` capability. A module that negotiates it can attach
+bounded RGBA8 resources directly to one `publish` and reference them from semantic image nodes:
+
+```json
+{
+  "type": "publish",
+  "context_id": "notification-42",
+  "priority": 20,
+  "resources": [
+    {"id":"icon","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="}
+  ],
+  "compact": {
+    "type":"image",
+    "resource_id":"icon",
+    "role":"notification-icon",
+    "accessible_label":"Application"
+  }
+}
+```
+
+RGBA8 data is top-to-bottom, tightly packed, sRGB, and uses straight alpha. The base64 payload must
+decode to exactly `width * height * 4` bytes. Dimensions are limited to 512 pixels per axis, one
+context may contain at most 16 resources and 4 MiB of decoded image data, and a complete JSONL
+record is limited to 8 MiB. Resources are replaced and released with their context; they cannot be
+referenced across contexts or modules. Modules must normalize files, icon-theme names, URIs, and
+encoded formats before publishing them.
+
+The scene does not control image geometry. Themes provide semantic roles instead:
+
+```toml
+[images.notification-icon]
+width = 24
+height = 24
+fit = "cover"
+shape = "circle"
+```
+
+`fit` accepts `contain` or `cover`. `shape` accepts `rectangle`, `circle`, or `rounded`; rounded
+roles also require `radius`. Circular roles must be square. Changing these values restyles retained
+context pixels through the normal transactional theme reload without restarting modules.
+
 ## Repository Layout
 
 ```text

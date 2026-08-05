@@ -2,6 +2,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -21,6 +22,7 @@ namespace {
 
 constexpr double maximum_pixels = 16384.0;
 constexpr double maximum_font_size = 512.0;
+constexpr double maximum_image_size = 512.0;
 constexpr double maximum_line_height = 8.0;
 constexpr std::int64_t maximum_duration_ms = 60000;
 
@@ -615,6 +617,105 @@ parse_animation(const toml::table &root, std::string_view source_name) {
   return icons;
 }
 
+[[nodiscard]] std::expected<ImageFit, ThemeError>
+parse_image_fit(const toml::table &table, const std::string &path, std::string_view source_name) {
+  auto value = required_string(table, "fit", path, source_name);
+  if (!value) {
+    return std::unexpected(value.error());
+  }
+  if (*value == "contain") {
+    return ImageFit::contain;
+  }
+  if (*value == "cover") {
+    return ImageFit::cover;
+  }
+  return std::unexpected(error_at(source_name, path, "unsupported image fit", table.get("fit")));
+}
+
+[[nodiscard]] std::expected<ImageShape, ThemeError>
+parse_image_shape(const toml::table &table, const std::string &path, std::string_view source_name) {
+  auto value = required_string(table, "shape", path, source_name);
+  if (!value) {
+    return std::unexpected(value.error());
+  }
+  if (*value == "rectangle") {
+    return ImageShape::rectangle;
+  }
+  if (*value == "rounded") {
+    return ImageShape::rounded;
+  }
+  if (*value == "circle") {
+    return ImageShape::circle;
+  }
+  return std::unexpected(
+      error_at(source_name, path, "unsupported image shape", table.get("shape")));
+}
+
+[[nodiscard]] std::expected<Theme::ImageRoles, ThemeError>
+parse_image_roles(const toml::table &root, std::string_view source_name) {
+  auto table = required_table(root, "images", "images", source_name);
+  if (!table) {
+    return std::unexpected(table.error());
+  }
+
+  Theme::ImageRoles roles;
+  for (const auto &[key, node] : **table) {
+    const std::string name{key.str()};
+    if (name.empty()) {
+      return std::unexpected(
+          error_at(source_name, "images", "semantic key must not be empty", &node));
+    }
+    const auto *role = node.as_table();
+    if (role == nullptr) {
+      return std::unexpected(error_at(source_name, "images." + name, "expected a table", &node));
+    }
+    const std::string path = "images." + name;
+    auto keys =
+        reject_unknown(*role, {"width", "height", "fit", "shape", "radius"}, path, source_name);
+    if (!keys) {
+      return std::unexpected(keys.error());
+    }
+    auto width = number_value(role->get("width"), path + ".width", source_name,
+                              std::numeric_limits<double>::min(), maximum_image_size);
+    auto height = number_value(role->get("height"), path + ".height", source_name,
+                               std::numeric_limits<double>::min(), maximum_image_size);
+    auto fit = parse_image_fit(*role, path + ".fit", source_name);
+    auto shape = parse_image_shape(*role, path + ".shape", source_name);
+    if (!width) {
+      return std::unexpected(width.error());
+    }
+    if (!height) {
+      return std::unexpected(height.error());
+    }
+    if (!fit) {
+      return std::unexpected(fit.error());
+    }
+    if (!shape) {
+      return std::unexpected(shape.error());
+    }
+
+    double radius = 0.0;
+    const auto *radius_node = role->get("radius");
+    if (*shape == ImageShape::rounded) {
+      auto parsed_radius = number_value(radius_node, path + ".radius", source_name, 0.0,
+                                        std::min(*width, *height) / 2.0);
+      if (!parsed_radius) {
+        return std::unexpected(parsed_radius.error());
+      }
+      radius = *parsed_radius;
+    } else if (radius_node != nullptr) {
+      return std::unexpected(error_at(source_name, path + ".radius",
+                                      "radius is valid only for rounded images", radius_node));
+    }
+    if (*shape == ImageShape::circle && *width != *height) {
+      return std::unexpected(error_at(source_name, path + ".height",
+                                      "circular image roles must be square", role->get("height")));
+    }
+    roles.emplace(name, ImageRole{*width, *height, *fit, *shape, radius});
+  }
+  return roles;
+}
+
 [[nodiscard]] std::expected<void, ThemeError>
 validate_font_references(const Theme::Typography &typography, const Theme::Icons &icons,
                          const Theme::FontResources &fonts, const Theme::Palette &palette,
@@ -647,17 +748,18 @@ validate_font_references(const Theme::Typography &typography, const Theme::Icons
 
 Theme::Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
              ThemeViews views, ShadowStyle shadow, AnimationStyle animation, FontResources fonts,
-             Icons icons)
+             Icons icons, ImageRoles images)
     : palette_(std::move(palette)), typography_(std::move(typography)), gaps_(std::move(gaps)),
       spacers_(std::move(spacers)), views_(views), shadow_(std::move(shadow)),
-      animation_(animation), fonts_(std::move(fonts)), icons_(std::move(icons)) {}
+      animation_(animation), fonts_(std::move(fonts)), icons_(std::move(icons)),
+      images_(std::move(images)) {}
 
 std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_view source_name) {
   try {
     const auto root = toml::parse(text, source_name);
     auto keys = reject_unknown(root,
                                {"palette", "typography", "gaps", "spacers", "view", "shadow",
-                                "animation", "fonts", "icons"},
+                                "animation", "fonts", "icons", "images"},
                                "", source_name);
     if (!keys) {
       return std::unexpected(keys.error());
@@ -672,6 +774,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     auto shadow = parse_shadow(root, source_name);
     auto animation = parse_animation(root, source_name);
     auto icons = parse_icons(root, source_name);
+    auto images = parse_image_roles(root, source_name);
     if (!palette) {
       return std::unexpected(palette.error());
     }
@@ -699,6 +802,9 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!icons) {
       return std::unexpected(icons.error());
     }
+    if (!images) {
+      return std::unexpected(images.error());
+    }
     auto references =
         validate_font_references(*typography, *icons, *fonts, *palette, *shadow, source_name);
     if (!references) {
@@ -712,7 +818,8 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
                  std::move(*shadow),
                  *animation,
                  std::move(*fonts),
-                 std::move(*icons)};
+                 std::move(*icons),
+                 std::move(*images)};
   } catch (const toml::parse_error &error) {
     return std::unexpected(ThemeError{
         std::string{source_name},
