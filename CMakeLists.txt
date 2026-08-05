@@ -194,6 +194,10 @@ install(
 
 if(BUILD_TESTING)
   add_test(
+    NAME install_local_script
+    COMMAND bash ${PROJECT_SOURCE_DIR}/tests/install_local_script_test.sh ${PROJECT_SOURCE_DIR}
+  )
+  add_test(
     NAME install_layout
     COMMAND
       ${CMAKE_COMMAND}

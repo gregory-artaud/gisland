@@ -57,14 +57,26 @@ cmake --build --preset release
 
 ## Install
 
-Choose the final prefix during configuration because generated manifests and the systemd service
-contain absolute executable paths:
+For a normal user-local installation or update, run:
+
+```bash
+./scripts/install-local.sh
+```
+
+The script builds the release before interrupting a running instance, installs under `$HOME/.local`,
+reloads the systemd user manager, and enables and starts `gisland.service`. It does not use `sudo`,
+update the source checkout, install system packages, or modify user configuration and modules.
+
+For troubleshooting, the equivalent build and installation commands are:
 
 ```bash
 cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
 cmake --build --preset release
+systemctl --user stop gisland.service
 cmake --install build/release
 systemctl --user daemon-reload
+systemctl --user import-environment DISPLAY XAUTHORITY
+systemctl --user enable --now gisland.service
 ```
 
 The installation owns binaries, the user service, and private distributed resources under
@@ -99,17 +111,10 @@ super + shift + grave
     gislandctl close
 ```
 
-Update an existing installation without exposing the running process to a partially installed
-resource set:
+Update an existing installation with the same command after updating the checkout:
 
 ```bash
-systemctl --user stop gisland.service
-git pull
-cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
-cmake --build --preset release
-cmake --install build/release
-systemctl --user daemon-reload
-systemctl --user start gisland.service
+./scripts/install-local.sh
 ```
 
 Rollback uses the same sequence after checking out the previous release. Before uninstalling,
