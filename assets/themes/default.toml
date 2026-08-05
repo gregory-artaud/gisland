@@ -47,6 +47,20 @@ size = 12
 weight = 600
 line_height = 1.1
 
+[typography.compact-primary]
+font = "semibold"
+color = "foreground"
+size = 12
+weight = 600
+line_height = 1.1
+
+[typography.compact-secondary]
+font = "regular"
+color = "muted"
+size = 12
+weight = 400
+line_height = 1.1
+
 [typography.current]
 font = "semibold"
 color = "accent"
@@ -74,13 +88,14 @@ normal = 10
 large = 18
 
 [view.compact]
-padding = 14
-radius = 28
+padding_horizontal = 14
+padding_vertical = 4
+radius = 16
 border = 0
-min_width = 220
+min_width = 230
 max_width = 340
-min_height = 64
-max_height = 72
+min_height = 32
+max_height = 32
 
 [view.expanded]
 padding = 24

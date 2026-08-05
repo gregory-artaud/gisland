@@ -5,6 +5,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -57,6 +58,14 @@ void write_file(const std::filesystem::path &path, std::string_view content) {
     throw std::runtime_error{"could not write reload fixture"};
   }
   stream << content;
+}
+
+[[nodiscard]] std::string read_file(const std::filesystem::path &path) {
+  std::ifstream stream{path};
+  if (!stream) {
+    throw std::runtime_error{"could not read reload fixture"};
+  }
+  return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
 }
 
 } // namespace
@@ -138,4 +147,42 @@ TEST_CASE("reload candidate reuses the startup config path and resolves a change
   CHECK(candidate->config_path == config_path);
   CHECK(candidate->theme_path == config_home / "gisland/themes/custom.toml");
   CHECK(candidate->asset_root == config_home / "gisland");
+}
+
+TEST_CASE("reload candidate accepts complete axis padding and rejects an incomplete pair") {
+  TemporaryDirectory temporary;
+  const auto distributed = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
+  const auto config_home = temporary.path() / "config";
+  write_file(config_home / "gisland/config.toml", "monitor = \"primary\"\n"
+                                                  "theme = \"default\"\n"
+                                                  "default_module = \"clock\"\n"
+                                                  "[[modules]]\n"
+                                                  "id = \"clock\"\n"
+                                                  "command = [\"/bin/true\"]\n");
+  const auto current =
+      gisland::load_runtime_bootstrap({config_home, temporary.path() / "data", distributed});
+  REQUIRE(current.has_value());
+
+  std::string theme = read_file(distributed / "themes/default.toml");
+  const auto horizontal = theme.find("padding_horizontal = 14");
+  REQUIRE(horizontal != std::string::npos);
+  theme.replace(horizontal, std::string_view{"padding_horizontal = 14"}.size(),
+                "padding_horizontal = 12");
+  const auto user_theme = config_home / "gisland/themes/default.toml";
+  write_file(user_theme, theme);
+
+  const auto candidate = gisland::load_reload_candidate(*current);
+  REQUIRE(candidate.has_value());
+  CHECK(candidate->theme.views().compact.padding_horizontal == 12.0);
+  CHECK(candidate->theme.views().compact.padding_vertical == 4.0);
+
+  const auto vertical = theme.find("padding_vertical = 4\n");
+  REQUIRE(vertical != std::string::npos);
+  theme.erase(vertical, std::string_view{"padding_vertical = 4\n"}.size());
+  write_file(user_theme, theme);
+
+  const auto rejected = gisland::load_reload_candidate(*current);
+  REQUIRE_FALSE(rejected.has_value());
+  CHECK(rejected.error().stage == gisland::BootstrapStage::theme);
+  CHECK(rejected.error().message.contains("view.compact.padding_vertical"));
 }

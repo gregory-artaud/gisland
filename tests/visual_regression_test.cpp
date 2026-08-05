@@ -108,12 +108,10 @@ public:
 }
 
 [[nodiscard]] gisland::SceneNode compact_time_date() {
-  return gisland::SceneNode{gisland::Row{
-      {icon("calendar", "Calendar"),
-       gisland::SceneNode{gisland::Column{
-           {text("14:32", "title"), text("ven. 31 juil.", "caption")}, "start", "xsmall"}}},
-      "center",
-      "normal"}};
+  return gisland::SceneNode{
+      gisland::Row{{text("14:32", "compact-primary"), text("ven. 31 juil.", "compact-secondary")},
+                   "center",
+                   "small"}};
 }
 
 [[nodiscard]] gisland::SceneNode calendar_cell(std::string value, bool current = false) {

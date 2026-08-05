@@ -265,6 +265,27 @@ changes reuse the latest successful data snapshot without restarting the module.
 options, restart policy, lifecycle timings, environment, or working directory gracefully replace the
 affected process. Added and enabled modules start; removed and disabled modules stop.
 
+## Theme Geometry
+
+User themes live under `$XDG_CONFIG_HOME/gisland/themes/`, defaulting to
+`~/.config/gisland/themes/`. View padding can be uniform or configured independently by axis:
+
+```toml
+[view.compact]
+padding_horizontal = 14
+padding_vertical = 4
+radius = 16
+border = 0
+min_width = 230
+max_width = 340
+min_height = 32
+max_height = 32
+```
+
+Existing themes may continue to use `padding = 14` as a uniform shorthand. Do not combine the
+shorthand with axis-specific fields. Theme changes are validated and applied transactionally by the
+existing hot-reload path.
+
 ## Repository Layout
 
 ```text

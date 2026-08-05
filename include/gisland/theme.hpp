@@ -29,7 +29,8 @@ struct TypographyRole {
 };
 
 struct ViewGeometry {
-  double padding;
+  double padding_horizontal;
+  double padding_vertical;
   double radius;
   double border;
   double min_width;

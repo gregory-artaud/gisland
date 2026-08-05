@@ -19,8 +19,8 @@ week_start = "monday"
 type = "row"
 gap = "small"
 children = [
-  { type = "text", value = { bind = "time" }, role = "title" },
-  { type = "text", value = { bind = "date_short" }, role = "muted" }
+  { type = "text", value = { bind = "time" }, role = "compact-primary" },
+  { type = "text", value = { bind = "date_short" }, role = "compact-secondary" }
 ]
 
 [modules.view.expanded]

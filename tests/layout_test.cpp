@@ -232,6 +232,19 @@ TEST_CASE("text layout resolves typography and compact view style") {
   CHECK(command_at<gisland::TextDrawCommand>(*one_line, 0).text == "a b c");
 }
 
+TEST_CASE("view layout applies horizontal and vertical padding independently") {
+  const auto theme = make_theme_with("padding = 4", "padding_horizontal = 7\npadding_vertical = 2");
+  const auto result = gisland::layout_scene(gisland::SceneNode{gisland::Text{"abc", "body"}}, theme,
+                                            gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 44, 20});
+  REQUIRE(result->content.size() == 1);
+  const auto &text = command_at<gisland::TextDrawCommand>(*result, 0);
+  CHECK(text.bounds == gisland::Rect{7, 5, 30, 10});
+  CHECK(text.clip == gisland::Rect{7, 2, 30, 16});
+}
+
 TEST_CASE("icon layout resolves the semantic glyph without raylib types") {
   const auto result =
       gisland::layout_scene(gisland::SceneNode{gisland::Icon{"calendar", "Calendar"}}, make_theme(),

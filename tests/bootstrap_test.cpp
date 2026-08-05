@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 
 namespace {
 
@@ -103,8 +104,16 @@ TEST_CASE("bootstrap loads config and distributed theme before graphical startup
   CHECK(bootstrap->theme_path ==
         std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "themes/default.toml");
   CHECK(bootstrap->asset_root == std::filesystem::path{GISLAND_TEST_ASSET_ROOT});
+  CHECK(bootstrap->theme.views().compact.padding_horizontal == 14.0);
+  CHECK(bootstrap->theme.views().compact.padding_vertical == 4.0);
+  CHECK(bootstrap->theme.views().compact.radius == 16.0);
+  CHECK(bootstrap->theme.views().compact.min_width == 230.0);
+  CHECK(bootstrap->theme.views().compact.min_height == 32.0);
+  CHECK(bootstrap->theme.views().compact.max_height == 32.0);
   CHECK(bootstrap->theme.views().compact.border == 0.0);
   CHECK(bootstrap->theme.views().expanded.border == 0.0);
+  CHECK(bootstrap->theme.typography().at("compact-primary").size == 12.0);
+  CHECK(bootstrap->theme.typography().at("compact-secondary").size == 12.0);
 }
 
 TEST_CASE("bootstrap gives a valid user theme priority over the distributed theme") {
@@ -141,6 +150,15 @@ TEST_CASE(
   REQUIRE(bootstrap->manifest_paths.size() == 1);
   REQUIRE(bootstrap->config.modules.front().view.has_value());
   CHECK(bootstrap->config.modules.front().view->expanded.has_value());
+  const auto &compact =
+      std::get<gisland::TemplateRow>(bootstrap->config.modules.front().view->compact.value);
+  REQUIRE(compact.children.size() == 2);
+  const auto &primary = std::get<gisland::TemplateText>(
+      std::get<gisland::SceneTemplatePtr>(compact.children[0])->value);
+  const auto &secondary = std::get<gisland::TemplateText>(
+      std::get<gisland::SceneTemplatePtr>(compact.children[1])->value);
+  CHECK(std::get<std::string>(primary.role) == "compact-primary");
+  CHECK(std::get<std::string>(secondary.role) == "compact-secondary");
 }
 
 TEST_CASE("bootstrap reports a missing config without creating graphical state") {

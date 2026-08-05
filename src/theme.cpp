@@ -302,10 +302,10 @@ parse_geometry(const toml::table &view, std::string_view name, std::string_view 
   if (!table) {
     return std::unexpected(table.error());
   }
-  auto keys = reject_unknown(
-      **table,
-      {"padding", "radius", "border", "min_width", "max_width", "min_height", "max_height"}, path,
-      source_name);
+  auto keys = reject_unknown(**table,
+                             {"padding", "padding_horizontal", "padding_vertical", "radius",
+                              "border", "min_width", "max_width", "min_height", "max_height"},
+                             path, source_name);
   if (!keys) {
     return std::unexpected(keys.error());
   }
@@ -314,15 +314,55 @@ parse_geometry(const toml::table &view, std::string_view name, std::string_view 
     return number_value((*table)->get(key), path + "." + std::string{key}, source_name, minimum,
                         maximum_pixels);
   };
-  auto padding = parse("padding", 0.0);
+  const auto *uniform_padding = (*table)->get("padding");
+  const auto *horizontal_padding = (*table)->get("padding_horizontal");
+  const auto *vertical_padding = (*table)->get("padding_vertical");
+  auto padding = [&]() -> std::expected<std::pair<double, double>, ThemeError> {
+    if (uniform_padding != nullptr) {
+      if (horizontal_padding != nullptr) {
+        return std::unexpected(error_at(source_name, path + ".padding_horizontal",
+                                        "cannot combine uniform and axis-specific padding",
+                                        horizontal_padding));
+      }
+      if (vertical_padding != nullptr) {
+        return std::unexpected(error_at(source_name, path + ".padding_vertical",
+                                        "cannot combine uniform and axis-specific padding",
+                                        vertical_padding));
+      }
+      auto value = parse("padding", 0.0);
+      if (!value) {
+        return std::unexpected(value.error());
+      }
+      return std::pair{*value, *value};
+    }
+    if (horizontal_padding == nullptr) {
+      return std::unexpected(error_at(source_name, path + ".padding_horizontal",
+                                      "missing required horizontal padding"));
+    }
+    if (vertical_padding == nullptr) {
+      return std::unexpected(
+          error_at(source_name, path + ".padding_vertical", "missing required vertical padding"));
+    }
+    auto horizontal = parse("padding_horizontal", 0.0);
+    auto vertical = parse("padding_vertical", 0.0);
+    if (!horizontal) {
+      return std::unexpected(horizontal.error());
+    }
+    if (!vertical) {
+      return std::unexpected(vertical.error());
+    }
+    return std::pair{*horizontal, *vertical};
+  }();
   auto radius = parse("radius", 0.0);
   auto border = parse("border", 0.0);
   auto min_width = parse("min_width", std::numeric_limits<double>::min());
   auto max_width = parse("max_width", std::numeric_limits<double>::min());
   auto min_height = parse("min_height", std::numeric_limits<double>::min());
   auto max_height = parse("max_height", std::numeric_limits<double>::min());
-  for (const auto *result :
-       {&padding, &radius, &border, &min_width, &max_width, &min_height, &max_height}) {
+  if (!padding) {
+    return std::unexpected(padding.error());
+  }
+  for (const auto *result : {&radius, &border, &min_width, &max_width, &min_height, &max_height}) {
     if (!result->has_value()) {
       return std::unexpected(result->error());
     }
@@ -337,12 +377,23 @@ parse_geometry(const toml::table &view, std::string_view name, std::string_view 
                                     "maximum height must not be smaller than minimum height",
                                     (*table)->get("max_height")));
   }
-  if ((*padding * 2.0) >= *min_width || (*padding * 2.0) >= *min_height) {
-    return std::unexpected(error_at(source_name, path + ".padding",
-                                    "padding must leave positive minimum content bounds",
-                                    (*table)->get("padding")));
+  if ((padding->first * 2.0) >= *min_width) {
+    const std::string padding_path =
+        uniform_padding != nullptr ? ".padding" : ".padding_horizontal";
+    return std::unexpected(
+        error_at(source_name, path + padding_path,
+                 "horizontal padding must leave positive minimum content width",
+                 uniform_padding != nullptr ? uniform_padding : horizontal_padding));
   }
-  return ViewGeometry{*padding, *radius, *border, *min_width, *max_width, *min_height, *max_height};
+  if ((padding->second * 2.0) >= *min_height) {
+    const std::string padding_path = uniform_padding != nullptr ? ".padding" : ".padding_vertical";
+    return std::unexpected(
+        error_at(source_name, path + padding_path,
+                 "vertical padding must leave positive minimum content height",
+                 uniform_padding != nullptr ? uniform_padding : vertical_padding));
+  }
+  return ViewGeometry{padding->first, padding->second, *radius,     *border,
+                      *min_width,     *max_width,      *min_height, *max_height};
 }
 
 [[nodiscard]] std::expected<ThemeViews, ThemeError> parse_views(const toml::table &root,

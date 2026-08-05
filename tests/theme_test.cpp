@@ -105,6 +105,8 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->typography().at("title").color == "muted");
   CHECK(result->gaps().at("small") == 4.5);
   CHECK(result->spacers().at("normal") == 12.0);
+  CHECK(result->views().compact.padding_horizontal == 10.0);
+  CHECK(result->views().compact.padding_vertical == 10.0);
   CHECK(result->views().compact.min_width == 120.0);
   CHECK(result->views().expanded.max_height == 720.0);
   CHECK(result->shadow().offset_x == 0.0);
@@ -286,6 +288,54 @@ TEST_CASE("theme validates view geometry relationships") {
 
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().path == "view.compact.max_width");
+}
+
+TEST_CASE("theme resolves explicit horizontal and vertical view padding") {
+  const auto result =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "padding = 10",
+                                        "padding_horizontal = 14\npadding_vertical = 4"),
+                           "axis-padding.toml");
+
+  REQUIRE(result.has_value());
+  CHECK(result->views().compact.padding_horizontal == 14.0);
+  CHECK(result->views().compact.padding_vertical == 4.0);
+}
+
+TEST_CASE("theme rejects mixed and incomplete view padding forms") {
+  const auto mixed = gisland::parse_theme(
+      replace_once(std::string{valid_theme}, "padding = 10",
+                   "padding = 10\npadding_horizontal = 14\npadding_vertical = 4"),
+      "mixed-padding.toml");
+  REQUIRE_FALSE(mixed.has_value());
+  CHECK(mixed.error().path == "view.compact.padding_horizontal");
+
+  const auto missing_vertical = gisland::parse_theme(
+      replace_once(std::string{valid_theme}, "padding = 10", "padding_horizontal = 14"),
+      "missing-padding.toml");
+  REQUIRE_FALSE(missing_vertical.has_value());
+  CHECK(missing_vertical.error().path == "view.compact.padding_vertical");
+
+  const auto missing_horizontal = gisland::parse_theme(
+      replace_once(std::string{valid_theme}, "padding = 10", "padding_vertical = 4"),
+      "missing-padding.toml");
+  REQUIRE_FALSE(missing_horizontal.has_value());
+  CHECK(missing_horizontal.error().path == "view.compact.padding_horizontal");
+}
+
+TEST_CASE("theme validates horizontal and vertical padding against their own axes") {
+  const auto horizontal =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "padding = 10",
+                                        "padding_horizontal = 60\npadding_vertical = 4"),
+                           "horizontal-padding.toml");
+  REQUIRE_FALSE(horizontal.has_value());
+  CHECK(horizontal.error().path == "view.compact.padding_horizontal");
+
+  const auto vertical =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "padding = 10",
+                                        "padding_horizontal = 14\npadding_vertical = 18"),
+                           "vertical-padding.toml");
+  REQUIRE_FALSE(vertical.has_value());
+  CHECK(vertical.error().path == "view.compact.padding_vertical");
 }
 
 TEST_CASE("theme references only declared font resources and scalar codepoints") {

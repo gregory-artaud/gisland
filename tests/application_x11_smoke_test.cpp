@@ -267,8 +267,8 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   std::optional<ShapeBounds> compact_shape;
   const bool compact = wait_until([&] {
     compact_shape = input_shape_bounds(display, *window);
-    return compact_shape && compact_shape->width == 220 && compact_shape->height == 64 &&
-           compact_shape->x == 70;
+    return compact_shape && compact_shape->width == 230 && compact_shape->height == 32 &&
+           compact_shape->x == 65;
   });
   if (compact_shape) {
     INFO("initial shape: " << compact_shape->x << ',' << compact_shape->y << ' '
@@ -340,11 +340,11 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 220 && shape->height == 64 && shape->x == 70;
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == 65;
   }));
 
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 180,
-                               attributes.y + 32, CurrentTime) != 0);
+                               attributes.y + 16, CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] {
     XSync(display, False);
@@ -376,7 +376,7 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 220 && shape->height == 64 && shape->x == 70;
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == 65;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   CHECK(attributes.width == 360);
@@ -410,7 +410,7 @@ TEST_CASE("application renders the distributed live clock-calendar module") {
            attributes.map_state == IsViewable;
   }));
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
-                               attributes.x + (attributes.width / 2), attributes.y + 32,
+                               attributes.x + (attributes.width / 2), attributes.y + 16,
                                CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] {

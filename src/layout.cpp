@@ -968,7 +968,8 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
   }
 
   const auto &geometry = geometry_for(theme, mode);
-  auto padding = rounded_pixel(geometry.padding, "");
+  auto horizontal_padding = rounded_pixel(geometry.padding_horizontal, "");
+  auto vertical_padding = rounded_pixel(geometry.padding_vertical, "");
   auto minimum_width = rounded_pixel(geometry.min_width, "");
   auto maximum_width = rounded_pixel(geometry.max_width, "");
   auto minimum_height = rounded_pixel(geometry.min_height, "");
@@ -979,20 +980,24 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
   auto shadow_offset_y = rounded_signed_pixel(theme.shadow().offset_y, "shadow.offset_y");
   auto shadow_blur = rounded_pixel(theme.shadow().blur, "shadow.blur");
   auto shadow_spread = rounded_pixel(theme.shadow().spread, "shadow.spread");
-  for (const auto *value :
-       {&padding, &minimum_width, &maximum_width, &minimum_height, &maximum_height, &radius,
-        &border, &shadow_offset_x, &shadow_offset_y, &shadow_blur, &shadow_spread}) {
+  for (const auto *value : {&horizontal_padding, &vertical_padding, &minimum_width, &maximum_width,
+                            &minimum_height, &maximum_height, &radius, &border, &shadow_offset_x,
+                            &shadow_offset_y, &shadow_blur, &shadow_spread}) {
     if (!value->has_value()) {
       return std::unexpected(value->error());
     }
   }
 
-  auto doubled_padding = checked_multiply(2, *padding, "");
-  if (!doubled_padding) {
-    return std::unexpected(doubled_padding.error());
+  auto doubled_horizontal_padding = checked_multiply(2, *horizontal_padding, "");
+  auto doubled_vertical_padding = checked_multiply(2, *vertical_padding, "");
+  if (!doubled_horizontal_padding) {
+    return std::unexpected(doubled_horizontal_padding.error());
   }
-  auto maximum_content_width = checked_subtract(*maximum_width, *doubled_padding, "");
-  auto maximum_content_height = checked_subtract(*maximum_height, *doubled_padding, "");
+  if (!doubled_vertical_padding) {
+    return std::unexpected(doubled_vertical_padding.error());
+  }
+  auto maximum_content_width = checked_subtract(*maximum_width, *doubled_horizontal_padding, "");
+  auto maximum_content_height = checked_subtract(*maximum_height, *doubled_vertical_padding, "");
   if (!maximum_content_width) {
     return std::unexpected(maximum_content_width.error());
   }
@@ -1009,8 +1014,8 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
                                  "scene minimum size exceeds the view maximum"));
   }
 
-  auto desired_width = checked_add(measured->width, *doubled_padding, "");
-  auto desired_height = checked_add(measured->height, *doubled_padding, "");
+  auto desired_width = checked_add(measured->width, *doubled_horizontal_padding, "");
+  auto desired_height = checked_add(measured->height, *doubled_vertical_padding, "");
   if (!desired_width) {
     return std::unexpected(desired_width.error());
   }
@@ -1020,8 +1025,8 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
   const int view_width = std::clamp(*desired_width, *minimum_width, *maximum_width);
   const int view_height = std::clamp(*desired_height, *minimum_height, *maximum_height);
   const Rect view_bounds{0, 0, view_width, view_height};
-  auto content_width = checked_subtract(view_width, *doubled_padding, "");
-  auto content_height = checked_subtract(view_height, *doubled_padding, "");
+  auto content_width = checked_subtract(view_width, *doubled_horizontal_padding, "");
+  auto content_height = checked_subtract(view_height, *doubled_vertical_padding, "");
   if (!content_width) {
     return std::unexpected(content_width.error());
   }
@@ -1032,7 +1037,8 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
     return std::unexpected(error(LayoutErrorCode::impossible_constraints, "",
                                  "view has no positive content bounds after rounding"));
   }
-  const Rect content_bounds{*padding, *padding, *content_width, *content_height};
+  const Rect content_bounds{*horizontal_padding, *vertical_padding, *content_width,
+                            *content_height};
   LayoutPlan plan{
       RoundedView{view_bounds, *radius, *border, theme.palette().at("surface"),
                   theme.palette().at("muted"),
