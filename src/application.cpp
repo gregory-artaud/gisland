@@ -203,11 +203,52 @@ struct RenderedContext {
   std::optional<RenderTexture2D> expanded_content;
 };
 
+[[nodiscard]] RoundedView visible_surface(const RenderedContext &context, float mode_progress) {
+  const RoundedView &expanded = context.expanded ? context.expanded->view : context.compact.view;
+  return interpolate(context.compact.view, expanded, mode_progress);
+}
+
+[[nodiscard]] ContentVisual with_opacity(ContentVisual visual, float multiplier) {
+  visual.opacity *= std::clamp(multiplier, 0.0F, 1.0F);
+  return visual;
+}
+
 void unload(RenderedContext &context) {
   if (context.expanded_content) {
     UnloadRenderTexture(*context.expanded_content);
   }
   UnloadRenderTexture(context.compact_content);
+}
+
+[[nodiscard]] std::expected<RenderTexture2D, std::string>
+snapshot_content(const std::optional<RenderTexture2D> &outgoing, float outgoing_opacity,
+                 const RenderedContext &incoming, float incoming_opacity,
+                 const ContentCrossfade &mode_crossfade, const IslandGeometry &geometry,
+                 Shader blur_shader, int texture_size_location, int blur_radius_location) {
+  RenderTexture2D texture =
+      LoadRenderTexture(std::max(1, static_cast<int>(std::lround(geometry.width))),
+                        std::max(1, static_cast<int>(std::lround(geometry.height))));
+  if (!IsRenderTextureValid(texture)) {
+    return std::unexpected("could not allocate a context transition snapshot");
+  }
+
+  BeginTextureMode(texture);
+  ClearBackground(BLANK);
+  const IslandPlacement origin{};
+  if (outgoing) {
+    draw_content(*outgoing, ContentVisual{outgoing_opacity, 0.0F, 1.0F}, geometry, origin,
+                 blur_shader, texture_size_location, blur_radius_location);
+  }
+  draw_content(incoming.compact_content, with_opacity(mode_crossfade.compact(), incoming_opacity),
+               geometry, origin, blur_shader, texture_size_location, blur_radius_location);
+  if (incoming.expanded_content) {
+    draw_content(*incoming.expanded_content,
+                 with_opacity(mode_crossfade.expanded(), incoming_opacity), geometry, origin,
+                 blur_shader, texture_size_location, blur_radius_location);
+  }
+  EndTextureMode();
+  SetTextureFilter(texture.texture, TEXTURE_FILTER_BILINEAR);
+  return texture;
 }
 
 [[nodiscard]] std::expected<RenderTexture2D, std::string>
@@ -414,6 +455,11 @@ int Application::run() {
   IslandPlacement placement = place_at_top_center(current, canvas);
   X11Monitor monitor = raylib_monitor_fallback();
   std::optional<RenderedContext> rendered;
+  std::optional<RenderTexture2D> outgoing_content;
+  std::optional<RoundedView> current_surface;
+  std::optional<RoundedView> transition_source_surface;
+  std::optional<RoundedView> transition_target_surface;
+  ContextTransition context_transition;
   bool visible = false;
   bool actions_ready = false;
 
@@ -458,6 +504,64 @@ int Application::run() {
   };
   refresh_monitor();
   apply_native_canvas();
+
+  const auto clear_outgoing = [&] {
+    if (outgoing_content) {
+      UnloadRenderTexture(*outgoing_content);
+      outgoing_content.reset();
+    }
+  };
+
+  const auto replace_rendered = [&](RenderedContext candidate, bool preserve_expanded,
+                                    const AnimationStyle &animation) {
+    std::optional<RenderTexture2D> snapshot;
+    if (rendered && current_surface && animation.context_change_ms.count() > 0) {
+      const auto transition_visual = context_transition.visual();
+      auto captured =
+          snapshot_content(outgoing_content, transition_visual.outgoing_opacity, *rendered,
+                           transition_visual.incoming_opacity, content_crossfade, current,
+                           blur_shader, texture_size_location, blur_radius_location);
+      if (captured) {
+        snapshot = *captured;
+      } else {
+        std::cerr << captured.error() << '\n';
+      }
+    }
+
+    clear_outgoing();
+    if (rendered) {
+      unload(*rendered);
+    }
+    rendered.emplace(std::move(candidate));
+    actions_ready = false;
+    if (!preserve_expanded) {
+      mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+      mode = IslandMode::compact;
+      spring = SpringProgress{};
+      content_crossfade = ContentCrossfade{};
+    }
+
+    const RoundedView target = visible_surface(*rendered, spring.value());
+    const auto target_canvas = canvas_for(rendered->compact, rendered->expanded);
+    canvas = IslandCanvasSize{std::max(target_canvas.width, current.width),
+                              std::max(target_canvas.height, current.height)};
+    if (snapshot && current_surface) {
+      outgoing_content = *snapshot;
+      transition_source_surface = *current_surface;
+      transition_target_surface = target;
+      context_transition.start(current, geometry(target), animation.context_change_ms,
+                               animation.easing);
+    } else {
+      transition_source_surface.reset();
+      transition_target_surface.reset();
+      context_transition.start(geometry(target), geometry(target), std::chrono::milliseconds{0},
+                               animation.easing);
+      current_surface = target;
+      current = geometry(target);
+    }
+    placement = place_at_top_center(current, canvas);
+    apply_native_canvas();
+  };
 
   std::optional<FileWatcher> watcher;
   if (auto created = FileWatcher::create(reload_watch_paths(bootstrap_)); created) {
@@ -538,28 +642,37 @@ int Application::run() {
     }
 
     runtime.commit_reload(std::move(*prepared_runtime));
-    if (rendered) {
-      unload(*rendered);
-    }
-    rendered = std::move(candidate_rendered);
     *fonts = std::move(*candidate_fonts);
     *rich_text = std::move(*candidate_rich_text);
     bootstrap_ = std::move(*candidate_bootstrap);
     monitor = std::move(candidate_monitor);
-    canvas = candidate_canvas;
     mode_controller.set_exit_tolerance(bootstrap_.config.interaction.hover_exit);
-    if (mode_controller.mode() == IslandMode::expanded && (!rendered || !rendered->expanded)) {
+    if (mode_controller.mode() == IslandMode::expanded &&
+        (!candidate_rendered || !candidate_rendered->expanded)) {
       mode_controller.close();
     }
-    if (!rendered) {
+    if (candidate_rendered) {
+      const bool preserve_expanded = mode_controller.mode() == IslandMode::expanded &&
+                                     candidate_rendered->expanded.has_value();
+      replace_rendered(std::move(*candidate_rendered), preserve_expanded,
+                       bootstrap_.theme.animation());
+    } else {
+      clear_outgoing();
+      if (rendered) {
+        unload(*rendered);
+        rendered.reset();
+      }
+      current_surface.reset();
+      transition_source_surface.reset();
+      transition_target_surface.reset();
       const auto &compact = bootstrap_.theme.views().compact;
       current = IslandGeometry{static_cast<float>(compact.min_width),
                                static_cast<float>(compact.min_height),
                                static_cast<float>(compact.radius)};
+      canvas = candidate_canvas;
+      placement = place_at_top_center(current, canvas);
+      apply_native_canvas();
     }
-    placement = place_at_top_center(current, canvas);
-    apply_native_canvas();
-    actions_ready = false;
     if (watcher) {
       if (auto replaced = watcher->replace_paths(reload_watch_paths(bootstrap_)); !replaced) {
         std::cerr << "automatic reload disabled: " << replaced.error() << '\n';
@@ -628,31 +741,17 @@ int Application::run() {
         std::cerr << '[' << selection.context->key.instance_id << "] layout: " << candidate.error()
                   << '\n';
         runtime.reject(selection.context->key, now);
-        if (rendered) {
-          unload(*rendered);
-          rendered.reset();
-        }
       } else {
         runtime.accept(selection.context->key);
-        if (rendered) {
-          unload(*rendered);
-        }
-        rendered.emplace(std::move(*candidate));
-        canvas = canvas_for(rendered->compact, rendered->expanded);
-        actions_ready = false;
-        if (!preserve_expanded) {
-          mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
-          mode = IslandMode::compact;
-          spring = SpringProgress{};
-          content_crossfade = ContentCrossfade{};
-          current = geometry(rendered->compact.view);
-        }
-        placement = place_at_top_center(current, canvas);
-        apply_native_canvas();
+        replace_rendered(std::move(*candidate), preserve_expanded, bootstrap_.theme.animation());
       }
     } else if (selection.context == nullptr && rendered) {
+      clear_outgoing();
       unload(*rendered);
       rendered.reset();
+      current_surface.reset();
+      transition_source_surface.reset();
+      transition_target_surface.reset();
       mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
       actions_ready = false;
       if (visible) {
@@ -716,17 +815,34 @@ int Application::run() {
 
     const float animation_delta =
         delta_seconds * static_cast<float>(bootstrap_.config.interaction.animation_speed);
-    spring.update(animation_delta);
-    content_crossfade.update(animation_delta);
+    const bool context_was_active = context_transition.active();
+    context_transition.update(animation_delta);
+    if (!context_transition.active()) {
+      spring.update(animation_delta);
+      content_crossfade.update(animation_delta);
+    }
+    if (context_was_active && !context_transition.active()) {
+      clear_outgoing();
+      transition_source_surface.reset();
+      transition_target_surface.reset();
+      if (rendered) {
+        canvas = canvas_for(rendered->compact, rendered->expanded);
+        apply_native_canvas();
+      }
+    }
     const ContentVisual expanded_visual = content_crossfade.expanded();
-    const bool expanded_settled = mode == IslandMode::expanded && spring.value() == 1.0F &&
-                                  expanded_visual.opacity == 1.0F && expanded_visual.blur == 0.0F &&
-                                  expanded_visual.scale == 1.0F;
+    const bool expanded_settled = !context_transition.active() && mode == IslandMode::expanded &&
+                                  spring.value() == 1.0F && expanded_visual.opacity == 1.0F &&
+                                  expanded_visual.blur == 0.0F && expanded_visual.scale == 1.0F;
     actions_ready = expanded_settled && rendered && rendered->expanded.has_value();
     if (rendered) {
-      const RoundedView &expanded_view =
-          rendered->expanded ? rendered->expanded->view : rendered->compact.view;
-      RoundedView surface = interpolate(rendered->compact.view, expanded_view, spring.value());
+      const auto transition_visual = context_transition.visual();
+      RoundedView surface = visible_surface(*rendered, spring.value());
+      if (context_transition.active() && transition_source_surface && transition_target_surface) {
+        surface = interpolate(*transition_source_surface, *transition_target_surface,
+                              transition_visual.incoming_opacity);
+      }
+      current_surface = surface;
       current = geometry(surface);
       placement = place_at_top_center(current, canvas);
       surface.bounds.x = static_cast<int>(std::lround(placement.x));
@@ -741,11 +857,20 @@ int Application::run() {
       if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}, {}}); !drawn) {
         std::cerr << drawn.error().message << '\n';
       }
-      draw_content(rendered->compact_content, content_crossfade.compact(), current, placement,
+      if (outgoing_content) {
+        draw_content(*outgoing_content,
+                     ContentVisual{transition_visual.outgoing_opacity, 0.0F, 1.0F}, current,
+                     placement, blur_shader, texture_size_location, blur_radius_location);
+      }
+      const float incoming_opacity =
+          context_transition.active() ? transition_visual.incoming_opacity : 1.0F;
+      draw_content(rendered->compact_content,
+                   with_opacity(content_crossfade.compact(), incoming_opacity), current, placement,
                    blur_shader, texture_size_location, blur_radius_location);
       if (rendered->expanded_content) {
-        draw_content(*rendered->expanded_content, content_crossfade.expanded(), current, placement,
-                     blur_shader, texture_size_location, blur_radius_location);
+        draw_content(*rendered->expanded_content,
+                     with_opacity(content_crossfade.expanded(), incoming_opacity), current,
+                     placement, blur_shader, texture_size_location, blur_radius_location);
       }
       EndDrawing();
       if (!visible) {
@@ -760,6 +885,7 @@ int Application::run() {
   }
 
   supervisor.shutdown();
+  clear_outgoing();
   if (rendered) {
     unload(*rendered);
   }

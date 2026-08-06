@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gisland/theme.hpp"
+
 #include <chrono>
 #include <expected>
 #include <vector>
@@ -12,6 +14,8 @@ struct IslandGeometry {
   float width;
   float height;
   float radius;
+
+  bool operator==(const IslandGeometry &) const = default;
 };
 
 struct IslandCanvasSize {
@@ -108,6 +112,30 @@ private:
   LayerTransition compact_{{1.0F, 0.0F, 1.0F}, {1.0F, 0.0F, 1.0F}, {1.0F, 0.0F, 1.0F}, 0.0F, 0.0F};
   LayerTransition expanded_{
       {0.0F, 6.0F, 0.96F}, {0.0F, 6.0F, 0.96F}, {0.0F, 6.0F, 0.96F}, 0.0F, 0.0F};
+};
+
+struct ContextTransitionVisual {
+  IslandGeometry geometry;
+  float outgoing_opacity;
+  float incoming_opacity;
+};
+
+class ContextTransition {
+public:
+  void start(IslandGeometry source, IslandGeometry target, std::chrono::milliseconds duration,
+             Easing easing);
+  void update(float delta_seconds);
+  [[nodiscard]] bool active() const;
+  [[nodiscard]] ContextTransitionVisual visual() const;
+
+private:
+  IslandGeometry source_{};
+  IslandGeometry target_{};
+  float elapsed_seconds_{0.0F};
+  float duration_seconds_{0.0F};
+  float progress_{1.0F};
+  Easing easing_{Easing::linear};
+  bool active_{false};
 };
 
 [[nodiscard]] IslandGeometry geometry_for(IslandMode mode);

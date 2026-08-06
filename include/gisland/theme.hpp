@@ -46,6 +46,11 @@ struct ThemeViews {
 
 using ThemeColor = std::variant<std::string, Rgba>;
 
+struct ButtonStyle {
+  ThemeColor background;
+  ThemeColor disabled_background;
+};
+
 struct ShadowStyle {
   double offset_x;
   double offset_y;
@@ -110,6 +115,7 @@ public:
   [[nodiscard]] const PixelTokens &gaps() const noexcept { return gaps_; }
   [[nodiscard]] const PixelTokens &spacers() const noexcept { return spacers_; }
   [[nodiscard]] const ThemeViews &views() const noexcept { return views_; }
+  [[nodiscard]] const ButtonStyle &buttons() const noexcept { return buttons_; }
   [[nodiscard]] const ShadowStyle &shadow() const noexcept { return shadow_; }
   [[nodiscard]] const AnimationStyle &animation() const noexcept { return animation_; }
   [[nodiscard]] const FontResources &fonts() const noexcept { return fonts_; }
@@ -118,14 +124,15 @@ public:
 
 private:
   Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-        ThemeViews views, ShadowStyle shadow, AnimationStyle animation, FontResources fonts,
-        Icons icons, ImageRoles images);
+        ThemeViews views, ButtonStyle buttons, ShadowStyle shadow, AnimationStyle animation,
+        FontResources fonts, Icons icons, ImageRoles images);
 
   Palette palette_;
   Typography typography_;
   PixelTokens gaps_;
   PixelTokens spacers_;
   ThemeViews views_;
+  ButtonStyle buttons_;
   ShadowStyle shadow_;
   AnimationStyle animation_;
   FontResources fonts_;

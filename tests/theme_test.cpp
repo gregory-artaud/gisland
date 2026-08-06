@@ -212,6 +212,46 @@ TEST_CASE("theme parses an explicit RGBA shadow color") {
   CHECK(std::get<gisland::Rgba>(result->shadow().color) == gisland::Rgba{16, 32, 48, 64});
 }
 
+TEST_CASE("theme parses configurable button colors and preserves legacy defaults") {
+  const auto legacy = gisland::parse_theme(valid_theme, "legacy-buttons.toml");
+  REQUIRE(legacy.has_value());
+  REQUIRE(std::holds_alternative<std::string>(legacy->buttons().background));
+  REQUIRE(std::holds_alternative<std::string>(legacy->buttons().disabled_background));
+  CHECK(std::get<std::string>(legacy->buttons().background) == "accent");
+  CHECK(std::get<std::string>(legacy->buttons().disabled_background) == "muted");
+
+  const auto configured =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "[shadow]",
+                                        "[buttons]\nbackground = \"surface\"\n"
+                                        "disabled_background = \"#10203040\"\n\n[shadow]"),
+                           "configured-buttons.toml");
+  REQUIRE(configured.has_value());
+  REQUIRE(std::holds_alternative<std::string>(configured->buttons().background));
+  REQUIRE(std::holds_alternative<gisland::Rgba>(configured->buttons().disabled_background));
+  CHECK(std::get<std::string>(configured->buttons().background) == "surface");
+  CHECK(std::get<gisland::Rgba>(configured->buttons().disabled_background) ==
+        gisland::Rgba{16, 32, 48, 64});
+}
+
+TEST_CASE("theme rejects invalid button styles with exact paths") {
+  const auto check_invalid = [](std::string table, std::string_view path) {
+    const auto result = gisland::parse_theme(
+        replace_once(std::string{valid_theme}, "[shadow]", std::move(table) + "\n[shadow]"),
+        "buttons.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == path);
+  };
+
+  check_invalid("[buttons]\nbackground = \"surface\"\n", "buttons.disabled_background");
+  check_invalid(
+      "[buttons]\nbackground = \"surface\"\ndisabled_background = \"surface\"\nextra = 1\n",
+      "buttons.extra");
+  check_invalid("[buttons]\nbackground = \"#12345\"\ndisabled_background = \"surface\"\n",
+                "buttons.background");
+  check_invalid("[buttons]\nbackground = \"missing\"\ndisabled_background = \"surface\"\n",
+                "buttons.background");
+}
+
 TEST_CASE("theme accepts each supported easing") {
   const auto check_easing = [](std::string_view name, gisland::Easing expected) {
     const auto result =

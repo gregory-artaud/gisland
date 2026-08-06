@@ -272,14 +272,17 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   CHECK(attributes.map_state != IsViewable);
 
-  REQUIRE(wait_until([&] {
+  const bool mapped = wait_until([&] {
     XSync(display, False);
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
            attributes.map_state == IsViewable && attributes.width == 360 &&
-           attributes.height == 300 && attributes.x == 460 && attributes.y == 8;
-  }));
+           attributes.height == 96 && attributes.x == 460 && attributes.y == 8;
+  });
+  INFO("native window: " << attributes.x << ',' << attributes.y << ' ' << attributes.width << 'x'
+                         << attributes.height << " state=" << attributes.map_state);
+  REQUIRE(mapped);
   CHECK(attributes.width == 360);
-  CHECK(attributes.height == 300);
+  CHECK(attributes.height == 96);
   CHECK(attributes.x == 460);
   CHECK(attributes.y == 8);
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
@@ -352,7 +355,7 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 300 && shape->x == 0;
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == 0;
   }));
   REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
                                         gisland::CloseControl{})
@@ -369,16 +372,16 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 300 && shape->x == 0;
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == 0;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   CHECK(attributes.width == 360);
-  CHECK(attributes.height == 300);
+  CHECK(attributes.height == 96);
   CHECK(attributes.x == 460);
   std::this_thread::sleep_for(std::chrono::milliseconds{800});
 
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 48,
-                               attributes.y + 150, CurrentTime) != 0);
+                               attributes.y + 48, CurrentTime) != 0);
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
   XSync(display, False);
   std::this_thread::sleep_for(std::chrono::milliseconds{50});
@@ -400,7 +403,7 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   CHECK(attributes.width == 360);
-  CHECK(attributes.height == 300);
+  CHECK(attributes.height == 96);
   CHECK(attributes.x == 460);
   CHECK(attributes.y == 8);
 
@@ -436,7 +439,7 @@ TEST_CASE("application renders the distributed live clock-calendar module") {
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->height >= 300;
+    return shape && shape->height > 96 && shape->height < 300;
   }));
   CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
 
@@ -531,7 +534,7 @@ TEST_CASE("application renders protocol 1.3 rich notification scenes from an ext
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width >= 360 && shape->height >= 300;
+    return shape && shape->width >= 360 && shape->height > 96 && shape->height < 300;
   }));
   CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
   CHECK(read_text(config.application_log()).find("render:") == std::string::npos);
@@ -586,7 +589,7 @@ TEST_CASE("application renders a freedesktop notification from the shipped daemo
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width >= 360 && shape->height >= 300;
+    return shape && shape->width >= 360 && shape->height >= 96 && shape->height < 300;
   }));
   CHECK(read_text(config.application_log()).find("[notifications] layout:") == std::string::npos);
 

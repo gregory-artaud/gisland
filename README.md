@@ -313,6 +313,16 @@ Existing themes may continue to use `padding = 14` as a uniform shorthand. Do no
 shorthand with axis-specific fields. Theme changes are validated and applied transactionally by the
 existing hot-reload path.
 
+Button backgrounds can reference palette roles or use explicit colors independently from the accent:
+
+```toml
+[buttons]
+background = "surface"
+disabled_background = "surface"
+```
+
+Themes without this table retain the original `accent` and `muted` button backgrounds.
+
 ## Dynamic Images
 
 Protocol 1.2 adds the optional `context-images` capability. A module that negotiates it can attach

@@ -114,6 +114,10 @@ small = 6
 normal = 10
 large = 18
 
+[buttons]
+background = "surface"
+disabled_background = "surface"
+
 [view.compact]
 padding_horizontal = 14
 padding_vertical = 4
@@ -130,7 +134,7 @@ radius = 30
 border = 0
 min_width = 360
 max_width = 432
-min_height = 300
+min_height = 96
 max_height = 344
 
 [shadow]

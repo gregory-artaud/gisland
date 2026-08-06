@@ -439,6 +439,32 @@ parse_theme_color(const toml::node *node, const std::string &path, std::string_v
   return ThemeColor{*color};
 }
 
+[[nodiscard]] std::expected<ButtonStyle, ThemeError> parse_buttons(const toml::table &root,
+                                                                   std::string_view source_name) {
+  const auto *node = root.get("buttons");
+  if (node == nullptr) {
+    return ButtonStyle{std::string{"accent"}, std::string{"muted"}};
+  }
+  const auto *table = node->as_table();
+  if (table == nullptr) {
+    return std::unexpected(error_at(source_name, "buttons", "expected a table", node));
+  }
+  auto keys = reject_unknown(*table, {"background", "disabled_background"}, "buttons", source_name);
+  if (!keys) {
+    return std::unexpected(keys.error());
+  }
+  auto background = parse_theme_color(table->get("background"), "buttons.background", source_name);
+  auto disabled = parse_theme_color(table->get("disabled_background"),
+                                    "buttons.disabled_background", source_name);
+  if (!background) {
+    return std::unexpected(background.error());
+  }
+  if (!disabled) {
+    return std::unexpected(disabled.error());
+  }
+  return ButtonStyle{std::move(*background), std::move(*disabled)};
+}
+
 [[nodiscard]] std::expected<ShadowStyle, ThemeError> parse_shadow(const toml::table &root,
                                                                   std::string_view source_name) {
   auto table = required_table(root, "shadow", "shadow", source_name);
@@ -747,9 +773,10 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
 }
 
 [[nodiscard]] std::expected<void, ThemeError>
-validate_font_references(const Theme::Typography &typography, const Theme::Icons &icons,
-                         const Theme::FontResources &fonts, const Theme::Palette &palette,
-                         const ShadowStyle &shadow, std::string_view source_name) {
+validate_references(const Theme::Typography &typography, const Theme::Icons &icons,
+                    const Theme::FontResources &fonts, const Theme::Palette &palette,
+                    const ButtonStyle &buttons, const ShadowStyle &shadow,
+                    std::string_view source_name) {
   for (const auto &[role, style] : typography) {
     if (!fonts.contains(style.font)) {
       return std::unexpected(error_at(source_name, "typography." + role + ".font",
@@ -771,25 +798,33 @@ validate_font_references(const Theme::Typography &typography, const Theme::Icons
     return std::unexpected(
         error_at(source_name, "shadow.color", "referenced palette role does not exist"));
   }
+  for (const auto &[path, color] :
+       {std::pair{"buttons.background", &buttons.background},
+        std::pair{"buttons.disabled_background", &buttons.disabled_background}}) {
+    if (const auto *role = std::get_if<std::string>(color);
+        role != nullptr && !palette.contains(*role)) {
+      return std::unexpected(error_at(source_name, path, "referenced palette role does not exist"));
+    }
+  }
   return {};
 }
 
 } // namespace
 
 Theme::Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-             ThemeViews views, ShadowStyle shadow, AnimationStyle animation, FontResources fonts,
-             Icons icons, ImageRoles images)
+             ThemeViews views, ButtonStyle buttons, ShadowStyle shadow, AnimationStyle animation,
+             FontResources fonts, Icons icons, ImageRoles images)
     : palette_(std::move(palette)), typography_(std::move(typography)), gaps_(std::move(gaps)),
-      spacers_(std::move(spacers)), views_(views), shadow_(std::move(shadow)),
-      animation_(animation), fonts_(std::move(fonts)), icons_(std::move(icons)),
-      images_(std::move(images)) {}
+      spacers_(std::move(spacers)), views_(views), buttons_(std::move(buttons)),
+      shadow_(std::move(shadow)), animation_(animation), fonts_(std::move(fonts)),
+      icons_(std::move(icons)), images_(std::move(images)) {}
 
 std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_view source_name) {
   try {
     const auto root = toml::parse(text, source_name);
     auto keys = reject_unknown(root,
-                               {"palette", "typography", "gaps", "spacers", "view", "shadow",
-                                "animation", "fonts", "icons", "images"},
+                               {"palette", "typography", "gaps", "spacers", "view", "buttons",
+                                "shadow", "animation", "fonts", "icons", "images"},
                                "", source_name);
     if (!keys) {
       return std::unexpected(keys.error());
@@ -801,6 +836,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     auto gaps = parse_pixel_tokens(root, "gaps", source_name);
     auto spacers = parse_pixel_tokens(root, "spacers", source_name);
     auto views = parse_views(root, source_name);
+    auto buttons = parse_buttons(root, source_name);
     auto shadow = parse_shadow(root, source_name);
     auto animation = parse_animation(root, source_name);
     auto icons = parse_icons(root, source_name);
@@ -823,6 +859,9 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!views) {
       return std::unexpected(views.error());
     }
+    if (!buttons) {
+      return std::unexpected(buttons.error());
+    }
     if (!shadow) {
       return std::unexpected(shadow.error());
     }
@@ -836,7 +875,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
       return std::unexpected(images.error());
     }
     auto references =
-        validate_font_references(*typography, *icons, *fonts, *palette, *shadow, source_name);
+        validate_references(*typography, *icons, *fonts, *palette, *buttons, *shadow, source_name);
     if (!references) {
       return std::unexpected(references.error());
     }
@@ -845,6 +884,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
                  std::move(*gaps),
                  std::move(*spacers),
                  *views,
+                 std::move(*buttons),
                  std::move(*shadow),
                  *animation,
                  std::move(*fonts),

@@ -34,6 +34,20 @@ float cubic_bezier(float progress, float x1, float y1, float x2, float y2) {
   return sample(point, y1, y2);
 }
 
+float apply_easing(float progress, Easing easing) {
+  switch (easing) {
+  case Easing::linear:
+    return std::clamp(progress, 0.0F, 1.0F);
+  case Easing::ease_in:
+    return cubic_bezier(progress, 0.42F, 0.0F, 1.0F, 1.0F);
+  case Easing::ease_out:
+    return cubic_bezier(progress, 0.0F, 0.0F, 0.58F, 1.0F);
+  case Easing::ease_in_out:
+    return cubic_bezier(progress, 0.42F, 0.0F, 0.58F, 1.0F);
+  }
+  return std::clamp(progress, 0.0F, 1.0F);
+}
+
 } // namespace
 
 IslandGeometry geometry_for(IslandMode mode) {
@@ -125,6 +139,40 @@ void ContentCrossfade::update_layer(LayerTransition &layer, float delta_seconds)
       .opacity = mix(layer.start.opacity, layer.target.opacity, opacity_progress),
       .blur = mix(layer.start.blur, layer.target.blur, blur_progress),
       .scale = mix(layer.start.scale, layer.target.scale, scale_progress),
+  };
+}
+
+void ContextTransition::start(IslandGeometry source, IslandGeometry target,
+                              std::chrono::milliseconds duration, Easing easing) {
+  source_ = source;
+  target_ = target;
+  elapsed_seconds_ = 0.0F;
+  duration_seconds_ = std::max(std::chrono::duration<float>{duration}.count(), 0.0F);
+  easing_ = easing;
+  active_ = duration_seconds_ > 0.0F;
+  progress_ = active_ ? 0.0F : 1.0F;
+}
+
+void ContextTransition::update(float delta_seconds) {
+  if (!active_) {
+    return;
+  }
+  elapsed_seconds_ += std::max(delta_seconds, 0.0F);
+  const float linear_progress = std::clamp(elapsed_seconds_ / duration_seconds_, 0.0F, 1.0F);
+  progress_ = apply_easing(linear_progress, easing_);
+  if (linear_progress >= 1.0F) {
+    progress_ = 1.0F;
+    active_ = false;
+  }
+}
+
+bool ContextTransition::active() const { return active_; }
+
+ContextTransitionVisual ContextTransition::visual() const {
+  return {
+      .geometry = interpolate(source_, target_, progress_),
+      .outgoing_opacity = 1.0F - progress_,
+      .incoming_opacity = progress_,
   };
 }
 

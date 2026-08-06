@@ -216,6 +216,8 @@ struct MeasuredNode {
   return node.flexible || (axis == Axis::horizontal ? node.expands_width : node.expands_height);
 }
 
+[[nodiscard]] Rgba resolve_theme_color(const Theme &theme, const ThemeColor &value);
+
 class LayoutBuilder {
 public:
   LayoutBuilder(const Theme &theme, const GlyphMetrics &metrics,
@@ -1263,10 +1265,10 @@ private:
     if (!clipped) {
       return std::unexpected(clipped.error());
     }
-    commands.emplace_back(ButtonDecorationDrawCommand{bounds, *clipped,
-                                                      button.enabled ? theme_.palette().at("accent")
-                                                                     : theme_.palette().at("muted"),
-                                                      button.enabled});
+    const auto &background =
+        button.enabled ? theme_.buttons().background : theme_.buttons().disabled_background;
+    commands.emplace_back(ButtonDecorationDrawCommand{
+        bounds, *clipped, resolve_theme_color(theme_, background), button.enabled});
     interactions.push_back(InteractionTarget{bounds, *clipped, button.action_id, button.enabled,
                                              button.accessible_label});
 

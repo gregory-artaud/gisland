@@ -638,6 +638,26 @@ TEST_CASE("buttons emit disabled decoration before centered child content") {
   CHECK(text.bounds.y == button.bounds.y + ((button.bounds.height - text.bounds.height) / 2));
 }
 
+TEST_CASE("buttons resolve configured backgrounds independently from the accent") {
+  const auto theme = make_theme_with("[shadow]", "[buttons]\nbackground = \"surface\"\n"
+                                                 "disabled_background = \"#102030\"\n\n[shadow]");
+  const auto enabled =
+      gisland::layout_scene(gisland::SceneNode{gisland::Button{
+                                gisland::SceneNode{gisland::Text{"Go", "body"}}, "go", true, "Go"}},
+                            theme, gisland::ViewMode::expanded, TestGlyphMetrics{});
+  const auto disabled = gisland::layout_scene(
+      gisland::SceneNode{gisland::Button{gisland::SceneNode{gisland::Text{"Stop", "body"}}, "stop",
+                                         false, "Stop"}},
+      theme, gisland::ViewMode::expanded, TestGlyphMetrics{});
+
+  REQUIRE(enabled.has_value());
+  REQUIRE(disabled.has_value());
+  CHECK(command_at<gisland::ButtonDecorationDrawCommand>(*enabled, 0).color ==
+        gisland::Rgba{0, 0, 0, 255});
+  CHECK(command_at<gisland::ButtonDecorationDrawCommand>(*disabled, 0).color ==
+        gisland::Rgba{16, 32, 48, 255});
+}
+
 TEST_CASE("text applies UTF-8-safe end truncation or painter clipping at the view maximum") {
   const auto end =
       gisland::layout_scene(gisland::SceneNode{gisland::Text{"abcdefghijklmno", "body", "end"}},

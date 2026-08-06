@@ -258,6 +258,83 @@ TEST_CASE("content crossfade preserves continuity when reversed mid-flight") {
   CHECK(crossfade.expanded().opacity < expanded_before_reversal.opacity);
 }
 
+TEST_CASE("context transition interpolates geometry and crossfades content") {
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry compact{230.0F, 32.0F, 16.0F};
+  const gisland::IslandGeometry notification{340.0F, 32.0F, 16.0F};
+
+  CHECK_FALSE(transition.active());
+  transition.start(compact, notification, 250ms, gisland::Easing::linear);
+
+  REQUIRE(transition.active());
+  auto visual = transition.visual();
+  CHECK(visual.geometry.width == Approx(230.0F));
+  CHECK(visual.outgoing_opacity == Approx(1.0F));
+  CHECK(visual.incoming_opacity == Approx(0.0F));
+
+  transition.update(0.125F);
+  visual = transition.visual();
+  CHECK(visual.geometry.width == Approx(285.0F));
+  CHECK(visual.geometry.height == Approx(32.0F));
+  CHECK(visual.outgoing_opacity == Approx(0.5F));
+  CHECK(visual.incoming_opacity == Approx(0.5F));
+
+  transition.update(0.125F);
+  visual = transition.visual();
+  CHECK_FALSE(transition.active());
+  CHECK(visual.geometry.width == Approx(340.0F));
+  CHECK(visual.outgoing_opacity == Approx(0.0F));
+  CHECK(visual.incoming_opacity == Approx(1.0F));
+}
+
+TEST_CASE("context transition handles zero duration and bounded frame deltas") {
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry source{230.0F, 32.0F, 16.0F};
+  const gisland::IslandGeometry target{432.0F, 180.0F, 30.0F};
+
+  transition.start(source, target, 250ms, gisland::Easing::linear);
+  transition.update(-1.0F);
+  CHECK(transition.visual().geometry == source);
+
+  transition.update(10.0F);
+  CHECK_FALSE(transition.active());
+  CHECK(transition.visual().geometry == target);
+
+  transition.start(source, target, 0ms, gisland::Easing::ease_in_out);
+  CHECK_FALSE(transition.active());
+  CHECK(transition.visual().geometry == target);
+  CHECK(transition.visual().outgoing_opacity == Approx(0.0F));
+  CHECK(transition.visual().incoming_opacity == Approx(1.0F));
+}
+
+TEST_CASE("context transition retargets from the visible geometry") {
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry clock{230.0F, 32.0F, 16.0F};
+  const gisland::IslandGeometry first{340.0F, 32.0F, 16.0F};
+  const gisland::IslandGeometry second{432.0F, 160.0F, 30.0F};
+
+  transition.start(clock, first, 250ms, gisland::Easing::linear);
+  transition.update(0.1F);
+  const auto visible = transition.visual().geometry;
+
+  transition.start(visible, second, 250ms, gisland::Easing::linear);
+  CHECK(transition.visual().geometry == visible);
+  transition.update(0.125F);
+  CHECK(transition.visual().geometry.width == Approx((visible.width + second.width) / 2.0F));
+  CHECK(transition.visual().geometry.height == Approx((visible.height + second.height) / 2.0F));
+}
+
+TEST_CASE("context transition crossfades content when geometry is unchanged") {
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry geometry{340.0F, 32.0F, 16.0F};
+
+  transition.start(geometry, geometry, 250ms, gisland::Easing::linear);
+  REQUIRE(transition.active());
+  transition.update(0.125F);
+  CHECK(transition.visual().outgoing_opacity == Approx(0.5F));
+  CHECK(transition.visual().incoming_opacity == Approx(0.5F));
+}
+
 TEST_CASE("rounded mask covers the middle and insets its edges") {
   const auto mask = gisland::rounded_mask_rows(gisland::geometry_for(gisland::IslandMode::compact));
   REQUIRE(mask.size() == 44);

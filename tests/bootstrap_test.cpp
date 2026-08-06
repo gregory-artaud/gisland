@@ -111,9 +111,14 @@ TEST_CASE("bootstrap loads config and distributed theme before graphical startup
   CHECK(bootstrap->theme.views().compact.min_height == 32.0);
   CHECK(bootstrap->theme.views().compact.max_height == 32.0);
   CHECK(bootstrap->theme.views().compact.border == 0.0);
+  CHECK(bootstrap->theme.views().expanded.min_height == 96.0);
   CHECK(bootstrap->theme.views().expanded.border == 0.0);
   CHECK(bootstrap->theme.typography().at("compact-primary").size == 12.0);
   CHECK(bootstrap->theme.typography().at("compact-secondary").size == 12.0);
+  REQUIRE(std::holds_alternative<std::string>(bootstrap->theme.buttons().background));
+  REQUIRE(std::holds_alternative<std::string>(bootstrap->theme.buttons().disabled_background));
+  CHECK(std::get<std::string>(bootstrap->theme.buttons().background) == "surface");
+  CHECK(std::get<std::string>(bootstrap->theme.buttons().disabled_background) == "surface");
 }
 
 TEST_CASE("bootstrap gives a valid user theme priority over the distributed theme") {
