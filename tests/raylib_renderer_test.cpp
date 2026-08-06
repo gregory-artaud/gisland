@@ -459,6 +459,25 @@ TEST_CASE_METHOD(HiddenWindow, "surface painter draws the resolved shadow before
   UnloadImage(image);
 }
 
+TEST_CASE_METHOD(HiddenWindow, "surface painter stores shadow alpha exactly once") {
+  auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  const gisland::LayoutPlan plan{
+      gisland::RoundedView{gisland::Rect{20, 24, 20, 20},
+                           4,
+                           0,
+                           gisland::Rgba{0, 0, 0, 255},
+                           {},
+                           gisland::ViewShadow{30, 0, 0, 0, gisland::Rgba{0, 0, 0, 128}}},
+      {}};
+
+  Image image = render_image([&] { REQUIRE(painter.draw_surface(plan).has_value()); });
+
+  CHECK(same_color(GetImageColor(image, 60, 34), gisland::Rgba{0, 0, 0, 128}));
+  UnloadImage(image);
+}
+
 TEST_CASE_METHOD(HiddenWindow, "painter rejects coordinates that overflow after translation") {
   auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
   REQUIRE(fonts.has_value());

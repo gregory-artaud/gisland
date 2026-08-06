@@ -2,6 +2,7 @@
 
 #include <GL/gl.h>
 #include <raylib.h>
+#include <rlgl.h>
 
 #include <algorithm>
 #include <array>
@@ -187,6 +188,8 @@ checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t he
   Rgba layer_color = view.shadow.color;
   layer_color.alpha =
       static_cast<std::uint8_t>(std::max(1, static_cast<int>(view.shadow.color.alpha) / layers));
+  std::vector<std::pair<Rect, int>> layer_geometry;
+  layer_geometry.reserve(static_cast<std::size_t>(layers));
   for (int blur = view.shadow.blur; blur >= 0; --blur) {
     const auto expansion = static_cast<std::int64_t>(view.shadow.spread) + blur;
     auto bounds =
@@ -206,10 +209,16 @@ checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t he
       return std::unexpected(renderer_error(RendererErrorCode::invalid_geometry, {},
                                             "shadow radius exceeds integer bounds"));
     }
-    DrawRectangleRounded(rectangle(*rendered_bounds),
-                         roundness(*rendered_bounds, static_cast<int>(radius)), 16,
-                         color(layer_color));
+    layer_geometry.emplace_back(*rendered_bounds, static_cast<int>(radius));
   }
+
+  rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA,
+                            RL_FUNC_ADD, RL_FUNC_ADD);
+  BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+  for (const auto &[bounds, radius] : layer_geometry) {
+    DrawRectangleRounded(rectangle(bounds), roundness(bounds, radius), 16, color(layer_color));
+  }
+  EndBlendMode();
   return {};
 }
 
