@@ -61,7 +61,8 @@ IslandCanvasSize island_canvas_size() { return {.width = 440.0F, .height = 232.0
 
 IslandPlacement place_at_top_center(const IslandGeometry &geometry,
                                     const IslandCanvasSize &canvas) {
-  return {.x = (canvas.width - geometry.width) / 2.0F, .y = 0.0F};
+  const float surface_width = canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
+  return {.x = canvas.surface_x + ((surface_width - geometry.width) / 2.0F), .y = canvas.surface_y};
 }
 
 IslandGeometry interpolate(const IslandGeometry &from, const IslandGeometry &to, float progress) {

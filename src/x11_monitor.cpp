@@ -35,13 +35,23 @@ std::expected<MonitorSelection, MonitorError> select_monitor(std::span<const X11
 
 std::expected<X11WindowPlacement, MonitorError>
 place_on_monitor(const X11Monitor &monitor, int window_width, int window_height, int top_margin) {
-  if (monitor.width <= 0 || monitor.height <= 0 || window_width <= 0 || window_height <= 0) {
+  return place_on_monitor(
+      monitor, X11CanvasGeometry{window_width, window_height, 0, 0, window_width}, top_margin);
+}
+
+std::expected<X11WindowPlacement, MonitorError>
+place_on_monitor(const X11Monitor &monitor, const X11CanvasGeometry &canvas, int top_margin) {
+  if (monitor.width <= 0 || monitor.height <= 0 || canvas.width <= 0 || canvas.height <= 0 ||
+      canvas.surface_x < 0 || canvas.surface_y < 0 || canvas.surface_width <= 0 ||
+      canvas.surface_x > canvas.width || canvas.surface_width > canvas.width - canvas.surface_x ||
+      canvas.surface_y > canvas.height) {
     return std::unexpected(MonitorError{MonitorErrorCode::no_active_outputs,
                                         "window or output dimensions are invalid"});
   }
   const auto x = static_cast<std::int64_t>(monitor.x) +
-                 ((static_cast<std::int64_t>(monitor.width) - window_width) / 2);
-  const auto y = static_cast<std::int64_t>(monitor.y) + top_margin;
+                 ((static_cast<std::int64_t>(monitor.width) - canvas.surface_width) / 2) -
+                 canvas.surface_x;
+  const auto y = static_cast<std::int64_t>(monitor.y) + top_margin - canvas.surface_y;
   constexpr auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
   constexpr auto maximum = static_cast<std::int64_t>(std::numeric_limits<int>::max());
   if (x < minimum || x > maximum || y < minimum || y > maximum) {

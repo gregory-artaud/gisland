@@ -50,6 +50,15 @@ struct Rect {
   bool operator==(const Rect &) const = default;
 };
 
+struct RectInsets {
+  int left{};
+  int top{};
+  int right{};
+  int bottom{};
+
+  bool operator==(const RectInsets &) const = default;
+};
+
 struct ViewShadow {
   int offset_x{};
   int offset_y{};
@@ -66,6 +75,8 @@ struct RoundedView {
   Rgba border_color;
   ViewShadow shadow{};
 };
+
+[[nodiscard]] RectInsets shadow_insets(const RoundedView &view);
 
 struct TextDrawCommand {
   Rect bounds;

@@ -43,6 +43,20 @@ TEST_CASE("island stays centered at the top of its fixed canvas") {
   CHECK(placement.y == Approx(0.0F));
 }
 
+TEST_CASE("shadow-aware canvas placement preserves its surface anchor") {
+  const gisland::IslandCanvasSize canvas{
+      .width = 140.0F,
+      .height = 80.0F,
+      .surface_x = 16.0F,
+      .surface_y = 14.0F,
+      .surface_width = 100.0F,
+      .surface_height = 40.0F,
+  };
+
+  CHECK(gisland::place_at_top_center({80.0F, 32.0F, 16.0F}, canvas) ==
+        gisland::IslandPlacement{26.0F, 14.0F});
+}
+
 TEST_CASE("spring motion has subtle overshoot and preserves reversal velocity") {
   gisland::SpringProgress spring;
   spring.set_target(1.0F);

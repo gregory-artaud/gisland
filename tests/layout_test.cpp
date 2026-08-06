@@ -669,6 +669,18 @@ TEST_CASE("buttons resolve configured backgrounds independently from the accent"
         gisland::Rgba{16, 32, 48, 255});
 }
 
+TEST_CASE("shadow insets cover every configured overflow edge") {
+  const gisland::RoundedView view{
+      {0, 0, 100, 40}, 20, 0, {0, 0, 0, 255}, {}, gisland::ViewShadow{4, 6, 18, 2, {0, 0, 0, 102}},
+  };
+
+  CHECK(gisland::shadow_insets(view) == gisland::RectInsets{16, 14, 24, 26});
+
+  auto transparent = view;
+  transparent.shadow.color.alpha = 0;
+  CHECK(gisland::shadow_insets(transparent) == gisland::RectInsets{});
+}
+
 TEST_CASE("text applies UTF-8-safe end truncation or painter clipping at the view maximum") {
   const auto end =
       gisland::layout_scene(gisland::SceneNode{gisland::Text{"abcdefghijklmno", "body", "end"}},

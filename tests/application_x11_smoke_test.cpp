@@ -260,6 +260,12 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(display != nullptr);
   TemporaryConfig config;
   ChildProcess child{config.home(), config.application_log()};
+  constexpr int canvas_x = 442;
+  constexpr int canvas_y = -4;
+  constexpr int canvas_width = 396;
+  constexpr int canvas_height = 132;
+  constexpr int surface_x = 18;
+  constexpr int surface_y = 12;
 
   std::optional<Window> window;
   REQUIRE(wait_until([&] {
@@ -275,23 +281,24 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   const bool mapped = wait_until([&] {
     XSync(display, False);
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
-           attributes.map_state == IsViewable && attributes.width == 360 &&
-           attributes.height == 96 && attributes.x == 460 && attributes.y == 8;
+           attributes.map_state == IsViewable && attributes.width == canvas_width &&
+           attributes.height == canvas_height && attributes.x == canvas_x &&
+           attributes.y == canvas_y;
   });
   INFO("native window: " << attributes.x << ',' << attributes.y << ' ' << attributes.width << 'x'
                          << attributes.height << " state=" << attributes.map_state);
   REQUIRE(mapped);
-  CHECK(attributes.width == 360);
-  CHECK(attributes.height == 96);
-  CHECK(attributes.x == 460);
-  CHECK(attributes.y == 8);
+  CHECK(attributes.width == canvas_width);
+  CHECK(attributes.height == canvas_height);
+  CHECK(attributes.x == canvas_x);
+  CHECK(attributes.y == canvas_y);
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
   XSync(display, False);
   std::optional<ShapeBounds> compact_shape;
   const bool compact = wait_until([&] {
     compact_shape = input_shape_bounds(display, *window);
     return compact_shape && compact_shape->width == 230 && compact_shape->height == 32 &&
-           compact_shape->x == 65;
+           compact_shape->x == surface_x + 65 && compact_shape->y == surface_y;
   });
   if (compact_shape) {
     INFO("initial shape: " << compact_shape->x << ',' << compact_shape->y << ' '
@@ -355,7 +362,8 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 96 && shape->x == 0;
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x &&
+           shape->y == surface_y;
   }));
   REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
                                         gisland::CloseControl{})
@@ -363,25 +371,27 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 230 && shape->height == 32 && shape->x == 65;
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 65 &&
+           shape->y == surface_y;
   }));
 
-  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 180,
-                               attributes.y + 16, CurrentTime) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + surface_x + 180,
+                               attributes.y + surface_y + 16, CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 96 && shape->x == 0;
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x &&
+           shape->y == surface_y;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
-  CHECK(attributes.width == 360);
-  CHECK(attributes.height == 96);
-  CHECK(attributes.x == 460);
+  CHECK(attributes.width == canvas_width);
+  CHECK(attributes.height == canvas_height);
+  CHECK(attributes.x == canvas_x);
   std::this_thread::sleep_for(std::chrono::milliseconds{800});
 
-  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + 48,
-                               attributes.y + 48, CurrentTime) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + surface_x + 48,
+                               attributes.y + surface_y + 48, CurrentTime) != 0);
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
   XSync(display, False);
   std::this_thread::sleep_for(std::chrono::milliseconds{50});
@@ -399,13 +409,14 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 230 && shape->height == 32 && shape->x == 65;
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 65 &&
+           shape->y == surface_y;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
-  CHECK(attributes.width == 360);
-  CHECK(attributes.height == 96);
-  CHECK(attributes.x == 460);
-  CHECK(attributes.y == 8);
+  CHECK(attributes.width == canvas_width);
+  CHECK(attributes.height == canvas_height);
+  CHECK(attributes.x == canvas_x);
+  CHECK(attributes.y == canvas_y);
 
   XCloseDisplay(display);
 }

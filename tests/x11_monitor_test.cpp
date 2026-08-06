@@ -84,6 +84,18 @@ TEST_CASE("window placement remains centered on outputs with signed origins") {
   CHECK(placement->y == 8);
 }
 
+TEST_CASE("window placement compensates shadow canvas margins") {
+  const gisland::X11Monitor monitor{"DP-1", 100, 50, 1000, 800, true};
+  const gisland::X11CanvasGeometry canvas{140, 80, 16, 14, 100};
+
+  const auto placement = gisland::place_on_monitor(monitor, canvas, 10);
+
+  REQUIRE(placement.has_value());
+  CHECK(*placement == gisland::X11WindowPlacement{534, 46});
+  CHECK(placement->x + canvas.surface_x + (canvas.surface_width / 2) == 600);
+  CHECK(placement->y + canvas.surface_y == 60);
+}
+
 TEST_CASE("window placement rejects invalid dimensions and arithmetic overflow") {
   CHECK_FALSE(gisland::place_on_monitor(monitors.front(), 0, 220, 8).has_value());
   const gisland::X11Monitor extreme{

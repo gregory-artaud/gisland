@@ -21,11 +21,17 @@ struct IslandGeometry {
 struct IslandCanvasSize {
   float width;
   float height;
+  float surface_x{};
+  float surface_y{};
+  float surface_width{};
+  float surface_height{};
 };
 
 struct IslandPlacement {
   float x;
   float y;
+
+  bool operator==(const IslandPlacement &) const = default;
 };
 
 struct IslandMaskRow {

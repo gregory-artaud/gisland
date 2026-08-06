@@ -1353,6 +1353,19 @@ private:
 
 } // namespace
 
+RectInsets shadow_insets(const RoundedView &view) {
+  if (view.shadow.color.alpha == 0) {
+    return {};
+  }
+  const int radius = view.shadow.blur + view.shadow.spread;
+  return RectInsets{
+      std::max(0, radius - view.shadow.offset_x),
+      std::max(0, radius - view.shadow.offset_y),
+      std::max(0, radius + view.shadow.offset_x),
+      std::max(0, radius + view.shadow.offset_y),
+  };
+}
+
 [[nodiscard]] static std::expected<LayoutPlan, LayoutError>
 layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
                   const GlyphMetrics &glyph_metrics, const RichTextMetrics *rich_text_metrics) {

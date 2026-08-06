@@ -185,12 +185,62 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
 
 [[nodiscard]] IslandCanvasSize canvas_for(const LayoutPlan &compact,
                                           const std::optional<LayoutPlan> &expanded) {
-  return IslandCanvasSize{
+  RectInsets insets = shadow_insets(compact.view);
+  if (expanded) {
+    const RectInsets expanded_insets = shadow_insets(expanded->view);
+    insets.left = std::max(insets.left, expanded_insets.left);
+    insets.top = std::max(insets.top, expanded_insets.top);
+    insets.right = std::max(insets.right, expanded_insets.right);
+    insets.bottom = std::max(insets.bottom, expanded_insets.bottom);
+  }
+  const float surface_width =
       static_cast<float>(std::max(compact.view.bounds.width, expanded ? expanded->view.bounds.width
-                                                                      : compact.view.bounds.width)),
-      static_cast<float>(std::max(compact.view.bounds.height, expanded
-                                                                  ? expanded->view.bounds.height
-                                                                  : compact.view.bounds.height)),
+                                                                      : compact.view.bounds.width));
+  const float surface_height = static_cast<float>(
+      std::max(compact.view.bounds.height,
+               expanded ? expanded->view.bounds.height : compact.view.bounds.height));
+  return IslandCanvasSize{
+      .width = static_cast<float>(insets.left + insets.right) + surface_width,
+      .height = static_cast<float>(insets.top + insets.bottom) + surface_height,
+      .surface_x = static_cast<float>(insets.left),
+      .surface_y = static_cast<float>(insets.top),
+      .surface_width = surface_width,
+      .surface_height = surface_height,
+  };
+}
+
+[[nodiscard]] IslandCanvasSize combine_canvases(const IslandCanvasSize &left,
+                                                const IslandCanvasSize &right) {
+  const auto surface_width = [](const IslandCanvasSize &canvas) {
+    return canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
+  };
+  const auto surface_height = [](const IslandCanvasSize &canvas) {
+    return canvas.surface_height > 0.0F ? canvas.surface_height : canvas.height;
+  };
+  const float left_inset = std::max(left.surface_x, right.surface_x);
+  const float top_inset = std::max(left.surface_y, right.surface_y);
+  const float width = std::max(surface_width(left), surface_width(right));
+  const float height = std::max(surface_height(left), surface_height(right));
+  const float right_inset = std::max(left.width - left.surface_x - surface_width(left),
+                                     right.width - right.surface_x - surface_width(right));
+  const float bottom_inset = std::max(left.height - left.surface_y - surface_height(left),
+                                      right.height - right.surface_y - surface_height(right));
+  return IslandCanvasSize{left_inset + width + right_inset,
+                          top_inset + height + bottom_inset,
+                          left_inset,
+                          top_inset,
+                          width,
+                          height};
+}
+
+[[nodiscard]] X11CanvasGeometry native_geometry(const IslandCanvasSize &canvas) {
+  const float surface_width = canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
+  return X11CanvasGeometry{
+      std::max(1, static_cast<int>(std::lround(canvas.width))),
+      std::max(1, static_cast<int>(std::lround(canvas.height))),
+      static_cast<int>(std::lround(canvas.surface_x)),
+      static_cast<int>(std::lround(canvas.surface_y)),
+      std::max(1, static_cast<int>(std::lround(surface_width))),
   };
 }
 
@@ -484,14 +534,15 @@ int Application::run() {
   int native_height = std::max(1, static_cast<int>(std::lround(canvas.height)));
   std::optional<X11WindowPlacement> native_position;
   const auto apply_native_canvas = [&] {
-    const int next_width = std::max(1, static_cast<int>(std::lround(canvas.width)));
-    const int next_height = std::max(1, static_cast<int>(std::lround(canvas.height)));
+    const X11CanvasGeometry geometry = native_geometry(canvas);
+    const int next_width = geometry.width;
+    const int next_height = geometry.height;
     if (next_width != native_width || next_height != native_height) {
       SetWindowSize(next_width, next_height);
       native_width = next_width;
       native_height = next_height;
     }
-    auto positioned = place_on_monitor(monitor, native_width, native_height, config_.top_margin);
+    auto positioned = place_on_monitor(monitor, geometry, config_.top_margin);
     if (!positioned) {
       std::cerr << positioned.error().message << '\n';
       return;
@@ -543,8 +594,7 @@ int Application::run() {
 
     const RoundedView target = visible_surface(*rendered, spring.value());
     const auto target_canvas = canvas_for(rendered->compact, rendered->expanded);
-    canvas = IslandCanvasSize{std::max(target_canvas.width, current.width),
-                              std::max(target_canvas.height, current.height)};
+    canvas = combine_canvases(canvas, target_canvas);
     if (snapshot && current_surface) {
       outgoing_content = *snapshot;
       transition_source_surface = *current_surface;
@@ -622,10 +672,7 @@ int Application::run() {
             : IslandCanvasSize{
                   static_cast<float>(candidate_bootstrap->theme.views().compact.min_width),
                   static_cast<float>(candidate_bootstrap->theme.views().compact.min_height)};
-    const int candidate_width = std::max(1, static_cast<int>(std::lround(candidate_canvas.width)));
-    const int candidate_height =
-        std::max(1, static_cast<int>(std::lround(candidate_canvas.height)));
-    if (auto positioned = place_on_monitor(candidate_monitor, candidate_width, candidate_height,
+    if (auto positioned = place_on_monitor(candidate_monitor, native_geometry(candidate_canvas),
                                            config_.top_margin);
         !positioned) {
       if (candidate_rendered) {
