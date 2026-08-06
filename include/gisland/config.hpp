@@ -46,6 +46,7 @@ struct ModuleInstanceConfig {
   ProtocolVersion minimum_protocol{1, 0};
   ProtocolVersion maximum_protocol{1, 3};
   bool enabled{true};
+  std::chrono::milliseconds expanded_preview{0};
   ConfigValue::Table options;
   RestartPolicy restart{RestartPolicy::on_failure};
   ModuleTimings timings;

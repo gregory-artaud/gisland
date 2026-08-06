@@ -64,6 +64,7 @@ public:
       std::chrono::milliseconds exit_tolerance = std::chrono::milliseconds{120});
 
   void update(bool hovered, bool has_expanded, float delta_seconds);
+  void start_preview(bool has_expanded, std::chrono::milliseconds duration);
   [[nodiscard]] std::expected<void, ModeControlError> open(bool has_expanded);
   void close();
   [[nodiscard]] std::expected<void, ModeControlError> toggle(bool has_expanded);
@@ -75,6 +76,7 @@ private:
   bool explicit_open_{false};
   bool hover_suppressed_{false};
   bool hovered_{false};
+  float preview_remaining_{0.0F};
 };
 
 class SpringProgress {

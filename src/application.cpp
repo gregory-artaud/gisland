@@ -790,7 +790,14 @@ int Application::run() {
         runtime.reject(selection.context->key, now);
       } else {
         runtime.accept(selection.context->key);
+        const auto owner =
+            std::ranges::find(bootstrap_.config.modules, selection.context->key.instance_id,
+                              &ModuleInstanceConfig::id);
+        const auto preview_duration = owner == bootstrap_.config.modules.end()
+                                          ? std::chrono::milliseconds{0}
+                                          : owner->expanded_preview;
         replace_rendered(std::move(*candidate), preserve_expanded, bootstrap_.theme.animation());
+        mode_controller.start_preview(selection.context->expanded.has_value(), preview_duration);
       }
     } else if (selection.context == nullptr && rendered) {
       clear_outgoing();

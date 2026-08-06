@@ -194,6 +194,71 @@ TEST_CASE("overlay mode preserves explicit open only across expandable contexts"
   CHECK(controller.mode() == gisland::IslandMode::compact);
 }
 
+TEST_CASE("overlay preview expands for its exact duration") {
+  gisland::OverlayModeController controller{120ms};
+  controller.start_preview(true, 1000ms);
+
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  controller.update(false, true, 0.999F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  controller.update(false, true, 0.001F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("overlay preview expiry preserves hover behavior") {
+  gisland::OverlayModeController controller{120ms};
+  controller.start_preview(true, 1000ms);
+  controller.update(true, true, 1.0F);
+
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  controller.update(false, true, 0.119F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  controller.update(false, true, 0.001F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("explicit open outlives an overlay preview") {
+  gisland::OverlayModeController controller{120ms};
+  controller.start_preview(true, 1000ms);
+  REQUIRE(controller.open(true).has_value());
+  controller.update(false, true, 2.0F);
+
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+}
+
+TEST_CASE("toggle closes an active overlay preview") {
+  gisland::OverlayModeController controller{120ms};
+  controller.start_preview(true, 1000ms);
+
+  REQUIRE(controller.toggle(true).has_value());
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("close and unavailable content cancel an overlay preview") {
+  gisland::OverlayModeController controller{120ms};
+  controller.start_preview(true, 1000ms);
+  controller.update(true, true, 0.1F);
+  controller.close();
+  controller.update(true, true, 1.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+
+  controller.update(false, true, 0.0F);
+  controller.start_preview(true, 1000ms);
+  controller.update(false, false, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
+TEST_CASE("a new overlay preview replaces the previous duration") {
+  gisland::OverlayModeController controller{120ms};
+  controller.start_preview(true, 500ms);
+  controller.update(false, true, 0.4F);
+  controller.start_preview(true, 1000ms);
+  controller.update(false, true, 0.999F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+  controller.update(false, true, 0.001F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
 TEST_CASE("content crossfade starts with only compact content visible") {
   const gisland::ContentCrossfade crossfade;
 

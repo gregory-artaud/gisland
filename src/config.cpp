@@ -193,6 +193,27 @@ parse_enabled(const toml::table &table, std::size_t module_index, std::string_vi
   return *value;
 }
 
+[[nodiscard]] std::expected<std::chrono::milliseconds, ConfigError>
+parse_expanded_preview(const toml::table &table, std::size_t module_index,
+                       std::string_view source_name) {
+  constexpr auto maximum = std::chrono::milliseconds{60000};
+  const auto *node = table.get("expanded_preview_ms");
+  if (node == nullptr) {
+    return std::chrono::milliseconds{0};
+  }
+  const std::string path = "modules[" + std::to_string(module_index) + "].expanded_preview_ms";
+  const auto value = node->value_exact<std::int64_t>();
+  if (!value.has_value()) {
+    return std::unexpected(error_at(source_name, path, "expected integer milliseconds", node));
+  }
+  const auto duration = std::chrono::milliseconds{*value};
+  if (duration < std::chrono::milliseconds{0} || duration > maximum) {
+    return std::unexpected(
+        error_at(source_name, path, "duration must be between 0 and 60000 milliseconds", node));
+  }
+  return duration;
+}
+
 [[nodiscard]] std::expected<ConfigValue::Table, ConfigError>
 parse_options(const toml::table &table, std::size_t module_index, std::string_view source_name) {
   const auto *node = table.get("options");
@@ -788,6 +809,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
       manifest_path = manifest->path;
     }
     auto enabled = parse_enabled(*module_table, index, source_name);
+    auto expanded_preview = parse_expanded_preview(*module_table, index, source_name);
     auto options = parse_options(*module_table, index, source_name);
     auto restart = parse_restart_policy(*module_table, index, source_name);
     auto timings = parse_timings(*module_table, index, source_name);
@@ -799,6 +821,9 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     }
     if (!enabled.has_value()) {
       return std::unexpected(enabled.error());
+    }
+    if (!expanded_preview.has_value()) {
+      return std::unexpected(expanded_preview.error());
     }
     if (!options.has_value()) {
       return std::unexpected(options.error());
@@ -852,6 +877,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
         .minimum_protocol = minimum_protocol,
         .maximum_protocol = maximum_protocol,
         .enabled = *enabled,
+        .expanded_preview = *expanded_preview,
         .options = std::move(*options),
         .restart = *restart,
         .timings = *timings,
