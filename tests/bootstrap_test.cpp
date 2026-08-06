@@ -119,6 +119,9 @@ TEST_CASE("bootstrap loads config and distributed theme before graphical startup
   REQUIRE(std::holds_alternative<std::string>(bootstrap->theme.buttons().disabled_background));
   CHECK(std::get<std::string>(bootstrap->theme.buttons().background) == "surface");
   CHECK(std::get<std::string>(bootstrap->theme.buttons().disabled_background) == "surface");
+  REQUIRE(std::holds_alternative<gisland::Rgba>(bootstrap->theme.buttons().hover_overlay));
+  CHECK(std::get<gisland::Rgba>(bootstrap->theme.buttons().hover_overlay) ==
+        gisland::Rgba{255, 255, 255, 20});
 }
 
 TEST_CASE("bootstrap gives a valid user theme priority over the distributed theme") {

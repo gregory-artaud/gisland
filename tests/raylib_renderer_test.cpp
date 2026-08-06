@@ -334,6 +334,32 @@ TEST_CASE_METHOD(HiddenWindow, "painter keeps surface and ordered content operat
   UnloadImage(content);
 }
 
+TEST_CASE_METHOD(HiddenWindow, "painter composites a translucent button hover overlay") {
+  auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  const gisland::Rgba overlay{255, 255, 255, 20};
+  const Color background{16, 24, 32, 255};
+  const gisland::LayoutPlan plan{
+      {},
+      {gisland::ButtonDecorationDrawCommand{{8, 8, 40, 20}, {8, 8, 40, 20}, overlay, true}},
+      {}};
+
+  Image rendered = render_image([&] {
+    ClearBackground(background);
+    REQUIRE(painter.draw_content(plan).has_value());
+  });
+  const Color actual = GetImageColor(rendered, 28, 18);
+  const auto blended = [](unsigned char destination) {
+    return ((255 * 20) + (static_cast<int>(destination) * 235)) / 255;
+  };
+  CHECK(std::abs(static_cast<int>(actual.r) - blended(background.r)) <= 1);
+  CHECK(std::abs(static_cast<int>(actual.g) - blended(background.g)) <= 1);
+  CHECK(std::abs(static_cast<int>(actual.b) - blended(background.b)) <= 1);
+  CHECK(actual.a > 200);
+  UnloadImage(rendered);
+}
+
 TEST_CASE_METHOD(HiddenWindow, "image book center-crops and masks dynamic images") {
   const auto theme = make_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());

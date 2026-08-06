@@ -49,6 +49,7 @@ using ThemeColor = std::variant<std::string, Rgba>;
 struct ButtonStyle {
   ThemeColor background;
   ThemeColor disabled_background;
+  ThemeColor hover_overlay;
 };
 
 struct ShadowStyle {
@@ -145,5 +146,6 @@ private:
 
 [[nodiscard]] std::expected<Theme, ThemeError> parse_theme(std::string_view text,
                                                            std::string_view source_name);
+[[nodiscard]] Rgba resolve_theme_color(const Theme &theme, const ThemeColor &value);
 
 } // namespace gisland

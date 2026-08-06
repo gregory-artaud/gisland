@@ -792,11 +792,16 @@ int Application::run() {
     const bool hovered = IsCursorOnScreen() &&
                          CheckCollisionPointRec(pointer, Rectangle{placement.x, placement.y,
                                                                    current.width, current.height});
-    if (actions_ready && rendered && rendered->expanded &&
-        IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      send_action(controls.pointer_action(*rendered->expanded,
-                                          static_cast<int>(std::lround(pointer.x - placement.x)),
-                                          static_cast<int>(std::lround(pointer.y - placement.y))));
+    std::optional<ButtonDecorationDrawCommand> button_hover;
+    if (actions_ready && rendered && rendered->expanded && IsCursorOnScreen()) {
+      const int pointer_x = static_cast<int>(std::lround(pointer.x - placement.x));
+      const int pointer_y = static_cast<int>(std::lround(pointer.y - placement.y));
+      button_hover = controls.pointer_hover(
+          *rendered->expanded, pointer_x, pointer_y,
+          resolve_theme_color(bootstrap_.theme, bootstrap_.theme.buttons().hover_overlay));
+      if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        send_action(controls.pointer_action(*rendered->expanded, pointer_x, pointer_y));
+      }
     }
 
     mode_controller.update(hovered, rendered && rendered->expanded.has_value(), delta_seconds);
@@ -871,6 +876,15 @@ int Application::run() {
         draw_content(*rendered->expanded_content,
                      with_opacity(content_crossfade.expanded(), incoming_opacity), current,
                      placement, blur_shader, texture_size_location, blur_radius_location);
+      }
+      if (button_hover) {
+        const LayoutPlan hover_plan{{}, {*button_hover}, {}};
+        if (auto drawn = painter.draw_content(
+                hover_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
+                                         static_cast<int>(std::lround(placement.y))});
+            !drawn) {
+          std::cerr << drawn.error().message << '\n';
+        }
       }
       EndDrawing();
       if (!visible) {

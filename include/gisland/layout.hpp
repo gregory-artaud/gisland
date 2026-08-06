@@ -125,12 +125,15 @@ using ContentDrawCommand =
     std::variant<TextDrawCommand, RichTextDrawCommand, IconDrawCommand, ImageDrawCommand,
                  ProgressDrawCommand, ButtonDecorationDrawCommand>;
 
+enum class InteractionKind { button, link, action_region };
+
 struct InteractionTarget {
   Rect bounds;
   Rect clip;
   std::string action_id;
   bool enabled;
   std::string accessible_label;
+  InteractionKind kind{InteractionKind::action_region};
 
   bool operator==(const InteractionTarget &) const = default;
 };

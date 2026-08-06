@@ -217,8 +217,11 @@ TEST_CASE("theme parses configurable button colors and preserves legacy defaults
   REQUIRE(legacy.has_value());
   REQUIRE(std::holds_alternative<std::string>(legacy->buttons().background));
   REQUIRE(std::holds_alternative<std::string>(legacy->buttons().disabled_background));
+  REQUIRE(std::holds_alternative<gisland::Rgba>(legacy->buttons().hover_overlay));
   CHECK(std::get<std::string>(legacy->buttons().background) == "accent");
   CHECK(std::get<std::string>(legacy->buttons().disabled_background) == "muted");
+  CHECK(std::get<gisland::Rgba>(legacy->buttons().hover_overlay) ==
+        gisland::Rgba{255, 255, 255, 20});
 
   const auto configured =
       gisland::parse_theme(replace_once(std::string{valid_theme}, "[shadow]",
@@ -228,9 +231,21 @@ TEST_CASE("theme parses configurable button colors and preserves legacy defaults
   REQUIRE(configured.has_value());
   REQUIRE(std::holds_alternative<std::string>(configured->buttons().background));
   REQUIRE(std::holds_alternative<gisland::Rgba>(configured->buttons().disabled_background));
+  REQUIRE(std::holds_alternative<gisland::Rgba>(configured->buttons().hover_overlay));
   CHECK(std::get<std::string>(configured->buttons().background) == "surface");
   CHECK(std::get<gisland::Rgba>(configured->buttons().disabled_background) ==
         gisland::Rgba{16, 32, 48, 64});
+  CHECK(std::get<gisland::Rgba>(configured->buttons().hover_overlay) ==
+        gisland::Rgba{255, 255, 255, 20});
+
+  const auto custom_hover = gisland::parse_theme(
+      replace_once(std::string{valid_theme}, "[shadow]",
+                   "[buttons]\nbackground = \"surface\"\n"
+                   "disabled_background = \"surface\"\nhover_overlay = \"accent\"\n\n[shadow]"),
+      "custom-hover.toml");
+  REQUIRE(custom_hover.has_value());
+  REQUIRE(std::holds_alternative<std::string>(custom_hover->buttons().hover_overlay));
+  CHECK(std::get<std::string>(custom_hover->buttons().hover_overlay) == "accent");
 }
 
 TEST_CASE("theme rejects invalid button styles with exact paths") {
@@ -250,6 +265,9 @@ TEST_CASE("theme rejects invalid button styles with exact paths") {
                 "buttons.background");
   check_invalid("[buttons]\nbackground = \"missing\"\ndisabled_background = \"surface\"\n",
                 "buttons.background");
+  check_invalid("[buttons]\nbackground = \"surface\"\ndisabled_background = \"surface\"\n"
+                "hover_overlay = \"missing\"\n",
+                "buttons.hover_overlay");
 }
 
 TEST_CASE("theme accepts each supported easing") {

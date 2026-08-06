@@ -441,28 +441,39 @@ parse_theme_color(const toml::node *node, const std::string &path, std::string_v
 
 [[nodiscard]] std::expected<ButtonStyle, ThemeError> parse_buttons(const toml::table &root,
                                                                    std::string_view source_name) {
+  constexpr Rgba default_hover{255, 255, 255, 20};
   const auto *node = root.get("buttons");
   if (node == nullptr) {
-    return ButtonStyle{std::string{"accent"}, std::string{"muted"}};
+    return ButtonStyle{std::string{"accent"}, std::string{"muted"}, default_hover};
   }
   const auto *table = node->as_table();
   if (table == nullptr) {
     return std::unexpected(error_at(source_name, "buttons", "expected a table", node));
   }
-  auto keys = reject_unknown(*table, {"background", "disabled_background"}, "buttons", source_name);
+  auto keys = reject_unknown(*table, {"background", "disabled_background", "hover_overlay"},
+                             "buttons", source_name);
   if (!keys) {
     return std::unexpected(keys.error());
   }
   auto background = parse_theme_color(table->get("background"), "buttons.background", source_name);
   auto disabled = parse_theme_color(table->get("disabled_background"),
                                     "buttons.disabled_background", source_name);
+  auto hover = [&]() -> std::expected<ThemeColor, ThemeError> {
+    if (table->get("hover_overlay") == nullptr) {
+      return ThemeColor{default_hover};
+    }
+    return parse_theme_color(table->get("hover_overlay"), "buttons.hover_overlay", source_name);
+  }();
   if (!background) {
     return std::unexpected(background.error());
   }
   if (!disabled) {
     return std::unexpected(disabled.error());
   }
-  return ButtonStyle{std::move(*background), std::move(*disabled)};
+  if (!hover) {
+    return std::unexpected(hover.error());
+  }
+  return ButtonStyle{std::move(*background), std::move(*disabled), std::move(*hover)};
 }
 
 [[nodiscard]] std::expected<ShadowStyle, ThemeError> parse_shadow(const toml::table &root,
@@ -800,7 +811,8 @@ validate_references(const Theme::Typography &typography, const Theme::Icons &ico
   }
   for (const auto &[path, color] :
        {std::pair{"buttons.background", &buttons.background},
-        std::pair{"buttons.disabled_background", &buttons.disabled_background}}) {
+        std::pair{"buttons.disabled_background", &buttons.disabled_background},
+        std::pair{"buttons.hover_overlay", &buttons.hover_overlay}}) {
     if (const auto *role = std::get_if<std::string>(color);
         role != nullptr && !palette.contains(*role)) {
       return std::unexpected(error_at(source_name, path, "referenced palette role does not exist"));
@@ -899,6 +911,13 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
         static_cast<std::size_t>(error.source().begin.column),
     });
   }
+}
+
+Rgba resolve_theme_color(const Theme &theme, const ThemeColor &value) {
+  if (const auto *literal = std::get_if<Rgba>(&value); literal != nullptr) {
+    return *literal;
+  }
+  return theme.palette().at(std::get<std::string>(value));
 }
 
 } // namespace gisland

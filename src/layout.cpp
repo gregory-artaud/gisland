@@ -216,8 +216,6 @@ struct MeasuredNode {
   return node.flexible || (axis == Axis::horizontal ? node.expands_width : node.expands_height);
 }
 
-[[nodiscard]] Rgba resolve_theme_color(const Theme &theme, const ThemeColor &value);
-
 class LayoutBuilder {
 public:
   LayoutBuilder(const Theme &theme, const GlyphMetrics &metrics,
@@ -1013,7 +1011,7 @@ private:
       }
       if (link_clip->width > 0 && link_clip->height > 0) {
         interactions.push_back(InteractionTarget{link_bounds, *link_clip, link.action_id, true,
-                                                 link.accessible_label});
+                                                 link.accessible_label, InteractionKind::link});
       }
     }
     return {};
@@ -1270,7 +1268,7 @@ private:
     commands.emplace_back(ButtonDecorationDrawCommand{
         bounds, *clipped, resolve_theme_color(theme_, background), button.enabled});
     interactions.push_back(InteractionTarget{bounds, *clipped, button.action_id, button.enabled,
-                                             button.accessible_label});
+                                             button.accessible_label, InteractionKind::button});
 
     const auto &child = node.children.front();
     auto doubled_padding = checked_multiply(2, node.padding, node.path);
@@ -1321,7 +1319,8 @@ private:
       return std::unexpected(clipped.error());
     }
     interactions.push_back(InteractionTarget{assigned, *clipped, region.action_id, region.enabled,
-                                             region.accessible_label});
+                                             region.accessible_label,
+                                             InteractionKind::action_region});
     return place(node.children.front(), assigned, *clipped, commands, interactions);
   }
 
@@ -1334,13 +1333,6 @@ private:
 
 [[nodiscard]] const ViewGeometry &geometry_for(const Theme &theme, ViewMode mode) {
   return mode == ViewMode::compact ? theme.views().compact : theme.views().expanded;
-}
-
-[[nodiscard]] Rgba resolve_theme_color(const Theme &theme, const ThemeColor &value) {
-  if (const auto *literal = std::get_if<Rgba>(&value); literal != nullptr) {
-    return *literal;
-  }
-  return theme.palette().at(std::get<std::string>(value));
 }
 
 [[nodiscard]] const ImageRole *root_leading_cap_role(const SceneNode &scene, const Theme &theme) {

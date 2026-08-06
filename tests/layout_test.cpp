@@ -321,14 +321,24 @@ TEST_CASE("rich layout composes at assigned width and propagates wrapped height 
   CHECK(command.composition.line_count == 3);
   REQUIRE(result->interactions.size() == 3);
   CHECK(result->interactions[0] ==
-        gisland::InteractionTarget{
-            {10, 10, 80, 74}, {10, 10, 80, 74}, "default", true, "Open notification"});
-  CHECK(result->interactions[1] ==
-        gisland::InteractionTarget{
-            {10, 10, 50, 20}, {10, 10, 50, 20}, "open-link", true, "Open link"});
-  CHECK(result->interactions[2] ==
-        gisland::InteractionTarget{
-            {10, 30, 40, 20}, {10, 30, 40, 20}, "open-link", true, "Open link"});
+        gisland::InteractionTarget{{10, 10, 80, 74},
+                                   {10, 10, 80, 74},
+                                   "default",
+                                   true,
+                                   "Open notification",
+                                   gisland::InteractionKind::action_region});
+  CHECK(result->interactions[1] == gisland::InteractionTarget{{10, 10, 50, 20},
+                                                              {10, 10, 50, 20},
+                                                              "open-link",
+                                                              true,
+                                                              "Open link",
+                                                              gisland::InteractionKind::link});
+  CHECK(result->interactions[2] == gisland::InteractionTarget{{10, 30, 40, 20},
+                                                              {10, 30, 40, 20},
+                                                              "open-link",
+                                                              true,
+                                                              "Open link",
+                                                              gisland::InteractionKind::link});
 }
 
 TEST_CASE("rich layout receives remaining row width and never uses plain glyph metrics") {
@@ -634,6 +644,7 @@ TEST_CASE("buttons emit disabled decoration before centered child content") {
   CHECK(interaction.action_id == "go");
   CHECK_FALSE(interaction.enabled);
   CHECK(interaction.accessible_label == "Go now");
+  CHECK(interaction.kind == gisland::InteractionKind::button);
   CHECK(text.bounds.x == button.bounds.x + ((button.bounds.width - text.bounds.width) / 2));
   CHECK(text.bounds.y == button.bounds.y + ((button.bounds.height - text.bounds.height) / 2));
 }

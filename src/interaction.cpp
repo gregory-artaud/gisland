@@ -21,14 +21,29 @@ namespace {
 
 } // namespace
 
-std::optional<std::string> InteractionController::pointer_action(const LayoutPlan &layout, int x,
-                                                                 int y) const {
+const InteractionTarget *InteractionController::pointer_target(const LayoutPlan &layout, int x,
+                                                               int y) const {
   for (auto target = layout.interactions.rbegin(); target != layout.interactions.rend(); ++target) {
     if (actionable(*target) && contains(target->bounds, x, y) && contains(target->clip, x, y)) {
-      return target->action_id;
+      return &*target;
     }
   }
-  return std::nullopt;
+  return nullptr;
+}
+
+std::optional<std::string> InteractionController::pointer_action(const LayoutPlan &layout, int x,
+                                                                 int y) const {
+  const auto *target = pointer_target(layout, x, y);
+  return target == nullptr ? std::nullopt : std::optional<std::string>{target->action_id};
+}
+
+std::optional<ButtonDecorationDrawCommand>
+InteractionController::pointer_hover(const LayoutPlan &layout, int x, int y, Rgba color) const {
+  const auto *target = pointer_target(layout, x, y);
+  if (target == nullptr || target->kind != InteractionKind::button) {
+    return std::nullopt;
+  }
+  return ButtonDecorationDrawCommand{target->bounds, target->clip, color, true};
 }
 
 } // namespace gisland

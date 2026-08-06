@@ -117,6 +117,7 @@ large = 18
 [buttons]
 background = "surface"
 disabled_background = "surface"
+hover_overlay = "#FFFFFF14"
 
 [view.compact]
 padding_horizontal = 14

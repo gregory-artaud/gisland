@@ -319,9 +319,11 @@ Button backgrounds can reference palette roles or use explicit colors independen
 [buttons]
 background = "surface"
 disabled_background = "surface"
+hover_overlay = "#FFFFFF14"
 ```
 
-Themes without this table retain the original `accent` and `muted` button backgrounds.
+Themes without this table retain the original `accent` and `muted` button backgrounds. The optional
+hover overlay appears immediately over enabled buttons; omit it to use the subtle white default.
 
 ## Dynamic Images
 
