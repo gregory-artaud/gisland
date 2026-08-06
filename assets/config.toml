@@ -43,3 +43,9 @@ children = [
     { repeat = "week", as = "calendar_day", template = { type = "text", value = { bind = "calendar_day.label" }, role = { bind = "calendar_day.role" } } }
   ] } }
 ]
+
+[[modules]]
+id = "notifications"
+module = "notifications"
+enabled = true
+restart = "on-failure"

@@ -15,9 +15,12 @@ set(required_files
     "${root}/${BINDIR}/gisland"
     "${root}/${BINDIR}/gislandctl"
     "${root}/${BINDIR}/gisland-clock-calendar"
+    "${root}/${BINDIR}/gisland-notifications"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
+    "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
     "${root}/${DATADIR}/systemd/user/gisland.service")
 foreach(required_file IN LISTS required_files)
   if(NOT EXISTS "${required_file}")
@@ -30,6 +33,20 @@ set(expected_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-clock-cal
 string(FIND "${manifest}" "${expected_command}" command_position)
 if(command_position EQUAL -1)
   message(FATAL_ERROR "installed manifest has the wrong command: ${manifest}")
+endif()
+
+file(READ "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
+     notification_manifest)
+set(notification_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-notifications\"]")
+string(FIND "${notification_manifest}" "${notification_command}" notification_command_position)
+if(notification_command_position EQUAL -1)
+  message(FATAL_ERROR "installed notification manifest has the wrong command: ${notification_manifest}")
+endif()
+
+file(READ "${root}/${BINDIR}/gisland-notifications" notification_executable)
+string(FIND "${notification_executable}" "main(\"1.0.0\")" notification_version_position)
+if(notification_version_position EQUAL -1)
+  message(FATAL_ERROR "installed notification daemon has the wrong project version")
 endif()
 
 file(READ "${root}/${DATADIR}/systemd/user/gisland.service" service)

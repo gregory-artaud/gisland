@@ -2,6 +2,7 @@
 /compile_commands.json
 /.cache/
 /.clangd/
+__pycache__/
 .DS_Store
 *.swp
 *~

@@ -144,14 +144,18 @@ TEST_CASE(
   REQUIRE(bootstrap.has_value());
   CHECK(bootstrap->config_path == std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml");
   CHECK(bootstrap->config.default_module == "clock");
-  REQUIRE(bootstrap->config.modules.size() == 1);
+  REQUIRE(bootstrap->config.modules.size() == 2);
   CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
   CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
-  REQUIRE(bootstrap->manifest_paths.size() == 1);
-  REQUIRE(bootstrap->config.modules.front().view.has_value());
-  CHECK(bootstrap->config.modules.front().view->expanded.has_value());
-  const auto &compact =
-      std::get<gisland::TemplateRow>(bootstrap->config.modules.front().view->compact.value);
+  CHECK(bootstrap->config.modules[1].module_id == "notifications");
+  CHECK(bootstrap->config.modules[1].command.front() == "gisland-notifications");
+  REQUIRE(bootstrap->manifest_paths.size() == 2);
+  CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
+  const auto *clock_view =
+      bootstrap->config.modules.front().view ? &*bootstrap->config.modules.front().view : nullptr;
+  REQUIRE(clock_view != nullptr);
+  CHECK(clock_view->expanded.has_value());
+  const auto &compact = std::get<gisland::TemplateRow>(clock_view->compact.value);
   REQUIRE(compact.children.size() == 3);
   const auto &primary = std::get<gisland::TemplateText>(
       std::get<gisland::SceneTemplatePtr>(compact.children[0])->value);

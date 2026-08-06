@@ -13,6 +13,8 @@ include(FetchContent)
 include(GNUInstallDirs)
 include(cmake/ProjectOptions.cmake)
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -179,7 +181,31 @@ gisland_set_project_options(gislandctl)
 set(GISLAND_INSTALL_DATA_SUBDIR "${CMAKE_INSTALL_DATADIR}/gisland/distributed")
 configure_file(
   packaging/clock-calendar.module.toml.in
-  "${PROJECT_BINARY_DIR}/install/module.toml"
+  "${PROJECT_BINARY_DIR}/install/clock-calendar.module.toml"
+  @ONLY
+)
+configure_file(
+  packaging/notifications.module.toml.in
+  "${PROJECT_BINARY_DIR}/install/notifications.module.toml"
+  @ONLY
+)
+set(GISLAND_NOTIFICATION_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/notifications")
+configure_file(
+  packaging/gisland-notifications.in
+  "${PROJECT_BINARY_DIR}/gisland-notifications"
+  @ONLY
+)
+file(
+  CHMOD "${PROJECT_BINARY_DIR}/gisland-notifications"
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+set(
+  GISLAND_NOTIFICATION_PYTHON_ROOT
+  "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
+)
+configure_file(
+  packaging/gisland-notifications.in
+  "${PROJECT_BINARY_DIR}/install/gisland-notifications"
   @ONLY
 )
 configure_file(
@@ -194,8 +220,23 @@ install(
 install(FILES assets/config.toml DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
 install(DIRECTORY assets/fonts assets/themes DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
 install(
-  FILES "${PROJECT_BINARY_DIR}/install/module.toml"
+  FILES "${PROJECT_BINARY_DIR}/install/clock-calendar.module.toml"
+  RENAME module.toml
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/clock-calendar"
+)
+install(
+  FILES "${PROJECT_BINARY_DIR}/install/notifications.module.toml"
+  RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
+)
+install(
+  PROGRAMS "${PROJECT_BINARY_DIR}/install/gisland-notifications"
+  DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+install(
+  DIRECTORY modules/notifications/gisland_notifications
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/notifications"
+  PATTERN "__pycache__" EXCLUDE
 )
 install(
   FILES "${PROJECT_BINARY_DIR}/install/gisland.service"
@@ -203,6 +244,13 @@ install(
 )
 
 if(BUILD_TESTING)
+  add_test(
+    NAME notifications_python
+    COMMAND
+      dbus-run-session -- env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/notifications"
+      "${Python3_EXECUTABLE}" -m unittest discover -s
+      "${PROJECT_SOURCE_DIR}/tests/notifications" -p "test_*.py" -v
+  )
   add_test(
     NAME install_local_script
     COMMAND bash ${PROJECT_SOURCE_DIR}/tests/install_local_script_test.sh ${PROJECT_SOURCE_DIR}

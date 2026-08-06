@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -228,6 +229,25 @@ struct ShapeBounds {
   }
   XFree(rectangles);
   return ShapeBounds{minimum_x, minimum_y, maximum_x - minimum_x, maximum_y - minimum_y};
+}
+
+[[nodiscard]] bool send_notification() {
+  const pid_t pid = fork();
+  if (pid == 0) {
+    execlp("notify-send", "notify-send", "--app-name=Files", "--urgency=critical",
+           "--expire-time=0", "Download complete", "The archive is ready", nullptr);
+    _exit(127);
+  }
+  if (pid < 0) {
+    return false;
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) {
+      return false;
+    }
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 } // namespace
@@ -515,6 +535,60 @@ TEST_CASE("application renders protocol 1.3 rich notification scenes from an ext
   }));
   CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
   CHECK(read_text(config.application_log()).find("render:") == std::string::npos);
+
+  XCloseDisplay(display);
+}
+
+TEST_CASE("application renders a freedesktop notification from the shipped daemon") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config{false};
+  ChildProcess child{config.home(), config.application_log()};
+
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  }));
+  const auto socket = (config.home() / "gisland.sock").string();
+  INFO(read_text(config.application_log()));
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!status) {
+      return false;
+    }
+    const auto &modules = std::get<gisland::ControlStatus>(status->value()).modules;
+    return std::ranges::any_of(modules, [](const auto &module) {
+      return module.id == "notifications" && module.state == gisland::ControlModuleState::running;
+    });
+  }));
+  REQUIRE(wait_until(send_notification));
+
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!status) {
+      return false;
+    }
+    const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+    return snapshot.active_context && snapshot.active_context->instance_id == "notifications";
+  }));
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->height == 32;
+  }));
+
+  REQUIRE(gisland::send_control_command(socket, gisland::OpenControl{}).has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width >= 360 && shape->height >= 300;
+  }));
+  CHECK(read_text(config.application_log()).find("[notifications] layout:") == std::string::npos);
 
   XCloseDisplay(display);
 }

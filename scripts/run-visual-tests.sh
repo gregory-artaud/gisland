@@ -8,6 +8,10 @@ if ! command -v "${xvfb}" >/dev/null 2>&1; then
   printf 'Xvfb executable not found: %s\n' "${xvfb}" >&2
   exit 1
 fi
+if ! command -v dbus-run-session >/dev/null 2>&1; then
+  printf 'dbus-run-session executable not found\n' >&2
+  exit 1
+fi
 
 display_file="$(mktemp)"
 trap 'rm -f "${display_file}"' EXIT
@@ -38,5 +42,5 @@ fi
 export LIBGL_ALWAYS_SOFTWARE=1
 export LC_ALL=C
 export TZ=UTC
-ctest --test-dir "${build_dir}" --output-on-failure \
+dbus-run-session -- ctest --test-dir "${build_dir}" --output-on-failure \
   -R 'input shape does not clip|^application_x11::|^x11_window::|^raylib_renderer::|^visual_regression::'

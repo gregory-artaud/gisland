@@ -9,6 +9,7 @@ A C++23 raylib application for Linux/X11.
 - GCC or Clang with C++23 support
 - Git
 - clang-format and clang-tidy for optional quality checks
+- Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
 - tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
@@ -18,7 +19,7 @@ A C++23 raylib application for Linux/X11.
 sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
-  libpango1.0-dev libfontconfig1-dev
+  libpango1.0-dev libfontconfig1-dev python3 python3-gi gir1.2-gtk-3.0
 ```
 
 ### Fedora
@@ -27,14 +28,15 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel
+  fontconfig-devel python3 python3-gobject gtk3
 ```
 
 ### Arch Linux
 
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
-  libxrandr libxi libxcursor libxinerama cairo pango fontconfig
+  libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
+  python-gobject gtk3
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -225,8 +227,31 @@ from the process environment by default. Module options can override `locale`, `
 `week_start` (`monday` or `sunday`).
 
 When user configuration is absent, gisland loads the distributed `assets/config.toml`, which
-selects this module and its declarative compact and expanded templates. A user
+selects this module and its declarative compact and expanded templates and enables the desktop
+notification module beside it. A user
 `$XDG_CONFIG_HOME/gisland/config.toml` continues to override the distributed default completely.
+
+## Desktop Notifications
+
+The shipped `gisland-notifications` process owns `org.freedesktop.Notifications` on the user session
+bus and exposes the standard freedesktop notification interface. It runs as an ordinary supervised
+protocol-1.3 module; a missing Python or GI dependency stops only this module and does not terminate
+the graphical core. Another notification daemon must not already own the bus name.
+
+The daemon supports application names and icons, summaries, freedesktop body markup, default and
+named actions, resident notifications, urgency, replacement IDs, and local image data. Body markup
+is converted to typed rich text rather than passed to the renderer. Images may come from RGB8 or
+RGBA8 `image-data`, local paths or `file:` URIs, and GTK icon-theme names. They are normalized to
+straight-alpha RGBA8 and downscaled to at most 512 pixels per axis. Remote image URLs are rejected.
+
+An explicit positive timeout is honored and zero disables automatic expiration. A negative timeout
+uses 5 seconds for low urgency, 8 seconds for normal urgency, and no automatic expiration for
+critical urgency. Closing, expiration, and non-resident actions emit the standard D-Bus signals;
+resident actions leave their notification visible.
+
+Links are opened through Gio only for `http`, `https`, and `mailto` URIs. The daemon never invokes a
+shell or executes action strings supplied by applications. Notifications exist only in memory while
+gisland is running; no history or persistence is provided.
 
 ## Control
 

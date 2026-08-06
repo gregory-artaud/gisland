@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from gisland_notifications.application import main
+
+
+raise SystemExit(main())

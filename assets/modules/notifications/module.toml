@@ -1,0 +1,9 @@
+id = "notifications"
+name = "Desktop Notifications"
+description = "Freedesktop notification service for gisland"
+command = ["gisland-notifications"]
+
+[protocol]
+major = 1
+minimum_minor = 3
+maximum_minor = 3
