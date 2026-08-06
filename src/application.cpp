@@ -232,14 +232,14 @@ render_content(const LayoutPlan &plan, const RaylibPainter &painter) {
 
 [[nodiscard]] std::expected<RenderedContext, std::string>
 render_context(const PublishedContext &context, std::uint64_t revision, const Theme &theme,
-               const RaylibFontBook &fonts) {
-  auto compact = layout_scene(context.compact, theme, ViewMode::compact, fonts);
+               const RaylibFontBook &fonts, const PangoTextBook &rich_text) {
+  auto compact = layout_scene(context.compact, theme, ViewMode::compact, fonts, rich_text);
   if (!compact) {
     return std::unexpected(compact.error().path + ": " + compact.error().message);
   }
   std::optional<LayoutPlan> expanded;
   if (context.expanded) {
-    auto candidate = layout_scene(*context.expanded, theme, ViewMode::expanded, fonts);
+    auto candidate = layout_scene(*context.expanded, theme, ViewMode::expanded, fonts, rich_text);
     if (!candidate) {
       return std::unexpected(candidate.error().path + ": " + candidate.error().message);
     }
@@ -257,7 +257,19 @@ render_context(const PublishedContext &context, std::uint64_t revision, const Th
       return std::unexpected(prepared.error().message);
     }
   }
-  const RaylibPainter painter{fonts, *images};
+  auto rich_textures = RaylibRichTextBook::load(rich_text, context.resources);
+  if (!rich_textures) {
+    return std::unexpected(rich_textures.error().message);
+  }
+  if (auto prepared = rich_textures->prepare(*compact); !prepared) {
+    return std::unexpected(prepared.error().message);
+  }
+  if (expanded) {
+    if (auto prepared = rich_textures->prepare(*expanded); !prepared) {
+      return std::unexpected(prepared.error().message);
+    }
+  }
+  const RaylibPainter painter{fonts, *images, *rich_textures};
   auto compact_content = render_content(*compact, painter);
   if (!compact_content) {
     return std::unexpected(compact_content.error());
@@ -359,6 +371,11 @@ int Application::run() {
   auto fonts = RaylibFontBook::load(bootstrap_.theme, bootstrap_.asset_root);
   if (!fonts) {
     std::cerr << fonts.error().message << '\n';
+    return EXIT_FAILURE;
+  }
+  auto rich_text = PangoTextBook::load(bootstrap_.theme, bootstrap_.asset_root);
+  if (!rich_text) {
+    std::cerr << rich_text.error().message << '\n';
     return EXIT_FAILURE;
   }
   const RaylibPainter painter{*fonts};
@@ -469,6 +486,11 @@ int Application::run() {
     if (!candidate_fonts) {
       return std::unexpected(candidate_fonts.error().message);
     }
+    auto candidate_rich_text =
+        PangoTextBook::load(candidate_bootstrap->theme, candidate_bootstrap->asset_root);
+    if (!candidate_rich_text) {
+      return std::unexpected(candidate_rich_text.error().message);
+    }
 
     X11Monitor candidate_monitor = monitor;
     if (host) {
@@ -482,8 +504,9 @@ int Application::run() {
     const auto *const candidate_selection = prepared_runtime->arbiter.active(now);
     std::optional<RenderedContext> candidate_rendered;
     if (candidate_selection != nullptr) {
-      auto candidate = render_context(*candidate_selection, prepared_runtime->revision,
-                                      candidate_bootstrap->theme, *candidate_fonts);
+      auto candidate =
+          render_context(*candidate_selection, prepared_runtime->revision,
+                         candidate_bootstrap->theme, *candidate_fonts, *candidate_rich_text);
       if (!candidate) {
         return std::unexpected(candidate.error());
       }
@@ -520,6 +543,7 @@ int Application::run() {
     }
     rendered = std::move(candidate_rendered);
     *fonts = std::move(*candidate_fonts);
+    *rich_text = std::move(*candidate_rich_text);
     bootstrap_ = std::move(*candidate_bootstrap);
     monitor = std::move(candidate_monitor);
     canvas = candidate_canvas;
@@ -598,8 +622,8 @@ int Application::run() {
     if (changed) {
       const bool preserve_expanded =
           mode_controller.mode() == IslandMode::expanded && selection.context->expanded.has_value();
-      auto candidate =
-          render_context(*selection.context, selection.revision, bootstrap_.theme, *fonts);
+      auto candidate = render_context(*selection.context, selection.revision, bootstrap_.theme,
+                                      *fonts, *rich_text);
       if (!candidate) {
         std::cerr << '[' << selection.context->key.instance_id << "] layout: " << candidate.error()
                   << '\n';

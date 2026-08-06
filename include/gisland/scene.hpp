@@ -40,6 +40,41 @@ struct ImageResource {
   std::shared_ptr<const std::vector<std::uint8_t>> pixels;
 };
 
+enum class TextEmphasis { bold, italic, underline };
+
+struct RichTextSpan {
+  std::string value;
+  std::vector<TextEmphasis> emphasis;
+
+  bool operator==(const RichTextSpan &) const = default;
+};
+
+struct RichLinkSpan {
+  std::string value;
+  std::vector<TextEmphasis> emphasis;
+  std::string action_id;
+  std::string accessible_label;
+
+  bool operator==(const RichLinkSpan &) const = default;
+};
+
+struct RichInlineImage {
+  std::string resource_id;
+  std::string role;
+  std::string accessible_label;
+
+  bool operator==(const RichInlineImage &) const = default;
+};
+
+using RichContent = std::variant<RichTextSpan, RichLinkSpan, RichInlineImage>;
+
+struct RichText {
+  std::string role;
+  std::vector<RichContent> content;
+
+  bool operator==(const RichText &) const = default;
+};
+
 struct Spacer {
   bool flexible{true};
   std::string size_token;
@@ -79,8 +114,19 @@ struct Button {
   std::string accessible_label;
 };
 
+struct ActionRegion {
+  ActionRegion(SceneNode content, std::string action_id, bool enabled = true,
+               std::string accessible_label = {});
+
+  SceneChild content;
+  std::string action_id;
+  bool enabled;
+  std::string accessible_label;
+};
+
 struct SceneNode {
-  using Value = std::variant<Text, Icon, Image, Row, Column, Spacer, Progress, Button>;
+  using Value = std::variant<Text, Icon, Image, RichText, Row, Column, Spacer, Progress, Button,
+                             ActionRegion>;
 
   Value value;
 };
@@ -91,7 +137,8 @@ enum class SceneErrorCode {
   text_too_long,
   identifier_too_long,
   invalid_progress,
-  empty_action
+  empty_action,
+  invalid_emphasis
 };
 
 struct SceneError {

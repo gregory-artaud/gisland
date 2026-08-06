@@ -116,6 +116,34 @@ public:
   }
 };
 
+class TestRichTextMetrics final : public gisland::RichTextMetrics {
+public:
+  [[nodiscard]] std::expected<gisland::RichTextComposition, gisland::RichTextError>
+  compose(const gisland::RichText &rich_text, int assigned_width) const override {
+    gisland::RichTextComposition result{
+        .assigned_width = assigned_width,
+        .natural_width = 160,
+        .minimum_width = 20,
+        .height = assigned_width <= 80 ? 60 : 20,
+        .line_count = assigned_width <= 80 ? 3 : 1,
+        .unknown_glyphs = 0,
+        .links = {},
+        .images = {},
+    };
+    for (const auto &item : rich_text.content) {
+      if (const auto *link = std::get_if<gisland::RichLinkSpan>(&item); link != nullptr) {
+        result.links.push_back(
+            {{0, 0, std::min(50, assigned_width), 20}, link->action_id, link->accessible_label});
+        if (assigned_width <= 80) {
+          result.links.push_back(
+              {{0, 20, std::min(40, assigned_width), 20}, link->action_id, link->accessible_label});
+        }
+      }
+    }
+    return result;
+  }
+};
+
 class AdversarialGlyphMetrics final : public gisland::GlyphMetrics {
 public:
   explicit AdversarialGlyphMetrics(double width, double height = 10.0)
@@ -195,6 +223,21 @@ public:
   return gisland::parse_theme(source, "layout-theme.toml").value();
 }
 
+[[nodiscard]] gisland::Theme make_leading_cap_theme() {
+  std::string source{theme_text};
+  auto replace = [&source](std::string_view before, std::string_view after) {
+    const auto position = source.find(before);
+    REQUIRE(position != std::string::npos);
+    source.replace(position, before.size(), after);
+  };
+  replace("shape = \"circle\"", "shape = \"circle\"\nplacement = \"leading-cap\"");
+  replace("padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = 100\nmin_height "
+          "= 20\nmax_height = 50",
+          "padding_horizontal = 14\npadding_vertical = 4\nradius = 16\nborder = 0\nmin_width "
+          "= 40\nmax_width = 76\nmin_height = 32\nmax_height = 32");
+  return gisland::parse_theme(source, "leading-cap-theme.toml").value();
+}
+
 template <typename Command>
 [[nodiscard]] const Command &command_at(const gisland::LayoutPlan &plan, std::size_t index) {
   REQUIRE(index < plan.content.size());
@@ -251,6 +294,69 @@ TEST_CASE("view layout applies horizontal and vertical padding independently") {
   CHECK(text.clip == gisland::Rect{7, 2, 30, 16});
 }
 
+TEST_CASE("rich layout composes at assigned width and propagates wrapped height and links") {
+  const gisland::RichText rich{
+      .role = "body",
+      .content = {gisland::RichTextSpan{"Wrapped ", {}},
+                  gisland::RichLinkSpan{"link content", {}, "open-link", "Open link"}},
+  };
+  const gisland::SceneNode scene{gisland::ActionRegion{
+      gisland::SceneNode{gisland::Column{
+          {gisland::SceneNode{rich}, gisland::SceneNode{gisland::Text{"tail", "body"}}},
+          "start",
+          "normal"}},
+      "default", true, "Open notification"}};
+  const auto theme =
+      make_theme_with("min_width = 100\nmax_width = 200", "min_width = 100\nmax_width = 100");
+
+  const auto result = gisland::layout_scene(scene, theme, gisland::ViewMode::expanded,
+                                            TestGlyphMetrics{}, TestRichTextMetrics{});
+
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 100, 94});
+  REQUIRE(result->content.size() == 2);
+  const auto &command = command_at<gisland::RichTextDrawCommand>(*result, 0);
+  CHECK(command.bounds == gisland::Rect{10, 10, 80, 60});
+  CHECK(command.composition.assigned_width == 80);
+  CHECK(command.composition.line_count == 3);
+  REQUIRE(result->interactions.size() == 3);
+  CHECK(result->interactions[0] ==
+        gisland::InteractionTarget{
+            {10, 10, 80, 74}, {10, 10, 80, 74}, "default", true, "Open notification"});
+  CHECK(result->interactions[1] ==
+        gisland::InteractionTarget{
+            {10, 10, 50, 20}, {10, 10, 50, 20}, "open-link", true, "Open link"});
+  CHECK(result->interactions[2] ==
+        gisland::InteractionTarget{
+            {10, 30, 40, 20}, {10, 30, 40, 20}, "open-link", true, "Open link"});
+}
+
+TEST_CASE("rich layout receives remaining row width and never uses plain glyph metrics") {
+  const gisland::RichText rich{
+      .role = "body",
+      .content = {gisland::RichLinkSpan{"link content", {}, "open-link", "Open link"}},
+  };
+  const auto theme =
+      make_theme_with("min_width = 100\nmax_width = 200", "min_width = 100\nmax_width = 100");
+  const gisland::SceneNode scene{
+      gisland::Row{{gisland::SceneNode{rich}, gisland::SceneNode{gisland::Text{"tail", "body"}}},
+                   "center",
+                   "normal"}};
+
+  const auto missing =
+      gisland::layout_scene(scene, theme, gisland::ViewMode::expanded, TestGlyphMetrics{});
+  REQUIRE_FALSE(missing.has_value());
+  CHECK(missing.error().path == "/children/0");
+
+  const auto result = gisland::layout_scene(scene, theme, gisland::ViewMode::expanded,
+                                            TestGlyphMetrics{}, TestRichTextMetrics{});
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 100, 80});
+  CHECK(command_at<gisland::RichTextDrawCommand>(*result, 0).bounds ==
+        gisland::Rect{10, 10, 36, 60});
+  CHECK(command_at<gisland::TextDrawCommand>(*result, 1).bounds == gisland::Rect{50, 35, 40, 10});
+}
+
 TEST_CASE("icon layout resolves the semantic glyph without raylib types") {
   const auto result =
       gisland::layout_scene(gisland::SceneNode{gisland::Icon{"calendar", "Calendar"}}, make_theme(),
@@ -289,6 +395,44 @@ TEST_CASE("image layout rejects unknown semantic roles with an exact path") {
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().code == gisland::LayoutErrorCode::unknown_image_role);
   CHECK(result.error().path == "/role");
+}
+
+TEST_CASE("compact leading-cap image is concentric and leaves the remaining width to text") {
+  const gisland::SceneNode scene{
+      gisland::Row{{gisland::SceneNode{gisland::Image{"app-icon", "notification-icon", "Firefox"}},
+                    gisland::SceneNode{gisland::Text{"abcdefgh", "body", "end"}}},
+                   "center",
+                   "normal"}};
+
+  const auto result = gisland::layout_scene(scene, make_leading_cap_theme(),
+                                            gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 76, 32});
+  REQUIRE(result->content.size() == 2);
+  const auto &image = command_at<gisland::ImageDrawCommand>(*result, 0);
+  CHECK(image.bounds == gisland::Rect{4, 4, 24, 24});
+  CHECK(image.clip == result->view.bounds);
+  const auto &text = command_at<gisland::TextDrawCommand>(*result, 1);
+  CHECK(text.bounds == gisland::Rect{32, 11, 30, 10});
+  CHECK(text.text == "ab\xE2\x80\xA6");
+}
+
+TEST_CASE("leading-cap placement rejects non-root and non-compact use") {
+  const auto theme = make_leading_cap_theme();
+  const gisland::SceneNode nested{gisland::Column{{gisland::SceneNode{gisland::Row{
+      {gisland::SceneNode{gisland::Image{"app-icon", "notification-icon", "Firefox"}}}}}}}};
+  const auto wrong_location =
+      gisland::layout_scene(nested, theme, gisland::ViewMode::compact, TestGlyphMetrics{});
+  REQUIRE_FALSE(wrong_location.has_value());
+  CHECK(wrong_location.error().path == "/children/0/children/0/role");
+
+  const gisland::SceneNode root{gisland::Row{
+      {gisland::SceneNode{gisland::Image{"app-icon", "notification-icon", "Firefox"}}}}};
+  const auto expanded =
+      gisland::layout_scene(root, theme, gisland::ViewMode::expanded, TestGlyphMetrics{});
+  REQUIRE_FALSE(expanded.has_value());
+  CHECK(expanded.error().path == "/children/0/role");
 }
 
 TEST_CASE("rows and columns preserve painter order and apply cross-axis alignment") {

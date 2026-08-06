@@ -367,6 +367,34 @@ TEST_CASE_METHOD(HiddenWindow, "image book center-crops and masks dynamic images
   UnloadImage(rendered);
 }
 
+TEST_CASE_METHOD(HiddenWindow, "rich text book prepares reuses and draws PangoCairo textures") {
+  const auto theme = make_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  auto pango = gisland::PangoTextBook::load(theme, asset_root());
+  REQUIRE(pango.has_value());
+  const gisland::SceneNode scene{gisland::RichText{
+      .role = "body",
+      .content = {gisland::RichTextSpan{"Rich text", {gisland::TextEmphasis::bold}}},
+  }};
+  const auto plan =
+      gisland::layout_scene(scene, theme, gisland::ViewMode::expanded, *fonts, *pango);
+  REQUIRE(plan.has_value());
+
+  auto rich_textures = gisland::RaylibRichTextBook::load(*pango, {});
+  REQUIRE(rich_textures.has_value());
+  REQUIRE(rich_textures->prepare(*plan).has_value());
+  CHECK(rich_textures->loaded_texture_count() == 1);
+  REQUIRE(rich_textures->prepare(*plan).has_value());
+  CHECK(rich_textures->loaded_texture_count() == 1);
+  const gisland::RaylibPainter painter{*fonts, *rich_textures};
+
+  ::Image rendered = render_image([&] { REQUIRE(painter.draw_content(*plan).has_value()); });
+  const auto &command = std::get<gisland::RichTextDrawCommand>(plan->content.front());
+  CHECK(colored_pixels(rendered, command.bounds) > 0);
+  UnloadImage(rendered);
+}
+
 TEST_CASE_METHOD(HiddenWindow, "painter reports a command font absent from the book") {
   auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
   REQUIRE(fonts.has_value());

@@ -128,6 +128,48 @@ TEST_CASE("a publish line decodes context-owned RGBA8 image resources") {
   CHECK(image->role == "notification-icon");
 }
 
+TEST_CASE("a publish line parses structured rich content and action regions") {
+  constexpr auto line = R"({
+    "type":"publish",
+    "context_id":"notification",
+    "priority":20,
+    "resources":[{"id":"preview","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="}],
+    "compact":{"type":"text","value":"Download complete","role":"compact-primary"},
+    "expanded":{
+      "type":"action_region",
+      "action_id":"default",
+      "accessible_label":"Open notification",
+      "content":{
+        "type":"rich_text",
+        "role":"notification-body",
+        "content":[
+          {"type":"text","value":"The file ","emphasis":[]},
+          {"type":"text","value":"archive.tar.gz","emphasis":["bold"]},
+          {"type":"link","value":"Open folder","action_id":"link-0","accessible_label":"Open folder"},
+          {"type":"inline_image","resource_id":"preview","role":"notification-inline-image","accessible_label":"Preview"}
+        ]
+      }
+    }
+  })";
+
+  const auto result = gisland::parse_module_message(line);
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  REQUIRE(publish->expanded.has_value());
+  const auto *region = std::get_if<gisland::ActionRegion>(&publish->expanded->value);
+  REQUIRE(region != nullptr);
+  CHECK(region->action_id == "default");
+  const auto *rich = std::get_if<gisland::RichText>(&region->content->value);
+  REQUIRE(rich != nullptr);
+  REQUIRE(rich->content.size() == 4);
+  CHECK(std::get<gisland::RichTextSpan>(rich->content[1]).emphasis ==
+        std::vector<gisland::TextEmphasis>{gisland::TextEmphasis::bold});
+  CHECK(std::get<gisland::RichLinkSpan>(rich->content[2]).action_id == "link-0");
+  CHECK(std::get<gisland::RichInlineImage>(rich->content[3]).resource_id == "preview");
+}
+
 TEST_CASE("image resources reject malformed payloads and references") {
   const auto check = [](std::string_view resources, std::string_view resource_id,
                         std::string_view expected_path) {

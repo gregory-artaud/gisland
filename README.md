@@ -17,7 +17,8 @@ A C++23 raylib application for Linux/X11.
 ```bash
 sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
-  libglu1-mesa-dev libxcursor-dev libxinerama-dev
+  libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
+  libpango1.0-dev libfontconfig1-dev
 ```
 
 ### Fedora
@@ -25,14 +26,15 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 ```bash
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
-  libXcursor-devel libXinerama-devel libatomic
+  libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
+  fontconfig-devel
 ```
 
 ### Arch Linux
 
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
-  libxrandr libxi libxcursor libxinerama
+  libxrandr libxi libxcursor libxinerama cairo pango fontconfig
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -299,12 +301,11 @@ bounded RGBA8 resources directly to one `publish` and reference them from semant
   "resources": [
     {"id":"icon","format":"rgba8","width":1,"height":1,"data":"/wAA/w=="}
   ],
-  "compact": {
-    "type":"image",
-    "resource_id":"icon",
-    "role":"notification-icon",
-    "accessible_label":"Application"
-  }
+  "compact": {"type":"row","gap":"small","children":[
+    {"type":"image","resource_id":"icon","role":"notification-icon",
+     "accessible_label":"Application"},
+    {"type":"text","value":"Image ready","role":"compact-primary"}
+  ]}
 }
 ```
 
@@ -323,11 +324,47 @@ width = 24
 height = 24
 fit = "cover"
 shape = "circle"
+placement = "leading-cap"
 ```
 
 `fit` accepts `contain` or `cover`. `shape` accepts `rectangle`, `circle`, or `rounded`; rounded
-roles also require `radius`. Circular roles must be square. Changing these values restyles retained
-context pixels through the normal transactional theme reload without restarting modules.
+roles also require `radius`. Circular roles must be square. `placement` defaults to `flow`.
+`leading-cap` is restricted to the first child of the root compact row and centers a square circular
+image in the capsule's leading cap. Changing these values restyles retained context pixels through
+the normal transactional theme reload without restarting modules.
+
+## Rich Content
+
+Protocol 1.3 adds the optional `rich-content` capability. After negotiating it, modules may publish
+bounded `rich_text` and invisible `action_region` scene nodes. Rich text is a flat semantic sequence
+of text spans, links, and inline images; raw HTML, Pango markup, CSS, URIs, and executable action
+strings are not accepted by the core:
+
+```json
+{
+  "type":"rich_text",
+  "role":"notification-body",
+  "content":[
+    {"type":"text","value":"The file "},
+    {"type":"text","value":"archive.tar.gz","emphasis":["bold"]},
+    {"type":"text","value":" is ready.\n"},
+    {"type":"link","value":"Open folder","action_id":"open-folder",
+     "accessible_label":"Open the download folder"},
+    {"type":"inline_image","resource_id":"preview",
+     "role":"notification-inline-image","accessible_label":"Image preview"}
+  ]
+}
+```
+
+Text and links support combined `bold`, `italic`, and `underline` emphasis. PangoCairo shapes and
+wraps the typed content using private theme fonts. Link rectangles and action regions emit only
+semantic action IDs back to the owning module, which remains responsible for interpreting actions
+or opening URIs. An inline image also requires the protocol-1.2 `context-images` capability and
+references a resource from the same publication.
+
+An `action_region` adopts its child's geometry without adding decoration or padding. Nested links,
+buttons, and action regions take hit-test priority over their parent, allowing one default action to
+cover a notification while preserving close, link, and named-action controls.
 
 ## Repository Layout
 

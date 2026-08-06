@@ -132,3 +132,54 @@ TEST_CASE("scene semantic strings are bounded with exact paths") {
                                            oversized}},
         "/action_id");
 }
+
+TEST_CASE("rich text and invisible action regions are valid scene values") {
+  gisland::RichText rich{
+      "notification-body",
+      {
+          gisland::RichTextSpan{"The file ", {}},
+          gisland::RichTextSpan{"archive.tar.gz", {gisland::TextEmphasis::bold}},
+          gisland::RichLinkSpan{
+              "Open folder", {gisland::TextEmphasis::underline}, "link-0", "Open download folder"},
+          gisland::RichInlineImage{"preview", "notification-inline-image", "File preview"},
+      },
+  };
+  const gisland::SceneNode scene{gisland::ActionRegion{gisland::SceneNode{std::move(rich)},
+                                                       "default", true, "Open notification"}};
+
+  CHECK(gisland::validate_scene(scene).has_value());
+}
+
+TEST_CASE("rich text bounds content and actions with exact paths") {
+  SECTION("aggregate text") {
+    gisland::RichText rich{"notification-body",
+                           {gisland::RichTextSpan{std::string(4096, 'x'), {}},
+                            gisland::RichTextSpan{std::string(4096, 'x'), {}},
+                            gisland::RichTextSpan{std::string(4096, 'x'), {}},
+                            gisland::RichTextSpan{std::string(4096, 'x'), {}},
+                            gisland::RichTextSpan{"x", {}}}};
+    const auto result = gisland::validate_scene(gisland::SceneNode{std::move(rich)});
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::SceneErrorCode::text_too_long);
+    CHECK(result.error().path == "/content/4/value");
+  }
+
+  SECTION("link action") {
+    gisland::RichText rich{
+        "notification-body",
+        {gisland::RichLinkSpan{"Open", {}, "", "Open destination"}},
+    };
+    const auto result = gisland::validate_scene(gisland::SceneNode{std::move(rich)});
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::SceneErrorCode::empty_action);
+    CHECK(result.error().path == "/content/0/action_id");
+  }
+
+  SECTION("action region") {
+    const auto result = gisland::validate_scene(gisland::SceneNode{gisland::ActionRegion{
+        gisland::SceneNode{gisland::Text{"Open", "body"}}, "", true, "Open"}});
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::SceneErrorCode::empty_action);
+    CHECK(result.error().path == "/action_id");
+  }
+}

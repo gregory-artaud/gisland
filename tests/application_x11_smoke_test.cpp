@@ -466,3 +466,55 @@ TEST_CASE("application renders a dynamic image from an external module") {
 
   XCloseDisplay(display);
 }
+
+TEST_CASE("application renders protocol 1.3 rich notification scenes from an external module") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config;
+  write_text(config.config_path(),
+             "monitor = \"primary\"\n"
+             "theme = \"default\"\n"
+             "default_module = \"notification\"\n"
+             "[[modules]]\n"
+             "id = \"notification\"\n"
+             "command = [\"" GISLAND_FAKE_MODULE_PATH "\", \"rich-notification\"]\n"
+             "protocol_min = \"1.3\"\n"
+             "protocol_max = \"1.3\"\n"
+             "restart = \"never\"\n");
+  ChildProcess child{config.home(), config.application_log()};
+
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  }));
+
+  XWindowAttributes attributes{};
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    return XGetWindowAttributes(display, *window, &attributes) != 0 &&
+           attributes.map_state == IsViewable;
+  }));
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->height == 32 && shape->width > 230;
+  }));
+
+  REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                        gisland::OpenControl{})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->width >= 360 && shape->height >= 300;
+  }));
+  CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
+  CHECK(read_text(config.application_log()).find("render:") == std::string::npos);
+
+  XCloseDisplay(display);
+}

@@ -57,6 +57,9 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
   if (config.maximum_protocol >= ProtocolVersion{1, 2}) {
     capabilities.emplace_back("context-images");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 3}) {
+    capabilities.emplace_back("rich-content");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =

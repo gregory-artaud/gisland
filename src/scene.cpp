@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -14,6 +15,9 @@ constexpr std::size_t maximum_depth = 16;
 constexpr std::size_t maximum_nodes = 256;
 constexpr std::size_t maximum_text_bytes = 4096;
 constexpr std::size_t maximum_identifier_bytes = 128;
+constexpr std::size_t maximum_rich_items = 128;
+constexpr std::size_t maximum_rich_text_bytes = 16 * 1024;
+constexpr std::size_t maximum_rich_links = 32;
 
 [[nodiscard]] SceneValidation validate_text(std::string_view value, const std::string &path) {
   if (value.size() > maximum_text_bytes) {
@@ -88,6 +92,32 @@ private:
     return validate_text(image.accessible_label, path + "/accessible_label");
   }
 
+  [[nodiscard]] SceneValidation validate_primitive(const RichText &rich, std::size_t /*depth*/,
+                                                   const std::string &path) {
+    if (auto result = validate_identifier(rich.role, path + "/role"); !result) {
+      return result;
+    }
+    if (rich.content.size() > maximum_rich_items ||
+        node_count_ + rich.content.size() > maximum_nodes) {
+      return std::unexpected(SceneError{SceneErrorCode::too_many_nodes, path + "/content"});
+    }
+    node_count_ += rich.content.size();
+    std::size_t total_text_bytes = 0;
+    std::size_t links = 0;
+    for (std::size_t index = 0; index < rich.content.size(); ++index) {
+      const std::string item_path = path + "/content/" + std::to_string(index);
+      auto result = std::visit(
+          [this, &item_path, &total_text_bytes, &links](const auto &item) {
+            return validate_rich_item(item, item_path, total_text_bytes, links);
+          },
+          rich.content[index]);
+      if (!result) {
+        return result;
+      }
+    }
+    return {};
+  }
+
   [[nodiscard]] static SceneValidation
   validate_primitive(const Spacer &spacer, std::size_t /*depth*/, const std::string &path) {
     return validate_identifier(spacer.size_token, path + "/size_token");
@@ -140,6 +170,77 @@ private:
     return validate(*button.content, depth + 1, path + "/content");
   }
 
+  [[nodiscard]] SceneValidation validate_primitive(const ActionRegion &region, std::size_t depth,
+                                                   const std::string &path) {
+    if (region.action_id.empty()) {
+      return std::unexpected(SceneError{SceneErrorCode::empty_action, path + "/action_id"});
+    }
+    if (auto result = validate_identifier(region.action_id, path + "/action_id"); !result) {
+      return result;
+    }
+    if (auto result = validate_text(region.accessible_label, path + "/accessible_label"); !result) {
+      return result;
+    }
+    return validate(*region.content, depth + 1, path + "/content");
+  }
+
+  [[nodiscard]] static SceneValidation validate_emphasis(const std::vector<TextEmphasis> &emphasis,
+                                                         const std::string &path) {
+    const std::set<TextEmphasis> unique(emphasis.begin(), emphasis.end());
+    if (unique.size() != emphasis.size()) {
+      return std::unexpected(SceneError{SceneErrorCode::invalid_emphasis, path});
+    }
+    return {};
+  }
+
+  [[nodiscard]] static SceneValidation validate_rich_item(const RichTextSpan &span,
+                                                          const std::string &path,
+                                                          std::size_t &total_text_bytes,
+                                                          std::size_t & /*links*/) {
+    total_text_bytes += span.value.size();
+    if (span.value.size() > maximum_text_bytes || total_text_bytes > maximum_rich_text_bytes) {
+      return std::unexpected(SceneError{SceneErrorCode::text_too_long, path + "/value"});
+    }
+    return validate_emphasis(span.emphasis, path + "/emphasis");
+  }
+
+  [[nodiscard]] static SceneValidation validate_rich_item(const RichLinkSpan &link,
+                                                          const std::string &path,
+                                                          std::size_t &total_text_bytes,
+                                                          std::size_t &links) {
+    total_text_bytes += link.value.size();
+    ++links;
+    if (link.value.size() > maximum_text_bytes || total_text_bytes > maximum_rich_text_bytes) {
+      return std::unexpected(SceneError{SceneErrorCode::text_too_long, path + "/value"});
+    }
+    if (links > maximum_rich_links) {
+      return std::unexpected(SceneError{SceneErrorCode::too_many_nodes, path});
+    }
+    if (link.action_id.empty()) {
+      return std::unexpected(SceneError{SceneErrorCode::empty_action, path + "/action_id"});
+    }
+    if (auto result = validate_emphasis(link.emphasis, path + "/emphasis"); !result) {
+      return result;
+    }
+    if (auto result = validate_identifier(link.action_id, path + "/action_id"); !result) {
+      return result;
+    }
+    return validate_text(link.accessible_label, path + "/accessible_label");
+  }
+
+  [[nodiscard]] static SceneValidation validate_rich_item(const RichInlineImage &image,
+                                                          const std::string &path,
+                                                          std::size_t & /*total_text_bytes*/,
+                                                          std::size_t & /*links*/) {
+    if (auto result = validate_identifier(image.resource_id, path + "/resource_id"); !result) {
+      return result;
+    }
+    if (auto result = validate_identifier(image.role, path + "/role"); !result) {
+      return result;
+    }
+    return validate_text(image.accessible_label, path + "/accessible_label");
+  }
+
   [[nodiscard]] SceneValidation validate_children(const std::vector<SceneChild> &children,
                                                   std::size_t depth, const std::string &path) {
     for (std::size_t index = 0; index < children.size(); ++index) {
@@ -167,6 +268,12 @@ Column::Column(std::vector<SceneNode> nodes, std::string alignment_value, std::s
 
 Button::Button(SceneNode content_value, std::string action_id_value, bool enabled_value,
                std::string accessible_label_value)
+    : content(std::make_shared<const SceneNode>(std::move(content_value))),
+      action_id(std::move(action_id_value)), enabled(enabled_value),
+      accessible_label(std::move(accessible_label_value)) {}
+
+ActionRegion::ActionRegion(SceneNode content_value, std::string action_id_value, bool enabled_value,
+                           std::string accessible_label_value)
     : content(std::make_shared<const SceneNode>(std::move(content_value))),
       action_id(std::move(action_id_value)), enabled(enabled_value),
       accessible_label(std::move(accessible_label_value)) {}

@@ -113,6 +113,7 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->images().at("notification-icon").height == 24.0);
   CHECK(result->images().at("notification-icon").fit == gisland::ImageFit::cover);
   CHECK(result->images().at("notification-icon").shape == gisland::ImageShape::circle);
+  CHECK(result->images().at("notification-icon").placement == gisland::ImagePlacement::flow);
   CHECK(result->gaps().at("small") == 4.5);
   CHECK(result->spacers().at("normal") == 12.0);
   CHECK(result->views().compact.padding_horizontal == 10.0);
@@ -150,6 +151,30 @@ TEST_CASE("theme parses every image fit and shape") {
   REQUIRE(rounded.has_value());
   CHECK(rounded->images().at("notification-icon").shape == gisland::ImageShape::rounded);
   CHECK(rounded->images().at("notification-icon").radius == 6.0);
+}
+
+TEST_CASE("theme parses leading-cap image placement and validates its static geometry") {
+  const auto leading =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "shape = \"circle\"",
+                                        "shape = \"circle\"\nplacement = \"leading-cap\""),
+                           "leading-image.toml");
+  REQUIRE(leading.has_value());
+  CHECK(leading->images().at("notification-icon").placement ==
+        gisland::ImagePlacement::leading_cap);
+
+  const auto unknown =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "shape = \"circle\"",
+                                        "shape = \"circle\"\nplacement = \"floating\""),
+                           "leading-image.toml");
+  REQUIRE_FALSE(unknown.has_value());
+  CHECK(unknown.error().path == "images.notification-icon.placement");
+
+  const auto non_circular =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "shape = \"circle\"",
+                                        "shape = \"rectangle\"\nplacement = \"leading-cap\""),
+                           "leading-image.toml");
+  REQUIRE_FALSE(non_circular.has_value());
+  CHECK(non_circular.error().path == "images.notification-icon.placement");
 }
 
 TEST_CASE("theme rejects invalid image roles with exact paths") {

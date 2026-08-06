@@ -651,6 +651,26 @@ parse_image_shape(const toml::table &table, const std::string &path, std::string
       error_at(source_name, path, "unsupported image shape", table.get("shape")));
 }
 
+[[nodiscard]] std::expected<ImagePlacement, ThemeError>
+parse_image_placement(const toml::table &table, const std::string &path,
+                      std::string_view source_name) {
+  const auto *node = table.get("placement");
+  if (node == nullptr) {
+    return ImagePlacement::flow;
+  }
+  const auto value = node->value_exact<std::string>();
+  if (!value.has_value()) {
+    return std::unexpected(error_at(source_name, path, "expected an image placement string", node));
+  }
+  if (*value == "flow") {
+    return ImagePlacement::flow;
+  }
+  if (*value == "leading-cap") {
+    return ImagePlacement::leading_cap;
+  }
+  return std::unexpected(error_at(source_name, path, "unsupported image placement", node));
+}
+
 [[nodiscard]] std::expected<Theme::ImageRoles, ThemeError>
 parse_image_roles(const toml::table &root, std::string_view source_name) {
   auto table = required_table(root, "images", "images", source_name);
@@ -670,8 +690,8 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
       return std::unexpected(error_at(source_name, "images." + name, "expected a table", &node));
     }
     const std::string path = "images." + name;
-    auto keys =
-        reject_unknown(*role, {"width", "height", "fit", "shape", "radius"}, path, source_name);
+    auto keys = reject_unknown(*role, {"width", "height", "fit", "shape", "radius", "placement"},
+                               path, source_name);
     if (!keys) {
       return std::unexpected(keys.error());
     }
@@ -681,6 +701,7 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
                                std::numeric_limits<double>::min(), maximum_image_size);
     auto fit = parse_image_fit(*role, path + ".fit", source_name);
     auto shape = parse_image_shape(*role, path + ".shape", source_name);
+    auto placement = parse_image_placement(*role, path + ".placement", source_name);
     if (!width) {
       return std::unexpected(width.error());
     }
@@ -692,6 +713,9 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
     }
     if (!shape) {
       return std::unexpected(shape.error());
+    }
+    if (!placement) {
+      return std::unexpected(placement.error());
     }
 
     double radius = 0.0;
@@ -711,7 +735,13 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
       return std::unexpected(error_at(source_name, path + ".height",
                                       "circular image roles must be square", role->get("height")));
     }
-    roles.emplace(name, ImageRole{*width, *height, *fit, *shape, radius});
+    if (*placement == ImagePlacement::leading_cap &&
+        (*shape != ImageShape::circle || *width != *height)) {
+      return std::unexpected(error_at(source_name, path + ".placement",
+                                      "leading-cap images must be square circles",
+                                      role->get("placement")));
+    }
+    roles.emplace(name, ImageRole{*width, *height, *fit, *shape, radius, *placement});
   }
   return roles;
 }

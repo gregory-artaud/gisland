@@ -64,6 +64,11 @@ if(BUILD_TESTING AND GISLAND_BUILD_GRAPHICAL_TESTS)
   list(APPEND GISLAND_X11_COMPONENTS Xtst)
 endif()
 find_package(X11 REQUIRED COMPONENTS ${GISLAND_X11_COMPONENTS})
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
+pkg_check_modules(PANGOFT2 REQUIRED IMPORTED_TARGET pangoft2)
+pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
+pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -119,6 +124,7 @@ add_library(
   src/protocol.cpp
   src/raylib_renderer.cpp
   src/reload.cpp
+  src/rich_text.cpp
   src/runtime.cpp
   src/scene.cpp
   src/scene_template.cpp
@@ -142,6 +148,10 @@ target_link_libraries(
   PRIVATE
     raylib
     tomlplusplus::tomlplusplus
+    PkgConfig::PANGOCAIRO
+    PkgConfig::PANGOFT2
+    PkgConfig::CAIRO
+    PkgConfig::FONTCONFIG
     X11::X11
     X11::Xext
     X11::Xrandr
@@ -237,6 +247,7 @@ if(BUILD_TESTING)
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/reload_test.cpp
+    tests/rich_text_test.cpp
     tests/runtime_test.cpp
     tests/scene_test.cpp
     tests/scene_template_test.cpp
@@ -265,7 +276,18 @@ if(BUILD_TESTING)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
-  catch_discover_tests(gisland_tests DISCOVERY_MODE PRE_TEST)
+  set(GISLAND_UNIT_TEST_PROPERTIES)
+  if(GISLAND_ENABLE_SANITIZERS)
+    list(
+      APPEND GISLAND_UNIT_TEST_PROPERTIES
+      ENVIRONMENT "LSAN_OPTIONS=suppressions=${PROJECT_SOURCE_DIR}/tests/lsan.supp"
+    )
+  endif()
+  catch_discover_tests(
+    gisland_tests
+    PROPERTIES ${GISLAND_UNIT_TEST_PROPERTIES}
+    DISCOVERY_MODE PRE_TEST
+  )
 
   if(GISLAND_BUILD_GRAPHICAL_TESTS)
     add_executable(gisland_application_x11_smoke_tests tests/application_x11_smoke_test.cpp)
@@ -383,6 +405,7 @@ set(
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
   include/gisland/reload.hpp
+  include/gisland/rich_text.hpp
   include/gisland/runtime.hpp
   include/gisland/scene.hpp
   include/gisland/scene_template.hpp
@@ -415,6 +438,7 @@ set(
   src/protocol.cpp
   src/raylib_renderer.cpp
   src/reload.cpp
+  src/rich_text.cpp
   src/runtime.cpp
   src/scene.cpp
   src/scene_template.cpp
@@ -447,6 +471,7 @@ set(
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/reload_test.cpp
+  tests/rich_text_test.cpp
   tests/runtime_test.cpp
   tests/raylib_renderer_test.cpp
   tests/scene_test.cpp

@@ -177,6 +177,108 @@ void read_init() {
   return EXIT_SUCCESS;
 }
 
+[[nodiscard]] int rich_notification() {
+  read_init();
+  write_json({
+      {"type", "ready"},
+      {"protocol_major", 1},
+      {"protocol_minor", 3},
+      {"capabilities", {"context-images", "rich-content"}},
+  });
+  write_json({
+      {"type", "publish"},
+      {"context_id", "notification"},
+      {"priority", 20},
+      {"resources",
+       {{{"id", "app-icon"},
+         {"format", "rgba8"},
+         {"width", 1},
+         {"height", 1},
+         {"data", "fFz8/w=="}},
+        {{"id", "body-image"},
+         {"format", "rgba8"},
+         {"width", 1},
+         {"height", 1},
+         {"data", "QOCg/w=="}}}},
+      {"compact",
+       {{"type", "row"},
+        {"gap", "small"},
+        {"children",
+         {{{"type", "image"},
+           {"resource_id", "app-icon"},
+           {"role", "notification-icon"},
+           {"accessible_label", "Files"}},
+          {{"type", "text"},
+           {"value", "Download complete: archive.tar.gz is ready"},
+           {"role", "compact-primary"}}}}}},
+      {"expanded",
+       {{"type", "action_region"},
+        {"action_id", "default"},
+        {"accessible_label", "Open notification"},
+        {"content",
+         {{"type", "column"},
+          {"alignment", "start"},
+          {"gap", "small"},
+          {"children",
+           {{{"type", "row"},
+             {"gap", "small"},
+             {"children",
+              {{{"type", "image"},
+                {"resource_id", "app-icon"},
+                {"role", "notification-header-icon"},
+                {"accessible_label", "Files"}},
+               {{"type", "column"},
+                {"alignment", "start"},
+                {"gap", "xsmall"},
+                {"children",
+                 {{{"type", "text"}, {"value", "FILES"}, {"role", "caption"}},
+                  {{"type", "text"}, {"value", "Download complete"}, {"role", "body"}}}}},
+               {{"type", "spacer"}, {"flexible", true}},
+               {{"type", "action_region"},
+                {"action_id", "close"},
+                {"accessible_label", "Close notification"},
+                {"content",
+                 {{"type", "icon"},
+                  {"name", "close"},
+                  {"accessible_label", "Close notification"}}}}}}},
+            {{"type", "rich_text"},
+             {"role", "notification-body"},
+             {"content",
+              {{{"type", "text"}, {"value", "The file "}},
+               {{"type", "text"}, {"value", "archive.tar.gz"}, {"emphasis", {"bold"}}},
+               {{"type", "text"}, {"value", " is available in Downloads.\n"}},
+               {{"type", "link"},
+                {"value", "Open the folder"},
+                {"action_id", "open-folder"},
+                {"accessible_label", "Open the download folder"}},
+               {{"type", "text"}, {"value", "\n"}},
+               {{"type", "inline_image"},
+                {"resource_id", "body-image"},
+                {"role", "notification-inline-image"},
+                {"accessible_label", "Downloaded image preview"}}}}},
+            {{"type", "row"},
+             {"gap", "small"},
+             {"children",
+              {{{"type", "button"},
+                {"action_id", "open"},
+                {"accessible_label", "Open download"},
+                {"content", {{"type", "text"}, {"value", "Open"}, {"role", "button"}}}},
+               {{"type", "button"},
+                {"action_id", "dismiss"},
+                {"accessible_label", "Dismiss notification"},
+                {"content", {{"type", "text"}, {"value", "Dismiss"}, {"role", "button"}}}}}}}}}}}}},
+  });
+
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    const auto message = nlohmann::json::parse(line, nullptr, false);
+    if (message.is_object() && message.value("type", "") == "shutdown") {
+      return EXIT_SUCCESS;
+    }
+  }
+  return EXIT_SUCCESS;
+}
+
 [[nodiscard]] int refuse_stdin() {
   read_init();
   static_cast<void>(::close(STDIN_FILENO));
@@ -408,10 +510,14 @@ void read_init() {
            {"height", 1},
            {"data", "/wAA/w=="}}}},
         {"compact",
-         {{"type", "image"},
-          {"resource_id", "icon"},
-          {"role", "notification-icon"},
-          {"accessible_label", "Application"}}},
+         {{"type", "row"},
+          {"gap", "small"},
+          {"children",
+           {{{"type", "image"},
+             {"resource_id", "icon"},
+             {"role", "notification-icon"},
+             {"accessible_label", "Application"}},
+            {{"type", "text"}, {"value", "Image ready"}, {"role", "compact-primary"}}}}}},
     });
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -424,6 +530,9 @@ void read_init() {
   }
   if (mode == "interactive-data") {
     return interactive_data();
+  }
+  if (mode == "rich-notification") {
+    return rich_notification();
   }
   if (mode == "final-line") {
     read_init();

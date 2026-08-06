@@ -37,6 +37,25 @@
 namespace gisland {
 namespace {
 
+[[nodiscard]] bool scene_uses_rich_content(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &primitive) {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, RichText> ||
+                      std::is_same_v<Primitive, ActionRegion>) {
+          return true;
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          return std::ranges::any_of(primitive.children, [](const auto &child) {
+            return scene_uses_rich_content(*child);
+          });
+        } else if constexpr (std::is_same_v<Primitive, Button>) {
+          return scene_uses_rich_content(*primitive.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
 using namespace std::chrono_literals;
 
 constexpr std::size_t command_capacity = 2048;
@@ -877,6 +896,15 @@ private:
                        now);
       return;
     }
+    if (const auto *publish = std::get_if<PublishMessage>(&*message);
+        publish != nullptr &&
+        (scene_uses_rich_content(publish->compact) ||
+         (publish->expanded && scene_uses_rich_content(*publish->expanded))) &&
+        !instance.negotiated_capabilities.contains("rich-content")) {
+      record_violation(
+          instance, ProtocolError{"/compact", "rich-content capability was not negotiated"}, now);
+      return;
+    }
 
     instance.consecutive_violations = 0;
     emit(ModuleMessageEvent{instance.request.instance_id, *message, now});
@@ -904,6 +932,12 @@ private:
         record_violation(
             instance,
             ProtocolError{"/capabilities", "context-images requires protocol version 1.2"}, now);
+        return false;
+      }
+      if (capability == "rich-content" && selected < ProtocolVersion{1, 3}) {
+        record_violation(
+            instance, ProtocolError{"/capabilities", "rich-content requires protocol version 1.3"},
+            now);
         return false;
       }
     }

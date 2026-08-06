@@ -207,6 +207,110 @@ parse_children(const Json &object, const std::string &path) {
   return SceneNode{Image{std::move(*resource_id), std::move(*role), std::move(*accessible_label)}};
 }
 
+[[nodiscard]] std::expected<std::vector<TextEmphasis>, ProtocolError>
+parse_emphasis(const Json &object, const std::string &path) {
+  const auto iterator = object.find("emphasis");
+  if (iterator == object.end()) {
+    return std::vector<TextEmphasis>{};
+  }
+  if (!iterator->is_array()) {
+    return std::unexpected(error_at(path + "/emphasis", "expected an array"));
+  }
+  std::vector<TextEmphasis> emphasis;
+  emphasis.reserve(iterator->size());
+  for (std::size_t index = 0; index < iterator->size(); ++index) {
+    const auto &entry = iterator->at(index);
+    if (!entry.is_string()) {
+      return std::unexpected(
+          error_at(path + "/emphasis/" + std::to_string(index), "expected a string"));
+    }
+    const auto value = entry.get<std::string>();
+    if (value == "bold") {
+      emphasis.push_back(TextEmphasis::bold);
+    } else if (value == "italic") {
+      emphasis.push_back(TextEmphasis::italic);
+    } else if (value == "underline") {
+      emphasis.push_back(TextEmphasis::underline);
+    } else {
+      return std::unexpected(
+          error_at(path + "/emphasis/" + std::to_string(index), "unknown text emphasis"));
+    }
+  }
+  return emphasis;
+}
+
+[[nodiscard]] std::expected<SceneNode, ProtocolError> parse_rich_text(const Json &object,
+                                                                      const std::string &path) {
+  auto role = required_string(object, "role", path);
+  auto content_field = required_field(object, "content", path);
+  if (!role) {
+    return std::unexpected(role.error());
+  }
+  if (!content_field) {
+    return std::unexpected(content_field.error());
+  }
+  if (!(*content_field)->is_array()) {
+    return std::unexpected(error_at(path + "/content", "expected an array"));
+  }
+  std::vector<RichContent> content;
+  content.reserve((*content_field)->size());
+  for (std::size_t index = 0; index < (*content_field)->size(); ++index) {
+    const auto &entry = (*content_field)->at(index);
+    const std::string item_path = path + "/content/" + std::to_string(index);
+    if (!entry.is_object()) {
+      return std::unexpected(error_at(item_path, "expected a rich content object"));
+    }
+    auto type = required_string(entry, "type", item_path);
+    if (!type) {
+      return std::unexpected(type.error());
+    }
+    if (*type == "text" || *type == "link") {
+      auto value = required_string(entry, "value", item_path);
+      auto emphasis = parse_emphasis(entry, item_path);
+      if (!value) {
+        return std::unexpected(value.error());
+      }
+      if (!emphasis) {
+        return std::unexpected(emphasis.error());
+      }
+      if (*type == "text") {
+        content.emplace_back(RichTextSpan{std::move(*value), std::move(*emphasis)});
+        continue;
+      }
+      auto action_id = required_string(entry, "action_id", item_path);
+      auto label = required_string(entry, "accessible_label", item_path);
+      if (!action_id) {
+        return std::unexpected(action_id.error());
+      }
+      if (!label) {
+        return std::unexpected(label.error());
+      }
+      content.emplace_back(RichLinkSpan{std::move(*value), std::move(*emphasis),
+                                        std::move(*action_id), std::move(*label)});
+      continue;
+    }
+    if (*type == "inline_image") {
+      auto resource_id = required_string(entry, "resource_id", item_path);
+      auto image_role = required_string(entry, "role", item_path);
+      auto label = required_string(entry, "accessible_label", item_path);
+      if (!resource_id) {
+        return std::unexpected(resource_id.error());
+      }
+      if (!image_role) {
+        return std::unexpected(image_role.error());
+      }
+      if (!label) {
+        return std::unexpected(label.error());
+      }
+      content.emplace_back(
+          RichInlineImage{std::move(*resource_id), std::move(*image_role), std::move(*label)});
+      continue;
+    }
+    return std::unexpected(error_at(item_path + "/type", "unknown rich content item"));
+  }
+  return SceneNode{RichText{std::move(*role), std::move(content)}};
+}
+
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_spacer(const Json &object,
                                                                    const std::string &path) {
   auto flexible = optional_bool(object, "flexible", true, path);
@@ -297,6 +401,32 @@ parse_children(const Json &object, const std::string &path) {
       Button{std::move(*content), std::move(*action_id), *enabled, std::move(*accessible_label)}};
 }
 
+[[nodiscard]] std::expected<SceneNode, ProtocolError> parse_action_region(const Json &object,
+                                                                          const std::string &path) {
+  auto content_field = required_field(object, "content", path);
+  if (!content_field) {
+    return std::unexpected(content_field.error());
+  }
+  auto content = parse_scene(**content_field, path + "/content");
+  auto action_id = required_string(object, "action_id", path);
+  auto enabled = optional_bool(object, "enabled", true, path);
+  auto label = required_string(object, "accessible_label", path);
+  if (!content) {
+    return std::unexpected(content.error());
+  }
+  if (!action_id) {
+    return std::unexpected(action_id.error());
+  }
+  if (!enabled) {
+    return std::unexpected(enabled.error());
+  }
+  if (!label) {
+    return std::unexpected(label.error());
+  }
+  return SceneNode{
+      ActionRegion{std::move(*content), std::move(*action_id), *enabled, std::move(*label)}};
+}
+
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_scene(const Json &object,
                                                                   const std::string &path) {
   if (!object.is_object()) {
@@ -316,6 +446,9 @@ parse_children(const Json &object, const std::string &path) {
   if (*type == "image") {
     return parse_image(object, path);
   }
+  if (*type == "rich_text") {
+    return parse_rich_text(object, path);
+  }
   if (*type == "row") {
     return parse_row(object, path);
   }
@@ -330,6 +463,9 @@ parse_children(const Json &object, const std::string &path) {
   }
   if (*type == "button") {
     return parse_button(object, path);
+  }
+  if (*type == "action_region") {
+    return parse_action_region(object, path);
   }
   return std::unexpected(error_at(path + "/type", "unknown scene primitive"));
 }
@@ -347,7 +483,9 @@ parse_children(const Json &object, const std::string &path) {
   case SceneErrorCode::invalid_progress:
     return "progress value must be between 0 and 1";
   case SceneErrorCode::empty_action:
-    return "button action ID must not be empty";
+    return "action ID must not be empty";
+  case SceneErrorCode::invalid_emphasis:
+    return "text emphasis values must be unique";
   }
   return "invalid scene";
 }
@@ -511,6 +649,14 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
           if (!resources.contains(primitive.resource_id)) {
             return error_at(path + "/resource_id", "image resource is not in this publication");
           }
+        } else if constexpr (std::is_same_v<Primitive, RichText>) {
+          for (std::size_t index = 0; index < primitive.content.size(); ++index) {
+            if (const auto *image = std::get_if<RichInlineImage>(&primitive.content[index]);
+                image != nullptr && !resources.contains(image->resource_id)) {
+              return error_at(path + "/content/" + std::to_string(index) + "/resource_id",
+                              "image resource is not in this publication");
+            }
+          }
         } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
           for (std::size_t index = 0; index < primitive.children.size(); ++index) {
             if (auto result =
@@ -520,7 +666,8 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
               return result;
             }
           }
-        } else if constexpr (std::is_same_v<Primitive, Button>) {
+        } else if constexpr (std::is_same_v<Primitive, Button> ||
+                             std::is_same_v<Primitive, ActionRegion>) {
           return validate_image_references(*primitive.content, resources, path + "/content");
         }
         return std::nullopt;

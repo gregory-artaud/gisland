@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gisland/rich_text.hpp"
 #include "gisland/scene.hpp"
 #include "gisland/theme.hpp"
 
@@ -75,6 +76,17 @@ struct TextDrawCommand {
   Rgba color;
 };
 
+struct RichTextDrawCommand {
+  Rect bounds;
+  Rect clip;
+  RichText rich_text;
+  RichTextComposition composition;
+  std::string font_resource;
+  TypographyRole typography;
+  Rgba color;
+  Rgba accent_color;
+};
+
 struct IconDrawCommand {
   Rect bounds;
   Rect clip;
@@ -109,8 +121,9 @@ struct ButtonDecorationDrawCommand {
   bool enabled;
 };
 
-using ContentDrawCommand = std::variant<TextDrawCommand, IconDrawCommand, ImageDrawCommand,
-                                        ProgressDrawCommand, ButtonDecorationDrawCommand>;
+using ContentDrawCommand =
+    std::variant<TextDrawCommand, RichTextDrawCommand, IconDrawCommand, ImageDrawCommand,
+                 ProgressDrawCommand, ButtonDecorationDrawCommand>;
 
 struct InteractionTarget {
   Rect bounds;
@@ -131,6 +144,7 @@ struct LayoutPlan {
 enum class LayoutErrorCode {
   unknown_role,
   unknown_image_role,
+  invalid_image_placement,
   unknown_gap,
   unknown_spacer,
   unknown_icon,
@@ -150,5 +164,8 @@ struct LayoutError {
 [[nodiscard]] std::expected<LayoutPlan, LayoutError>
 layout_scene(const SceneNode &scene, const Theme &theme, ViewMode mode,
              const GlyphMetrics &glyph_metrics);
+[[nodiscard]] std::expected<LayoutPlan, LayoutError>
+layout_scene(const SceneNode &scene, const Theme &theme, ViewMode mode,
+             const GlyphMetrics &glyph_metrics, const RichTextMetrics &rich_text_metrics);
 
 } // namespace gisland

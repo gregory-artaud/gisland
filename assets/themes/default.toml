@@ -75,11 +75,32 @@ size = 16
 weight = 600
 line_height = 1.2
 
+[typography.notification-body]
+font = "regular"
+color = "foreground"
+size = 14
+weight = 400
+line_height = 1.45
+
 [images.notification-icon]
 width = 24
 height = 24
 fit = "cover"
 shape = "circle"
+placement = "leading-cap"
+
+[images.notification-header-icon]
+width = 32
+height = 32
+fit = "cover"
+shape = "circle"
+
+[images.notification-inline-image]
+width = 96
+height = 54
+fit = "contain"
+shape = "rounded"
+radius = 10
 
 [gaps]
 xsmall = 4
@@ -139,3 +160,7 @@ codepoint = 0xF053
 [icons.chevron-right]
 font = "icons"
 codepoint = 0xF054
+
+[icons.close]
+font = "icons"
+codepoint = 0xF00D

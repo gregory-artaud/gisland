@@ -1,0 +1,2 @@
+# Fontconfig retains one process-global interned pattern after private config teardown.
+leak:libfontconfig.so.1

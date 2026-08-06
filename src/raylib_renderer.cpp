@@ -400,6 +400,42 @@ struct RaylibImageBook::Impl {
   }
 };
 
+struct RaylibRichTextBook::Impl {
+  struct PreparedSignature {
+    RichText rich_text;
+    int width;
+    int height;
+    std::size_t texture_index;
+  };
+
+  const PangoTextBook *text{};
+  std::vector<ImageResource> resources;
+  std::vector<PreparedSignature> signatures;
+  std::vector<Texture2D> textures;
+
+  ~Impl() {
+    if (!IsWindowReady()) {
+      return;
+    }
+    for (const auto texture : textures) {
+      UnloadTexture(texture);
+    }
+  }
+
+  [[nodiscard]] std::expected<const Texture2D *, RendererError>
+  find(const RichTextDrawCommand &command) const {
+    const auto signature = std::ranges::find_if(signatures, [&command](const auto &candidate) {
+      return candidate.width == command.bounds.width && candidate.height == command.bounds.height &&
+             candidate.rich_text == command.rich_text;
+    });
+    if (signature == signatures.end() || signature->texture_index >= textures.size()) {
+      return std::unexpected(renderer_error(RendererErrorCode::missing_resource, {},
+                                            "prepared rich text texture is not loaded"));
+    }
+    return &textures[signature->texture_index];
+  }
+};
+
 RaylibFontBook::RaylibFontBook(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 RaylibFontBook::RaylibFontBook(RaylibFontBook &&) noexcept = default;
@@ -623,6 +659,85 @@ std::size_t RaylibImageBook::loaded_texture_count() const noexcept {
   return impl_->textures.size();
 }
 
+RaylibRichTextBook::RaylibRichTextBook(std::unique_ptr<Impl> impl) noexcept
+    : impl_(std::move(impl)) {}
+
+RaylibRichTextBook::RaylibRichTextBook(RaylibRichTextBook &&) noexcept = default;
+
+RaylibRichTextBook &RaylibRichTextBook::operator=(RaylibRichTextBook &&) noexcept = default;
+
+RaylibRichTextBook::~RaylibRichTextBook() = default;
+
+std::expected<RaylibRichTextBook, RendererError>
+RaylibRichTextBook::load(const PangoTextBook &text, const std::vector<ImageResource> &resources) {
+  if (!IsWindowReady()) {
+    return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
+                                          "raylib window must exist before loading rich text"));
+  }
+  auto impl = std::make_unique<Impl>();
+  impl->text = &text;
+  impl->resources = resources;
+  for (const auto &resource : impl->resources) {
+    const std::size_t expected = static_cast<std::size_t>(resource.width) * resource.height * 4U;
+    if (resource.width == 0 || resource.height == 0 || resource.pixels == nullptr ||
+        resource.pixels->size() != expected || resource.format != ImageFormat::rgba8) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_resource,
+                                            std::filesystem::path{resource.id},
+                                            "invalid typed inline image resource"));
+    }
+  }
+  return RaylibRichTextBook{std::move(impl)};
+}
+
+std::expected<void, RendererError> RaylibRichTextBook::prepare(const LayoutPlan &plan) {
+  for (const auto &content : plan.content) {
+    const auto *command = std::get_if<RichTextDrawCommand>(&content);
+    if (command == nullptr) {
+      continue;
+    }
+    if (command->bounds.width <= 0 || command->bounds.height <= 0) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_geometry, {},
+                                            "rich text texture dimensions must be positive"));
+    }
+    const auto existing =
+        std::ranges::find_if(impl_->signatures, [&command](const auto &candidate) {
+          return candidate.width == command->bounds.width &&
+                 candidate.height == command->bounds.height &&
+                 candidate.rich_text == command->rich_text;
+        });
+    if (existing != impl_->signatures.end()) {
+      continue;
+    }
+    auto surface =
+        impl_->text->rasterize(command->rich_text, command->bounds.width, impl_->resources);
+    if (!surface) {
+      return std::unexpected(
+          renderer_error(RendererErrorCode::image_load_failed, {}, surface.error().message));
+    }
+    if (surface->height != command->bounds.height) {
+      return std::unexpected(renderer_error(RendererErrorCode::invalid_geometry, {},
+                                            "rich text raster height differs from layout"));
+    }
+    ::Image image{surface->pixels.data(), surface->width, surface->height, 1,
+                  PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    Texture2D texture = LoadTextureFromImage(image);
+    if (!IsTextureValid(texture)) {
+      return std::unexpected(renderer_error(RendererErrorCode::image_load_failed, {},
+                                            "raylib failed to load the rich text texture"));
+    }
+    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+    const std::size_t index = impl_->textures.size();
+    impl_->textures.push_back(texture);
+    impl_->signatures.push_back(Impl::PreparedSignature{command->rich_text, command->bounds.width,
+                                                        command->bounds.height, index});
+  }
+  return {};
+}
+
+std::size_t RaylibRichTextBook::loaded_texture_count() const noexcept {
+  return impl_->textures.size();
+}
+
 std::expected<void, RendererError> RaylibPainter::draw_surface(const LayoutPlan &plan,
                                                                RenderOrigin origin) const {
   if (!IsWindowReady()) {
@@ -679,6 +794,18 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
                        Vector2{static_cast<float>(rendered_bounds->x),
                                static_cast<float>(rendered_bounds->y)},
                        static_cast<float>(command.typography.size), 0.0F, color(command.color));
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
+                                              RichTextDrawCommand>) {
+            if (rich_text_ == nullptr) {
+              return std::unexpected(renderer_error(RendererErrorCode::missing_resource, {},
+                                                    "rich text texture book is unavailable"));
+            }
+            const auto texture = rich_text_->impl_->find(command);
+            if (!texture) {
+              return std::unexpected(texture.error());
+            }
+            const Scissor scissor{*rendered_clip};
+            DrawTexture(**texture, rendered_bounds->x, rendered_bounds->y, WHITE);
           } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>, IconDrawCommand>) {
             const auto font = fonts_.impl_->find(command.font_resource, command.typography);
             if (!font) {

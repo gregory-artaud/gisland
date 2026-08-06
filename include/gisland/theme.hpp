@@ -75,6 +75,7 @@ struct IconGlyph {
 
 enum class ImageFit { contain, cover };
 enum class ImageShape { rectangle, rounded, circle };
+enum class ImagePlacement { flow, leading_cap };
 
 struct ImageRole {
   double width;
@@ -82,6 +83,7 @@ struct ImageRole {
   ImageFit fit;
   ImageShape shape;
   double radius;
+  ImagePlacement placement{ImagePlacement::flow};
 
   bool operator==(const ImageRole &) const = default;
 };

@@ -126,11 +126,61 @@ public:
       "small"}};
 }
 
+[[nodiscard]] gisland::SceneNode compact_rich_notification() {
+  return gisland::SceneNode{
+      gisland::Row{{gisland::SceneNode{gisland::Image{"app-icon", "notification-icon", "Files"}},
+                    text("Download complete: archive.tar.gz is ready", "compact-primary")},
+                   "center",
+                   "small"}};
+}
+
+[[nodiscard]] gisland::SceneNode expanded_rich_notification() {
+  return gisland::SceneNode{gisland::ActionRegion{
+      gisland::SceneNode{gisland::Column{
+          {gisland::SceneNode{gisland::Row{
+               {gisland::SceneNode{gisland::Image{"app-icon", "notification-header-icon", "Files"}},
+                gisland::SceneNode{
+                    gisland::Column{{text("FILES", "caption"), text("Download complete", "body")},
+                                    "start",
+                                    "xsmall"}},
+                gisland::SceneNode{gisland::Spacer{true, {}}},
+                gisland::SceneNode{gisland::ActionRegion{icon("close", "Close notification"),
+                                                         "close", true, "Close notification"}}},
+               "center",
+               "small"}},
+           gisland::SceneNode{
+               gisland::RichText{
+                   .role = "notification-body",
+                   .content =
+                       {
+                           gisland::RichTextSpan{"The file ", {}},
+                           gisland::RichTextSpan{"archive.tar.gz", {gisland::TextEmphasis::bold}},
+                           gisland::RichTextSpan{" is available in Downloads.\n", {}},
+                           gisland::RichLinkSpan{
+                               "Open the folder", {}, "open-folder", "Open the download folder"},
+                           gisland::RichTextSpan{"\n", {}},
+                           gisland::RichInlineImage{
+                               "body-image", "notification-inline-image",
+                               "Downloaded image preview"},
+                       }}},
+           gisland::SceneNode{gisland::Row{
+               {gisland::SceneNode{
+                    gisland::Button{text("Open", "button"), "open", true, "Open download"}},
+                gisland::SceneNode{gisland::Button{text("Dismiss", "button"), "dismiss", true,
+                                                   "Dismiss notification"}}},
+               "center",
+               "small"}}},
+          "start",
+          "small"}},
+      "default", true, "Open notification"}};
+}
+
 [[nodiscard]] std::vector<gisland::ImageResource> notification_resources() {
   const auto pixels = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{
       255, 64,  64, 255, 255, 64,  64, 255, 64, 96,  255, 255, 64, 96,  255, 255,
       255, 192, 64, 255, 255, 192, 64, 255, 64, 224, 160, 255, 64, 224, 160, 255});
-  return {gisland::ImageResource{"app-icon", gisland::ImageFormat::rgba8, 4, 2, pixels}};
+  return {gisland::ImageResource{"app-icon", gisland::ImageFormat::rgba8, 4, 2, pixels},
+          gisland::ImageResource{"body-image", gisland::ImageFormat::rgba8, 4, 2, pixels}};
 }
 
 [[nodiscard]] gisland::SceneNode calendar_cell(std::string value, bool current = false) {
@@ -187,17 +237,22 @@ public:
   const auto theme = load_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
   REQUIRE(fonts.has_value());
-  const auto plan = gisland::layout_scene(scene, theme, mode, *fonts);
+  auto pango = gisland::PangoTextBook::load(theme, asset_root());
+  REQUIRE(pango.has_value());
+  const auto plan = gisland::layout_scene(scene, theme, mode, *fonts, *pango);
   REQUIRE(plan.has_value());
   REQUIRE(plan->view.bounds.width <= image_width);
   REQUIRE(plan->view.bounds.height <= image_height);
   auto images = gisland::RaylibImageBook::load(resources);
   REQUIRE(images.has_value());
   REQUIRE(images->prepare(*plan).has_value());
+  auto rich_textures = gisland::RaylibRichTextBook::load(*pango, resources);
+  REQUIRE(rich_textures.has_value());
+  REQUIRE(rich_textures->prepare(*plan).has_value());
 
   const gisland::RenderOrigin origin{(image_width - plan->view.bounds.width) / 2,
                                      (image_height - plan->view.bounds.height) / 2};
-  const gisland::RaylibPainter painter{*fonts, *images};
+  const gisland::RaylibPainter painter{*fonts, *images, *rich_textures};
   RenderTexture2D target = LoadRenderTexture(image_width, image_height);
   REQUIRE(IsRenderTextureValid(target));
   BeginTextureMode(target);
@@ -295,6 +350,85 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: compact time and date capsule
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: dynamic image cropped into a circle") {
   check_fixture("dynamic-image-circle", compact_notification_image(), gisland::ViewMode::compact,
+                notification_resources());
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: compact rich notification") {
+  const auto theme = load_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  auto pango = gisland::PangoTextBook::load(theme, asset_root());
+  REQUIRE(pango.has_value());
+  const auto plan = gisland::layout_scene(compact_rich_notification(), theme,
+                                          gisland::ViewMode::compact, *fonts, *pango);
+  REQUIRE(plan.has_value());
+  const auto image = std::ranges::find_if(plan->content, [](const auto &command) {
+    return std::holds_alternative<gisland::ImageDrawCommand>(command);
+  });
+  REQUIRE(image != plan->content.end());
+  CHECK(std::get<gisland::ImageDrawCommand>(*image).bounds == gisland::Rect{4, 4, 24, 24});
+
+  check_fixture("notification-compact", compact_rich_notification(), gisland::ViewMode::compact,
+                notification_resources());
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: expanded rich notification") {
+  const auto theme = load_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  auto pango = gisland::PangoTextBook::load(theme, asset_root());
+  REQUIRE(pango.has_value());
+  const auto plan = gisland::layout_scene(expanded_rich_notification(), theme,
+                                          gisland::ViewMode::expanded, *fonts, *pango);
+  REQUIRE(plan.has_value());
+
+  std::vector<gisland::Rect> images;
+  int button_decorations = 0;
+  for (const auto &command : plan->content) {
+    if (const auto *image = std::get_if<gisland::ImageDrawCommand>(&command); image != nullptr) {
+      images.push_back(image->bounds);
+    }
+    button_decorations +=
+        std::holds_alternative<gisland::ButtonDecorationDrawCommand>(command) ? 1 : 0;
+  }
+  REQUIRE(images.size() == 1);
+  CHECK(images.front().width == 32);
+  CHECK(images.front().height == 32);
+  CHECK(button_decorations == 2);
+  const auto rich = std::ranges::find_if(plan->content, [](const auto &command) {
+    return std::holds_alternative<gisland::RichTextDrawCommand>(command);
+  });
+  REQUIRE(rich != plan->content.end());
+  const auto &rich_command = std::get<gisland::RichTextDrawCommand>(*rich);
+  REQUIRE(rich_command.composition.images.size() == 1);
+  CHECK(rich_command.composition.images.front().bounds.width == 96);
+  CHECK(rich_command.composition.images.front().bounds.height == 54);
+
+  Image rendered = render_fixture(expanded_rich_notification(), gisland::ViewMode::expanded,
+                                  notification_resources());
+  const gisland::RenderOrigin origin{(image_width - plan->view.bounds.width) / 2,
+                                     (image_height - plan->view.bounds.height) / 2};
+  const auto close = std::ranges::find_if(plan->content, [](const auto &command) {
+    const auto *candidate = std::get_if<gisland::IconDrawCommand>(&command);
+    return candidate != nullptr && candidate->accessible_label == "Close notification";
+  });
+  REQUIRE(close != plan->content.end());
+  const auto &close_bounds = std::get<gisland::IconDrawCommand>(*close).bounds;
+  const auto surface = GetImageColor(rendered, origin.x + close_bounds.x - 3,
+                                     origin.y + close_bounds.y + (close_bounds.height / 2));
+  CHECK(surface.r == 0);
+  CHECK(surface.g == 0);
+  CHECK(surface.b == 0);
+  CHECK(surface.a == 255);
+  const auto separator = GetImageColor(rendered, origin.x + (plan->view.bounds.width / 2),
+                                       origin.y + images.front().y + images.front().height + 4);
+  CHECK(separator.r == 0);
+  CHECK(separator.g == 0);
+  CHECK(separator.b == 0);
+  CHECK(separator.a == 255);
+  UnloadImage(rendered);
+
+  check_fixture("notification-expanded", expanded_rich_notification(), gisland::ViewMode::expanded,
                 notification_resources());
 }
 

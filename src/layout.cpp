@@ -45,6 +45,7 @@ struct MeasuredNode {
   std::string text;
   std::string font_resource;
   Rgba color{};
+  std::optional<RichTextComposition> rich_composition;
   std::vector<MeasuredNode> children;
 };
 
@@ -217,8 +218,10 @@ struct MeasuredNode {
 
 class LayoutBuilder {
 public:
-  LayoutBuilder(const Theme &theme, const GlyphMetrics &metrics)
-      : theme_(theme), metrics_(metrics) {}
+  LayoutBuilder(const Theme &theme, const GlyphMetrics &metrics,
+                const RichTextMetrics *rich_metrics, ViewMode mode, bool root_leading_cap)
+      : theme_(theme), metrics_(metrics), rich_metrics_(rich_metrics), mode_(mode),
+        root_leading_cap_(root_leading_cap) {}
 
   [[nodiscard]] std::expected<MeasuredNode, LayoutError> measure(const SceneNode &scene,
                                                                  std::string path) const {
@@ -240,7 +243,34 @@ public:
         node.scene->value);
   }
 
+  [[nodiscard]] std::expected<void, LayoutError> constrain_width(MeasuredNode &node,
+                                                                 int available_width) const {
+    if (available_width < 0) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "node has a negative assigned width"));
+    }
+    return std::visit(
+        [this, &node, available_width](const auto &primitive) {
+          return constrain_primitive(node, primitive, available_width);
+        },
+        node.scene->value);
+  }
+
 private:
+  [[nodiscard]] static LayoutError rich_error(const RichTextError &rich, const std::string &path) {
+    LayoutErrorCode code = LayoutErrorCode::impossible_constraints;
+    if (rich.code == RichTextErrorCode::invalid_utf8) {
+      code = LayoutErrorCode::invalid_utf8;
+    } else if (rich.code == RichTextErrorCode::unknown_role) {
+      code = LayoutErrorCode::unknown_role;
+    } else if (rich.code == RichTextErrorCode::unknown_image_role) {
+      code = LayoutErrorCode::unknown_image_role;
+    } else if (rich.code == RichTextErrorCode::unsupported_glyph) {
+      code = LayoutErrorCode::unsupported_glyph;
+    }
+    return error(code, path + rich.path, rich.message);
+  }
+
   [[nodiscard]] std::expected<const TypographyRole *, LayoutError>
   typography(std::string_view role, const std::string &path) const {
     const auto iterator = theme_.typography().find(std::string{role});
@@ -256,6 +286,12 @@ private:
     if (role == theme_.images().end()) {
       return std::unexpected(error(LayoutErrorCode::unknown_image_role, path + "/role",
                                    "unknown semantic image role"));
+    }
+    if (role->second.placement == ImagePlacement::leading_cap &&
+        (mode_ != ViewMode::compact || !root_leading_cap_ || path != "/children/0")) {
+      return std::unexpected(
+          error(LayoutErrorCode::invalid_image_placement, path + "/role",
+                "leading-cap image must be the first child of the compact root row"));
     }
     auto width = rounded_pixel(role->second.width, path + "/role");
     auto height = rounded_pixel(role->second.height, path + "/role");
@@ -367,6 +403,46 @@ private:
     result.text = resolved_text;
     result.font_resource = std::move(*font);
     result.color = theme_.palette().at((*role)->color);
+    return result;
+  }
+
+  [[nodiscard]] std::expected<MeasuredNode, LayoutError>
+  measure_primitive(const SceneNode &scene, const RichText &rich, const std::string &path) const {
+    auto role = typography(rich.role, path + "/role");
+    if (!role) {
+      return std::unexpected(role.error());
+    }
+    auto font = font_resource((*role)->font, path + "/role");
+    if (!font) {
+      return std::unexpected(font.error());
+    }
+    if (rich_metrics_ == nullptr) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, path,
+                                   "rich text metrics are unavailable"));
+    }
+    auto minimum = rich_metrics_->compose(rich, 1);
+    if (!minimum) {
+      return std::unexpected(rich_error(minimum.error(), path));
+    }
+    const int natural_width = std::max(1, minimum->natural_width);
+    auto natural = rich_metrics_->compose(rich, natural_width);
+    if (!natural) {
+      return std::unexpected(rich_error(natural.error(), path));
+    }
+    if (minimum->minimum_width < 0 || natural->height < 0) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, path,
+                                   "rich text metrics must be non-negative"));
+    }
+    MeasuredNode result{&scene, path};
+    result.width = natural_width;
+    result.height = natural->height;
+    result.minimum_width = minimum->minimum_width;
+    result.minimum_height = natural->height;
+    result.expands_width = true;
+    result.typography = *role;
+    result.font_resource = std::move(*font);
+    result.color = theme_.palette().at((*role)->color);
+    result.rich_composition = std::move(*natural);
     return result;
   }
 
@@ -620,6 +696,211 @@ private:
     return result;
   }
 
+  [[nodiscard]] std::expected<MeasuredNode, LayoutError>
+  measure_primitive(const SceneNode &scene, const ActionRegion &region,
+                    const std::string &path) const {
+    auto child = measure(*region.content, path + "/content");
+    if (!child) {
+      return std::unexpected(child.error());
+    }
+    MeasuredNode result{&scene, path};
+    result.width = child->width;
+    result.height = child->height;
+    result.minimum_width = child->minimum_width;
+    result.minimum_height = child->minimum_height;
+    result.expands_width = child->expands_width;
+    result.expands_height = child->expands_height;
+    result.children.push_back(std::move(*child));
+    return result;
+  }
+
+  template <typename Primitive>
+  [[nodiscard]] static std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode & /*node*/, const Primitive & /*primitive*/,
+                      int /*available_width*/) {
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode &node, const RichText &rich, int available_width) const {
+    if (rich_metrics_ == nullptr || available_width <= 0) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "rich text has no positive assigned width"));
+    }
+    auto composition = rich_metrics_->compose(rich, available_width);
+    if (!composition) {
+      return std::unexpected(rich_error(composition.error(), node.path));
+    }
+    if (composition->height < 0 || composition->minimum_width < 0) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "rich text metrics must be non-negative"));
+    }
+    node.width = available_width;
+    node.height = composition->height;
+    node.minimum_width = composition->minimum_width;
+    node.minimum_height = composition->height;
+    node.rich_composition = std::move(*composition);
+    return {};
+  }
+
+  [[nodiscard]] std::expected<std::vector<int>, LayoutError>
+  horizontal_sizes(const MeasuredNode &node, int available_width) const {
+    auto gap_total = checked_multiply(
+        node.gap, node.children.size() > 1 ? static_cast<int>(node.children.size() - 1) : 0,
+        node.path);
+    if (!gap_total || *gap_total > available_width) {
+      return std::unexpected(gap_total ? error(LayoutErrorCode::impossible_constraints, node.path,
+                                               "container gaps exceed the assigned width")
+                                       : gap_total.error());
+    }
+    std::vector<int> sizes;
+    std::vector<std::size_t> flexible;
+    sizes.reserve(node.children.size());
+    int used = *gap_total;
+    for (std::size_t index = 0; index < node.children.size(); ++index) {
+      const auto &child = node.children[index];
+      sizes.push_back(expands_main(child, Axis::horizontal)
+                          ? main_size(child, Axis::horizontal, true)
+                          : main_size(child, Axis::horizontal, false));
+      if (expands_main(child, Axis::horizontal)) {
+        flexible.push_back(index);
+      }
+      auto next = checked_add(used, sizes.back(), node.path);
+      if (!next) {
+        return std::unexpected(next.error());
+      }
+      used = *next;
+    }
+    if (used > available_width) {
+      int deficit = used - available_width;
+      for (std::size_t index = 0; index < node.children.size() && deficit > 0; ++index) {
+        const int minimum = main_size(node.children[index], Axis::horizontal, true);
+        const int reduction = std::min(deficit, sizes[index] - minimum);
+        sizes[index] -= reduction;
+        deficit -= reduction;
+      }
+      if (deficit > 0) {
+        return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                     "rigid children exceed the assigned width"));
+      }
+      used = available_width;
+    }
+    if (!flexible.empty()) {
+      int remaining = available_width - used;
+      const int share = remaining / static_cast<int>(flexible.size());
+      int remainder = remaining % static_cast<int>(flexible.size());
+      for (const auto index : flexible) {
+        sizes[index] += share + (remainder > 0 ? 1 : 0);
+        remainder = std::max(0, remainder - 1);
+      }
+    }
+    return sizes;
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode &node, const Row & /*row*/, int available_width) const {
+    auto sizes = horizontal_sizes(node, available_width);
+    if (!sizes) {
+      return std::unexpected(sizes.error());
+    }
+    int height = 0;
+    int minimum_height = 0;
+    int width =
+        node.children.size() > 1 ? node.gap * static_cast<int>(node.children.size() - 1) : 0;
+    for (std::size_t index = 0; index < node.children.size(); ++index) {
+      auto constrained = constrain_width(node.children[index], (*sizes)[index]);
+      if (!constrained) {
+        return constrained;
+      }
+      height = std::max(height, node.children[index].height);
+      minimum_height = std::max(minimum_height, node.children[index].minimum_height);
+      auto next_width = checked_add(width, (*sizes)[index], node.path);
+      if (!next_width) {
+        return std::unexpected(next_width.error());
+      }
+      width = *next_width;
+    }
+    node.width = width;
+    node.height = height;
+    node.minimum_height = minimum_height;
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode &node, const Column & /*column*/, int available_width) const {
+    int width = 0;
+    int minimum_width = 0;
+    int height =
+        node.children.size() > 1 ? node.gap * static_cast<int>(node.children.size() - 1) : 0;
+    int minimum_height = height;
+    for (auto &child : node.children) {
+      const int child_width =
+          child.expands_width ? available_width : std::min(child.width, available_width);
+      auto constrained = constrain_width(child, child_width);
+      if (!constrained) {
+        return constrained;
+      }
+      width = std::max(width, child.width);
+      minimum_width = std::max(minimum_width, child.minimum_width);
+      auto next_height = checked_add(height, child.height, node.path);
+      auto next_minimum = checked_add(minimum_height, child.minimum_height, node.path);
+      if (!next_height) {
+        return std::unexpected(next_height.error());
+      }
+      if (!next_minimum) {
+        return std::unexpected(next_minimum.error());
+      }
+      height = *next_height;
+      minimum_height = *next_minimum;
+    }
+    node.width = node.expands_width ? available_width : width;
+    node.height = height;
+    node.minimum_width = minimum_width;
+    node.minimum_height = minimum_height;
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode &node, const Button & /*button*/, int available_width) const {
+    auto doubled_padding = checked_multiply(2, node.padding, node.path);
+    if (!doubled_padding) {
+      return std::unexpected(doubled_padding.error());
+    }
+    auto inner_width = checked_subtract(available_width, *doubled_padding, node.path);
+    if (!inner_width || *inner_width < 0) {
+      return std::unexpected(inner_width ? error(LayoutErrorCode::impossible_constraints, node.path,
+                                                 "button padding exceeds assigned width")
+                                         : inner_width.error());
+    }
+    auto constrained = constrain_width(node.children.front(), *inner_width);
+    if (!constrained) {
+      return constrained;
+    }
+    auto height = checked_add(node.children.front().height, *doubled_padding, node.path);
+    if (!height) {
+      return std::unexpected(height.error());
+    }
+    node.width = available_width;
+    node.height = *height;
+    node.minimum_height = *height;
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode &node, const ActionRegion & /*region*/,
+                      int available_width) const {
+    auto constrained = constrain_width(node.children.front(), available_width);
+    if (!constrained) {
+      return constrained;
+    }
+    const auto &child = node.children.front();
+    node.width = child.width;
+    node.height = child.height;
+    node.minimum_width = child.minimum_width;
+    node.minimum_height = child.minimum_height;
+    return {};
+  }
+
   [[nodiscard]] std::expected<std::string, LayoutError>
   truncate_end(const MeasuredNode &node, std::string_view text, int available_width) const {
     const std::string ellipsis{"\xE2\x80\xA6"};
@@ -690,6 +971,49 @@ private:
     commands.emplace_back(TextDrawCommand{Rect{assigned.x, *y, width, node.height}, *clipped,
                                           std::move(rendered), node.font_resource, *node.typography,
                                           node.color});
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  place_primitive(const MeasuredNode &node, const RichText &rich, Rect assigned, Rect clip,
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions) const {
+    if (!node.rich_composition || assigned.width < node.minimum_width ||
+        assigned.height < node.height) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "rich text cannot fit the assigned bounds"));
+    }
+    auto y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    if (!y) {
+      return std::unexpected(y.error());
+    }
+    const Rect bounds{assigned.x, *y, assigned.width, node.height};
+    auto clipped = intersect(clip, bounds, node.path);
+    if (!clipped) {
+      return std::unexpected(clipped.error());
+    }
+    commands.emplace_back(RichTextDrawCommand{bounds, *clipped, rich, *node.rich_composition,
+                                              node.font_resource, *node.typography, node.color,
+                                              theme_.palette().at("accent")});
+    for (const auto &link : node.rich_composition->links) {
+      auto x = checked_add(bounds.x, link.bounds.x, node.path);
+      auto link_y = checked_add(bounds.y, link.bounds.y, node.path);
+      if (!x) {
+        return std::unexpected(x.error());
+      }
+      if (!link_y) {
+        return std::unexpected(link_y.error());
+      }
+      const Rect link_bounds{*x, *link_y, link.bounds.width, link.bounds.height};
+      auto link_clip = intersect(*clipped, link_bounds, node.path);
+      if (!link_clip) {
+        return std::unexpected(link_clip.error());
+      }
+      if (link_clip->width > 0 && link_clip->height > 0) {
+        interactions.push_back(InteractionTarget{link_bounds, *link_clip, link.action_id, true,
+                                                 link.accessible_label});
+      }
+    }
     return {};
   }
 
@@ -982,8 +1306,28 @@ private:
     return place(child, child_bounds, *clipped, commands, interactions);
   }
 
+  [[nodiscard]] std::expected<void, LayoutError>
+  place_primitive(const MeasuredNode &node, const ActionRegion &region, Rect assigned, Rect clip,
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions) const {
+    if (assigned.width < node.minimum_width || assigned.height < node.minimum_height) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "action region cannot fit the assigned bounds"));
+    }
+    auto clipped = intersect(clip, assigned, node.path);
+    if (!clipped) {
+      return std::unexpected(clipped.error());
+    }
+    interactions.push_back(InteractionTarget{assigned, *clipped, region.action_id, region.enabled,
+                                             region.accessible_label});
+    return place(node.children.front(), assigned, *clipped, commands, interactions);
+  }
+
   const Theme &theme_;
   const GlyphMetrics &metrics_;
+  const RichTextMetrics *rich_metrics_;
+  ViewMode mode_;
+  bool root_leading_cap_;
 };
 
 [[nodiscard]] const ViewGeometry &geometry_for(const Theme &theme, ViewMode mode) {
@@ -997,18 +1341,36 @@ private:
   return theme.palette().at(std::get<std::string>(value));
 }
 
+[[nodiscard]] const ImageRole *root_leading_cap_role(const SceneNode &scene, const Theme &theme) {
+  const auto *row = std::get_if<Row>(&scene.value);
+  if (row == nullptr || row->children.empty()) {
+    return nullptr;
+  }
+  const auto *image = std::get_if<Image>(&row->children.front()->value);
+  if (image == nullptr) {
+    return nullptr;
+  }
+  const auto role = theme.images().find(image->role);
+  if (role == theme.images().end() || role->second.placement != ImagePlacement::leading_cap) {
+    return nullptr;
+  }
+  return &role->second;
+}
+
 } // namespace
 
-std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, const Theme &theme,
-                                                    ViewMode mode,
-                                                    const GlyphMetrics &glyph_metrics) {
+[[nodiscard]] static std::expected<LayoutPlan, LayoutError>
+layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
+                  const GlyphMetrics &glyph_metrics, const RichTextMetrics *rich_text_metrics) {
   const auto validation = validate_scene(scene);
   if (!validation) {
     return std::unexpected(error(LayoutErrorCode::impossible_constraints, validation.error().path,
                                  "scene is invalid"));
   }
 
-  const LayoutBuilder builder{theme, glyph_metrics};
+  const ImageRole *leading_cap = root_leading_cap_role(scene, theme);
+  const LayoutBuilder builder{theme, glyph_metrics, rich_text_metrics, mode,
+                              leading_cap != nullptr};
   auto measured = builder.measure(scene, "");
   if (!measured) {
     return std::unexpected(measured.error());
@@ -1035,15 +1397,35 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
     }
   }
 
-  auto doubled_horizontal_padding = checked_multiply(2, *horizontal_padding, "");
+  int leading_inset = *horizontal_padding;
+  if (leading_cap != nullptr) {
+    auto image_width = rounded_pixel(leading_cap->width, "/children/0/role");
+    auto image_height = rounded_pixel(leading_cap->height, "/children/0/role");
+    if (!image_width) {
+      return std::unexpected(image_width.error());
+    }
+    if (!image_height) {
+      return std::unexpected(image_height.error());
+    }
+    if (mode != ViewMode::compact || *minimum_height != *maximum_height ||
+        *radius * 2 != *minimum_height || *image_width != *image_height ||
+        *image_height >= *minimum_height) {
+      return std::unexpected(error(
+          LayoutErrorCode::invalid_image_placement, "/children/0/role",
+          "leading-cap image requires a fixed circular compact cap and a smaller square image"));
+    }
+    leading_inset = (*minimum_height - *image_width) / 2;
+  }
+
+  auto horizontal_insets = checked_add(leading_inset, *horizontal_padding, "");
   auto doubled_vertical_padding = checked_multiply(2, *vertical_padding, "");
-  if (!doubled_horizontal_padding) {
-    return std::unexpected(doubled_horizontal_padding.error());
+  if (!horizontal_insets) {
+    return std::unexpected(horizontal_insets.error());
   }
   if (!doubled_vertical_padding) {
     return std::unexpected(doubled_vertical_padding.error());
   }
-  auto maximum_content_width = checked_subtract(*maximum_width, *doubled_horizontal_padding, "");
+  auto maximum_content_width = checked_subtract(*maximum_width, *horizontal_insets, "");
   auto maximum_content_height = checked_subtract(*maximum_height, *doubled_vertical_padding, "");
   if (!maximum_content_width) {
     return std::unexpected(maximum_content_width.error());
@@ -1061,22 +1443,30 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
                                  "scene minimum size exceeds the view maximum"));
   }
 
-  auto desired_width = checked_add(measured->width, *doubled_horizontal_padding, "");
-  auto desired_height = checked_add(measured->height, *doubled_vertical_padding, "");
+  auto desired_width = checked_add(measured->width, *horizontal_insets, "");
   if (!desired_width) {
     return std::unexpected(desired_width.error());
   }
-  if (!desired_height) {
-    return std::unexpected(desired_height.error());
-  }
   const int view_width = std::clamp(*desired_width, *minimum_width, *maximum_width);
-  const int view_height = std::clamp(*desired_height, *minimum_height, *maximum_height);
-  const Rect view_bounds{0, 0, view_width, view_height};
-  auto content_width = checked_subtract(view_width, *doubled_horizontal_padding, "");
-  auto content_height = checked_subtract(view_height, *doubled_vertical_padding, "");
+  auto content_width = checked_subtract(view_width, *horizontal_insets, "");
   if (!content_width) {
     return std::unexpected(content_width.error());
   }
+  auto constrained = builder.constrain_width(*measured, *content_width);
+  if (!constrained) {
+    return std::unexpected(constrained.error());
+  }
+  if (measured->height > *maximum_content_height) {
+    return std::unexpected(error(LayoutErrorCode::impossible_constraints, "",
+                                 "width-constrained scene height exceeds the view maximum"));
+  }
+  auto desired_height = checked_add(measured->height, *doubled_vertical_padding, "");
+  if (!desired_height) {
+    return std::unexpected(desired_height.error());
+  }
+  const int view_height = std::clamp(*desired_height, *minimum_height, *maximum_height);
+  const Rect view_bounds{0, 0, view_width, view_height};
+  auto content_height = checked_subtract(view_height, *doubled_vertical_padding, "");
   if (!content_height) {
     return std::unexpected(content_height.error());
   }
@@ -1084,8 +1474,7 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
     return std::unexpected(error(LayoutErrorCode::impossible_constraints, "",
                                  "view has no positive content bounds after rounding"));
   }
-  const Rect content_bounds{*horizontal_padding, *vertical_padding, *content_width,
-                            *content_height};
+  const Rect content_bounds{leading_inset, *vertical_padding, *content_width, *content_height};
   LayoutPlan plan{
       RoundedView{view_bounds, *radius, *border, theme.palette().at("surface"),
                   theme.palette().at("muted"),
@@ -1098,7 +1487,25 @@ std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, cons
   if (!placed) {
     return std::unexpected(placed.error());
   }
+  if (leading_cap != nullptr && !plan.content.empty()) {
+    if (auto *image = std::get_if<ImageDrawCommand>(&plan.content.front()); image != nullptr) {
+      image->clip = view_bounds;
+    }
+  }
   return plan;
+}
+
+std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, const Theme &theme,
+                                                    ViewMode mode,
+                                                    const GlyphMetrics &glyph_metrics) {
+  return layout_scene_impl(scene, theme, mode, glyph_metrics, nullptr);
+}
+
+std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, const Theme &theme,
+                                                    ViewMode mode,
+                                                    const GlyphMetrics &glyph_metrics,
+                                                    const RichTextMetrics &rich_text_metrics) {
+  return layout_scene_impl(scene, theme, mode, glyph_metrics, &rich_text_metrics);
 }
 
 } // namespace gisland
