@@ -1,4 +1,6 @@
 import base64
+import configparser
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -128,11 +130,62 @@ def load_icon_name(name: str) -> ImageData:
     return load_image_file(icon.get_filename())
 
 
+def _xdg_data_dirs() -> tuple[Path, ...]:
+    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+    configured = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+    return (data_home, *(Path(value) for value in configured.split(":") if value))
+
+
+def _desktop_entry_path(desktop_entry: str, data_dirs: tuple[Path, ...]) -> Path:
+    if (
+        not desktop_entry
+        or len(desktop_entry) > 255
+        or "\0" in desktop_entry
+        or Path(desktop_entry).name != desktop_entry
+    ):
+        raise ValueError("desktop entry ID is invalid")
+    filename = desktop_entry if desktop_entry.endswith(".desktop") else desktop_entry + ".desktop"
+    for data_dir in data_dirs:
+        applications = data_dir / "applications"
+        exact = applications / filename
+        if exact.is_file():
+            return exact
+        try:
+            for candidate in applications.iterdir():
+                if candidate.name.casefold() == filename.casefold() and candidate.is_file():
+                    return candidate
+        except OSError:
+            continue
+    raise ValueError(f"desktop entry was not found: {desktop_entry}")
+
+
+def load_desktop_entry_icon(
+    desktop_entry: str,
+    data_dirs: tuple[Path, ...] | None = None,
+    path_loader: Callable[[str], ImageData] = load_image_file,
+    icon_loader: Callable[[str], ImageData] = load_icon_name,
+) -> ImageData:
+    path = _desktop_entry_path(desktop_entry, data_dirs or _xdg_data_dirs())
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    try:
+        parser.read_string(path.read_text(encoding="utf-8"))
+        icon = parser["Desktop Entry"].get("Icon", "").strip()
+    except (OSError, configparser.Error, KeyError) as error:
+        raise ValueError(f"desktop entry could not be parsed: {path}") from error
+    if not icon:
+        raise ValueError(f"desktop entry has no icon: {path}")
+    if icon.startswith("file:") or "/" in icon:
+        return path_loader(icon)
+    return icon_loader(icon)
+
+
 def resolve_app_image(
     hints: dict[str, Any],
     app_icon: str,
     path_loader: Callable[[str], ImageData] = load_image_file,
     icon_loader: Callable[[str], ImageData] = load_icon_name,
+    desktop_loader: Callable[[str], ImageData] = load_desktop_entry_icon,
 ) -> ImageData | None:
     for key in ("image-data", "image_data", "icon_data"):
         if key in hints:
@@ -147,11 +200,17 @@ def resolve_app_image(
                 return path_loader(value)
             except (OSError, ValueError):
                 break
-    if not app_icon:
-        return None
-    try:
-        if app_icon.startswith("file:") or "/" in app_icon:
-            return path_loader(app_icon)
-        return icon_loader(app_icon)
-    except (OSError, ValueError):
-        return None
+    if app_icon:
+        try:
+            if app_icon.startswith("file:") or "/" in app_icon:
+                return path_loader(app_icon)
+            return icon_loader(app_icon)
+        except (OSError, ValueError):
+            pass
+    desktop_entry = hints.get("desktop-entry")
+    if isinstance(desktop_entry, str) and desktop_entry:
+        try:
+            return desktop_loader(desktop_entry)
+        except (OSError, ValueError):
+            pass
+    return None

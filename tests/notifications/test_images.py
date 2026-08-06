@@ -1,9 +1,11 @@
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from gisland_notifications.images import (
     ImageData,
     encode_resource,
+    load_desktop_entry_icon,
     load_image_file,
     normalize_raw_image,
     resolve_app_image,
@@ -60,6 +62,60 @@ class ImageResolutionTests(unittest.TestCase):
 
         self.assertEqual(image.pixels, b"\x04\x05\x06\xff")
         self.assertEqual(requested, [("path", "broken.png"), ("icon", "folder")])
+
+    def test_resolves_case_insensitive_desktop_entry_icon_from_xdg_data(self):
+        with TemporaryDirectory() as root:
+            applications = Path(root) / "applications"
+            applications.mkdir()
+            (applications / "slack.desktop").write_text(
+                "[Desktop Entry]\nName=Slack\nIcon=slack\nType=Application\n",
+                encoding="utf-8",
+            )
+            requested = []
+
+            image = load_desktop_entry_icon(
+                "Slack",
+                data_dirs=(Path(root),),
+                icon_loader=lambda value: requested.append(value)
+                or ImageData(1, 1, b"\x01\x02\x03\xff"),
+            )
+
+        self.assertEqual(image.pixels, b"\x01\x02\x03\xff")
+        self.assertEqual(requested, ["slack"])
+
+    def test_desktop_entry_is_the_final_app_image_fallback(self):
+        requested = []
+        desktop_image = ImageData(1, 1, b"\x07\x08\x09\xff")
+
+        from_desktop = resolve_app_image(
+            {"desktop-entry": "Slack"},
+            "",
+            desktop_loader=lambda value: requested.append(("desktop", value)) or desktop_image,
+        )
+        from_app_icon = resolve_app_image(
+            {"desktop-entry": "Slack"},
+            "folder",
+            icon_loader=lambda value: requested.append(("icon", value))
+            or ImageData(1, 1, b"\x04\x05\x06\xff"),
+            desktop_loader=lambda value: requested.append(("desktop", value)) or desktop_image,
+        )
+
+        self.assertEqual(from_desktop, desktop_image)
+        self.assertEqual(from_app_icon.pixels, b"\x04\x05\x06\xff")
+        self.assertEqual(requested, [("desktop", "Slack"), ("icon", "folder")])
+
+    def test_rejects_unsafe_or_icon_free_desktop_entries(self):
+        with TemporaryDirectory() as root:
+            applications = Path(root) / "applications"
+            applications.mkdir()
+            (applications / "empty.desktop").write_text(
+                "[Desktop Entry]\nName=Empty\nType=Application\n", encoding="utf-8"
+            )
+
+            with self.assertRaises(ValueError):
+                load_desktop_entry_icon("../slack", data_dirs=(Path(root),))
+            with self.assertRaises(ValueError):
+                load_desktop_entry_icon("empty", data_dirs=(Path(root),))
 
     def test_rejects_remote_image_paths(self):
         with self.assertRaises(ValueError):
