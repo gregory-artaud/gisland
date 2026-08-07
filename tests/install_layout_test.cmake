@@ -42,6 +42,11 @@ string(FIND "${notification_manifest}" "${notification_command}" notification_co
 if(notification_command_position EQUAL -1)
   message(FATAL_ERROR "installed notification manifest has the wrong command: ${notification_manifest}")
 endif()
+string(FIND "${notification_manifest}" "minimum_minor = 4" notification_minimum_position)
+string(FIND "${notification_manifest}" "maximum_minor = 4" notification_maximum_position)
+if(notification_minimum_position EQUAL -1 OR notification_maximum_position EQUAL -1)
+  message(FATAL_ERROR "installed notification manifest has the wrong protocol: ${notification_manifest}")
+endif()
 
 file(READ "${root}/${BINDIR}/gisland-notifications" notification_executable)
 string(FIND "${notification_executable}" "main(\"1.0.0\")" notification_version_position)

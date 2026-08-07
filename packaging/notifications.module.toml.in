@@ -5,5 +5,5 @@ command = ["@CMAKE_INSTALL_FULL_BINDIR@/gisland-notifications"]
 
 [protocol]
 major = 1
-minimum_minor = 3
-maximum_minor = 3
+minimum_minor = 4
+maximum_minor = 4
