@@ -238,10 +238,9 @@ class NotificationDBusProcessTests(unittest.TestCase):
         try:
             second.stdin.write(json.dumps(init_message()) + "\n")
             second.stdin.flush()
-            record = json.loads(second.stdout.readline())
             second.wait(timeout=3)
-            self.assertEqual(record["type"], "log")
-            self.assertIn("could not own", record["message"])
+            self.assertEqual(second.stdout.read(), "")
+            self.assertIn("could not own", second.stderr.read())
             self.assertEqual(second.returncode, 1)
         finally:
             if second.poll() is None:

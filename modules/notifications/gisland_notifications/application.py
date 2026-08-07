@@ -55,7 +55,10 @@ class Application:
 
     def _fatal(self, message: str) -> None:
         self._exit_code = 1
-        self._write_record({"type": "log", "level": "error", "message": message})
+        if self._controller is not None and self._controller.ready:
+            self._write_record({"type": "log", "level": "error", "message": message})
+        else:
+            print(f"gisland-notifications: {message}", file=sys.stderr)
         self.stop()
 
     def run(self) -> int:

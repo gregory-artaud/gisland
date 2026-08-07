@@ -58,6 +58,10 @@ class ProtocolController:
         self._ready_sent = False
         self._shutdown_sent = False
 
+    @property
+    def ready(self) -> bool:
+        return self._ready_sent
+
     def _maybe_ready(self) -> None:
         if not self._initialized or not self._bus_ready or self._ready_sent:
             return
