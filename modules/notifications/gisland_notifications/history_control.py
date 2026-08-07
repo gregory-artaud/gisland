@@ -1,9 +1,11 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .dbus_service import BUS_NAME, HISTORY_INTERFACE_NAME, HISTORY_OBJECT_PATH
@@ -85,8 +87,17 @@ def _confirm_visible() -> None:
     _history_call("ConfirmVisible")
 
 
+def resolve_gislandctl(
+    program: str, path_lookup: Callable[[str], str | None] = shutil.which
+) -> str | None:
+    sibling = Path(program).resolve().with_name("gislandctl")
+    if sibling.is_file() and os.access(sibling, os.X_OK):
+        return str(sibling)
+    return path_lookup("gislandctl")
+
+
 def main() -> int:
-    gislandctl = shutil.which("gislandctl")
+    gislandctl = resolve_gislandctl(sys.argv[0])
     if gislandctl is None:
         print("gisland-notification-history: gislandctl was not found", file=sys.stderr)
         return 1

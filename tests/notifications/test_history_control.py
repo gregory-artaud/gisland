@@ -1,11 +1,35 @@
 import json
+import tempfile
 import subprocess
 import unittest
+from pathlib import Path
 
-from gisland_notifications.history_control import open_history
+from gisland_notifications.history_control import open_history, resolve_gislandctl
 
 
 class HistoryControlTests(unittest.TestCase):
+    def test_resolves_an_installed_sibling_before_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            gislandctl = directory / "gislandctl"
+            gislandctl.touch(mode=0o700)
+
+            resolved = resolve_gislandctl(
+                str(directory / "gisland-notification-history"),
+                path_lookup=lambda _name: "/fallback/gislandctl",
+            )
+
+        self.assertEqual(resolved, str(gislandctl))
+
+    def test_falls_back_to_path_when_the_sibling_is_absent(self):
+        self.assertEqual(
+            resolve_gislandctl(
+                "/missing/gisland-notification-history",
+                path_lookup=lambda name: f"/fallback/{name}",
+            ),
+            "/fallback/gislandctl",
+        )
+
     def test_waits_for_history_then_opens(self):
         calls = []
         confirmations = []
