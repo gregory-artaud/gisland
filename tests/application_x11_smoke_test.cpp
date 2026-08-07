@@ -312,8 +312,8 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
                                                     gisland::StatusControl{});
   REQUIRE(status.has_value());
   const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
-  REQUIRE(snapshot.active_context.has_value());
-  CHECK(snapshot.active_context->instance_id == "clock");
+  REQUIRE(snapshot.compact.has_value());
+  CHECK(snapshot.compact->instance_id == "clock");
   REQUIRE(snapshot.modules.size() == 1);
   CHECK(snapshot.modules[0].state == gisland::ControlModuleState::running);
 
@@ -486,12 +486,21 @@ TEST_CASE("application renders a dynamic image from an external module") {
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
            attributes.map_state == IsViewable;
   }));
-  const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
-                                                    gisland::StatusControl{});
-  REQUIRE(status.has_value());
-  const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
-  REQUIRE(snapshot.active_context.has_value());
-  CHECK(snapshot.active_context->instance_id == "image");
+  std::string status_diagnostic;
+  const bool image_selected = wait_until([&] {
+    const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                      gisland::StatusControl{});
+    if (!status) {
+      status_diagnostic = status.error().message;
+      return false;
+    }
+    status_diagnostic = gisland::format_control_output(*status, true);
+    return std::get<gisland::ControlStatus>(status->value()).compact &&
+           std::get<gisland::ControlStatus>(status->value()).compact->instance_id == "image";
+  });
+  INFO(status_diagnostic);
+  INFO(read_text(config.application_log()));
+  REQUIRE(image_selected);
   REQUIRE(wait_until([&] {
     const auto shape = input_shape_bounds(display, *window);
     return shape && shape->width == 230 && shape->height == 32;
@@ -553,47 +562,57 @@ TEST_CASE("application renders protocol 1.3 rich notification scenes from an ext
   XCloseDisplay(display);
 }
 
-TEST_CASE("application previews a configured notification expanded before compacting") {
-  if (std::getenv("DISPLAY") == nullptr) {
-    SKIP("requires an X11 display");
-  }
-  Display *display = XOpenDisplay(nullptr);
-  REQUIRE(display != nullptr);
-  TemporaryConfig config;
-  write_text(config.config_path(),
-             "monitor = \"primary\"\n"
-             "theme = \"default\"\n"
-             "default_module = \"notification\"\n"
-             "[[modules]]\n"
-             "id = \"notification\"\n"
-             "command = [\"" GISLAND_FAKE_MODULE_PATH "\", \"rich-notification\"]\n"
-             "protocol_min = \"1.3\"\n"
-             "protocol_max = \"1.3\"\n"
-             "restart = \"never\"\n"
-             "expanded_preview_ms = 1000\n");
+TEST_CASE("application keeps compact and expanded owners independent for protocol 1.4") {
+  TemporaryConfig config{false};
+  write_text(config.config_path(), std::string{"monitor = \"primary\"\n"
+                                               "theme = \"default\"\n"
+                                               "[defaults]\n"
+                                               "compact = \"clock\"\n"
+                                               "expanded = \"clock\"\n"
+                                               "[[modules]]\n"
+                                               "id = \"clock\"\n"
+                                               "command = [\""} +
+                                       GISLAND_FAKE_MODULE_PATH +
+                                       "\", \"interactive-data\"]\n"
+                                       "restart = \"never\"\n"
+                                       "[modules.view.compact]\n"
+                                       "type = \"text\"\n"
+                                       "value = { bind = \"time\" }\n"
+                                       "role = \"body\"\n"
+                                       "[modules.view.expanded]\n"
+                                       "type = \"text\"\n"
+                                       "value = { bind = \"time\" }\n"
+                                       "role = \"body\"\n"
+                                       "[[modules]]\n"
+                                       "id = \"details\"\n"
+                                       "command = [\"" +
+                                       GISLAND_FAKE_MODULE_PATH +
+                                       "\", \"independent\"]\n"
+                                       "restart = \"never\"\n");
+
   ChildProcess child{config.home(), config.application_log()};
+  const std::string socket = (config.home() / "gisland.sock").string();
 
-  std::optional<Window> window;
   REQUIRE(wait_until([&] {
-    XSync(display, False);
-    window = find_gisland_window(display);
-    return window.has_value();
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    return status.mode == gisland::IslandMode::expanded && status.compact && status.expanded &&
+           status.compact->instance_id == "clock" && status.expanded->instance_id == "details";
   }));
 
   REQUIRE(wait_until([&] {
-    XSync(display, False);
-    const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width >= 360 && shape->height > 96 && shape->height < 300;
-  }));
-  REQUIRE(wait_until([&] {
-    XSync(display, False);
-    const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->height == 32 && shape->width > 230;
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    return status.mode == gisland::IslandMode::compact && status.compact && status.expanded &&
+           status.compact->instance_id == "clock" && status.expanded->instance_id == "details";
   }));
   CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
-  CHECK(read_text(config.application_log()).find("render:") == std::string::npos);
-
-  XCloseDisplay(display);
 }
 
 TEST_CASE("application renders a freedesktop notification from the shipped daemon") {
@@ -631,12 +650,19 @@ TEST_CASE("application renders a freedesktop notification from the shipped daemo
       return false;
     }
     const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
-    return snapshot.active_context && snapshot.active_context->instance_id == "notifications";
+    return snapshot.mode == gisland::IslandMode::expanded && snapshot.compact &&
+           snapshot.expanded && snapshot.compact->instance_id == "clock" &&
+           snapshot.expanded->instance_id == "notifications";
   }));
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->height == 32;
+    return shape && shape->width >= 360 && shape->height >= 96 && shape->height < 300;
+  }));
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::compact;
   }));
 
   REQUIRE(gisland::send_control_command(socket, gisland::OpenControl{}).has_value());

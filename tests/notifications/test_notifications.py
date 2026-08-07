@@ -7,8 +7,8 @@ from gisland_notifications.scenes import build_publication
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_protocol_version_is_rich_content_capable(self):
-        self.assertEqual((PROTOCOL_MAJOR, PROTOCOL_MINOR), (1, 3))
+    def test_protocol_version_supports_independent_views(self):
+        self.assertEqual((PROTOCOL_MAJOR, PROTOCOL_MINOR), (1, 4))
 
 
 class NotificationStoreTests(unittest.TestCase):
@@ -118,7 +118,7 @@ class MarkupTests(unittest.TestCase):
 
 
 class SceneTests(unittest.TestCase):
-    def test_builds_typed_compact_and_expanded_notification(self):
+    def test_builds_expanded_only_notification_with_reveal_intent(self):
         store = NotificationStore()
         notification = store.create(
             "Files",
@@ -142,11 +142,13 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(publication["type"], "publish")
         self.assertEqual(publication["context_id"], f"notification-{notification.id}")
         self.assertEqual(publication["priority"], 20)
-        self.assertEqual(publication["compact"]["type"], "row")
-        self.assertEqual(publication["compact"]["children"][0]["role"], "notification-icon")
-        self.assertEqual(publication["expanded"]["type"], "action_region")
+        self.assertEqual(set(publication["views"]), {"expanded"})
+        self.assertEqual(publication["views"]["expanded"]["type"], "action_region")
+        self.assertEqual(
+            publication["presentation"], {"reveal": "expanded", "duration_ms": 1000}
+        )
         prefix = f"notification-{notification.id}:"
-        self.assertEqual(publication["expanded"]["action_id"], prefix + "default")
+        self.assertEqual(publication["views"]["expanded"]["action_id"], prefix + "default")
         self.assertEqual(routing[prefix + "default"], ("dbus", "default"))
         self.assertEqual(routing[prefix + "action-0"], ("dbus", "show"))
         self.assertEqual(routing[prefix + "link-0"], ("uri", "https://example.com"))
@@ -157,9 +159,8 @@ class SceneTests(unittest.TestCase):
 
         publication, routing = build_publication(notification)
 
-        self.assertEqual(publication["compact"]["type"], "text")
-        self.assertEqual(publication["compact"]["value"], "Notification")
-        self.assertEqual(publication["expanded"]["type"], "column")
+        self.assertNotIn("compact", publication["views"])
+        self.assertEqual(publication["views"]["expanded"]["type"], "column")
         prefix = f"notification-{notification.id}:"
         self.assertNotIn(prefix + "default", routing)
         self.assertEqual(routing[prefix + "close"], ("close", "close"))

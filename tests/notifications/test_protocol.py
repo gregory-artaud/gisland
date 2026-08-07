@@ -47,7 +47,10 @@ class ProtocolControllerTests(unittest.TestCase):
         )
 
     @staticmethod
-    def init(maximum_minor=3, capabilities=("context-images", "rich-content")):
+    def init(
+        maximum_minor=4,
+        capabilities=("context-images", "rich-content", "independent-views"),
+    ):
         return {
             "type": "init",
             "protocol": {
@@ -73,8 +76,8 @@ class ProtocolControllerTests(unittest.TestCase):
                 {
                     "type": "ready",
                     "protocol_major": 1,
-                    "protocol_minor": 3,
-                    "capabilities": ["context-images", "rich-content"],
+                    "protocol_minor": 4,
+                    "capabilities": ["context-images", "rich-content", "independent-views"],
                 }
             ],
         )
@@ -82,10 +85,10 @@ class ProtocolControllerTests(unittest.TestCase):
     def test_rejects_incompatible_init(self):
         self.controller.bus_ready()
 
-        self.controller.handle(self.init(maximum_minor=2))
+        self.controller.handle(self.init(maximum_minor=3))
 
         self.assertEqual(self.records, [])
-        self.assertEqual(self.failures, ["core does not offer protocol 1.3"])
+        self.assertEqual(self.failures, ["core does not offer protocol 1.4"])
 
     def test_routes_actions_and_returns_one_result(self):
         self.controller.handle(self.init())

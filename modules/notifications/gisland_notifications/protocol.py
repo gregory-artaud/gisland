@@ -84,7 +84,7 @@ class ProtocolController:
             protocol = record.get("protocol", {})
             maximum = protocol.get("maximum", {}) if isinstance(protocol, dict) else {}
             if maximum.get("major") != PROTOCOL_MAJOR or maximum.get("minor", -1) < PROTOCOL_MINOR:
-                self._fatal("core does not offer protocol 1.3")
+                self._fatal(f"core does not offer protocol {PROTOCOL_MAJOR}.{PROTOCOL_MINOR}")
                 return
             capabilities = record.get("capabilities")
             if not isinstance(capabilities, list) or not set(CAPABILITIES).issubset(capabilities):

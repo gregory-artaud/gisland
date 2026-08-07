@@ -18,25 +18,9 @@ def build_publication(
     routing: dict[str, tuple[str, str]] = {prefix + "close": ("close", "close")}
     routing.update({prefix + action_id: ("uri", uri) for action_id, uri in parsed.links.items()})
 
-    label = notification.summary or notification.app_name or "Notification"
     resources: list[dict[str, Any]] = []
-    if app_resource is None:
-        compact: dict[str, Any] = _text(label, "compact-primary")
-    else:
+    if app_resource is not None:
         resources.append(app_resource)
-        compact = {
-            "type": "row",
-            "gap": "small",
-            "children": [
-                {
-                    "type": "image",
-                    "resource_id": app_resource["id"],
-                    "role": "notification-icon",
-                    "accessible_label": notification.app_name or "Application",
-                },
-                _text(label, "compact-primary"),
-            ],
-        }
 
     header_children: list[dict[str, Any]] = []
     if app_resource is not None:
@@ -133,8 +117,8 @@ def build_publication(
         "type": "publish",
         "context_id": notification.context_id,
         "priority": notification.priority,
-        "compact": compact,
-        "expanded": expanded,
+        "views": {"expanded": expanded},
+        "presentation": {"reveal": "expanded", "duration_ms": 1000},
     }
     if resources:
         publication["resources"] = resources

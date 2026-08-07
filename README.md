@@ -214,6 +214,16 @@ arguments = []
 enabled = true
 ```
 
+Compact and expanded slots use independent enabled-instance fallbacks:
+
+```toml
+[defaults]
+compact = "clock"
+expanded = "clock"
+```
+
+The legacy `default_module = "clock"` form remains supported and sets both fallbacks.
+
 The manifest declares human-readable metadata, a command vector, its supported protocol range,
 default options, and an option schema. Configured values are merged over defaults and validated
 before any process starts. A missing, malformed, or protocol-incompatible referenced manifest
@@ -235,7 +245,7 @@ notification module beside it. A user
 
 The shipped `gisland-notifications` process owns `org.freedesktop.Notifications` on the user session
 bus and exposes the standard freedesktop notification interface. It runs as an ordinary supervised
-protocol-1.3 module; a missing Python or GI dependency stops only this module and does not terminate
+protocol-1.4 module; a missing Python or GI dependency stops only this module and does not terminate
 the graphical core. Another notification daemon must not already own the bus name.
 
 The daemon supports application names and icons, summaries, freedesktop body markup, default and
@@ -249,19 +259,10 @@ uses 5 seconds for low urgency, 8 seconds for normal urgency, and no automatic e
 critical urgency. Closing, expiration, and non-resident actions emit the standard D-Bus signals;
 resident actions leave their notification visible.
 
-Automatic expanded previews are opt-in per module instance. Set `expanded_preview_ms` on the
-notifications `[[modules]]` entry to show each newly active notification expanded for that duration:
-
-```toml
-[[modules]]
-id = "notifications"
-module = "notifications"
-enabled = true
-expanded_preview_ms = 1000
-```
-
-The option accepts `0` through `60000` milliseconds and defaults to `0`. Preview expiration returns
-to compact mode unless the pointer is hovering or the overlay was opened explicitly.
+Notifications publish an expanded-only view and request a one-second reveal through the generic
+protocol presentation intent. Compact content remains owned by the configured compact fallback.
+Reveal expiration returns to compact mode unless the pointer is hovering or the overlay was opened
+explicitly.
 
 Links are opened through Gio only for `http`, `https`, and `mailto` URIs. The daemon never invokes a
 shell or executes action strings supplied by applications. Notifications exist only in memory while
@@ -286,7 +287,7 @@ gisland is running; no history or persistence is provided.
 ```
 
 Durations accept positive integer `ms`, `s`, `m`, or `h` units up to 24 hours. Scripts should use
-`status --json`; its result has `format_version: 1`.
+`status --json`; its result has `format_version: 2` with separate `compact` and `expanded` owners.
 
 `reload` explicitly rereads the configuration path selected at startup and resolves the selected
 theme from the same user and distributed roots. It is transactional through configuration, theme,

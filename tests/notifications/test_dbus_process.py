@@ -12,11 +12,11 @@ def init_message():
     return {
         "type": "init",
         "protocol": {
-            "minimum": {"major": 1, "minor": 3},
-            "maximum": {"major": 1, "minor": 3},
+            "minimum": {"major": 1, "minor": 4},
+            "maximum": {"major": 1, "minor": 4},
         },
         "instance_id": "notifications",
-        "capabilities": ["context-images", "rich-content"],
+        "capabilities": ["context-images", "rich-content", "independent-views"],
         "configuration": {},
         "locale": "C",
         "timezone": "UTC",
@@ -145,6 +145,10 @@ class NotificationDBusProcessTests(unittest.TestCase):
         self.assertEqual(publication["type"], "publish")
         self.assertEqual(publication["context_id"], f"notification-{notification_id}")
         self.assertEqual(publication["priority"], 20)
+        self.assertEqual(set(publication["views"]), {"expanded"})
+        self.assertEqual(
+            publication["presentation"], {"reveal": "expanded", "duration_ms": 1000}
+        )
 
         proxy.call_sync(
             "CloseNotification",
