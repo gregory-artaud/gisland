@@ -758,6 +758,7 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   REQUIRE(send_history_notification("Third"));
   REQUIRE(send_history_notification("Fourth"));
   REQUIRE(send_history_notification("Fifth"));
+  REQUIRE(send_history_notification("Sixth"));
   REQUIRE(wait_until([&] {
     const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
     return status &&
@@ -787,7 +788,43 @@ TEST_CASE("external notification history grows on repeated commands and resets a
     }
   }
 
-  REQUIRE(gisland::send_control_command(socket, gisland::CloseControl{}).has_value());
+  XWindowAttributes attributes{};
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  auto shape = input_shape_bounds(display, *window);
+  REQUIRE(shape.has_value());
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                               attributes.x + shape->x + shape->width / 2,
+                               attributes.y + shape->y + 70, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeButtonEvent(display, Button1, False, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto masked_shape = input_shape_bounds(display, *window);
+    return masked_shape && masked_shape->height < heights.back();
+  }));
+
+  REQUIRE(open_notification_history(config.home()));
+  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+  shape = input_shape_bounds(display, *window);
+  REQUIRE(shape.has_value());
+  CHECK(shape->height == heights.back());
+
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                               attributes.x + shape->x + shape->width - 28,
+                               attributes.y + shape->y + 28, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  REQUIRE(XTestFakeButtonEvent(display, Button1, False, CurrentTime) != 0);
+  XSync(display, False);
   REQUIRE(wait_until([&] {
     const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
     if (!status) {
@@ -801,8 +838,8 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   std::this_thread::sleep_for(std::chrono::milliseconds{400});
   REQUIRE(wait_until([&] {
     XSync(display, False);
-    const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->height == heights[0];
+    const auto reset_shape = input_shape_bounds(display, *window);
+    return reset_shape && reset_shape->height == heights[0];
   }));
   const auto history_application_log = read_text(config.application_log());
   INFO(history_application_log);

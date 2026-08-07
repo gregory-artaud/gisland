@@ -6,7 +6,6 @@ from .history import HistoryRecord
 HISTORY_CONTEXT_ID = "history"
 HISTORY_PRIORITY = 100
 MAXIMUM_VISIBLE_HISTORY = 5
-SEPARATOR = "----------------"
 MAXIMUM_TEXT_BYTES = 4096
 
 
@@ -35,7 +34,7 @@ def _age(received_at: float, now: float) -> str:
     return f"{elapsed // 86400} j"
 
 
-def _entry(record: HistoryRecord, now: float) -> dict[str, Any]:
+def _entry(record: HistoryRecord, now: float, session_id: int) -> dict[str, Any]:
     header = {
         "type": "row",
         "gap": "small",
@@ -52,10 +51,15 @@ def _entry(record: HistoryRecord, now: float) -> dict[str, Any]:
     if content:
         children.append(_text(content, "body"))
     return {
-        "type": "column",
-        "alignment": "start",
-        "gap": "xsmall",
-        "children": children,
+        "type": "action_region",
+        "action_id": f"history:{session_id}:hide:{record.sequence}",
+        "accessible_label": f"Masquer {record.summary or record.app_name or 'notification'}",
+        "content": {
+            "type": "column",
+            "alignment": "start",
+            "gap": "xsmall",
+            "children": children,
+        },
     }
 
 
@@ -63,16 +67,34 @@ def build_history_publication(
     records: list[HistoryRecord] | tuple[HistoryRecord, ...],
     visible_count: int,
     now: float,
+    session_id: int,
 ) -> dict[str, Any]:
     selected = records[: min(max(visible_count, 0), MAXIMUM_VISIBLE_HISTORY)]
-    children: list[dict[str, Any]] = [_text("Notifications", "title")]
+    children: list[dict[str, Any]] = [
+        {
+            "type": "row",
+            "gap": "small",
+            "children": [
+                _text("Notifications", "title"),
+                {"type": "spacer", "flexible": True},
+                {
+                    "type": "action_region",
+                    "action_id": f"history:{session_id}:close-all",
+                    "accessible_label": "Masquer toutes les notifications",
+                    "content": {
+                        "type": "icon",
+                        "name": "close",
+                        "accessible_label": "Masquer toutes les notifications",
+                    },
+                },
+            ],
+        }
+    ]
     if not selected:
         children.append(_text("Aucune notification", "caption"))
     else:
-        for index, record in enumerate(selected):
-            if index:
-                children.append(_text(SEPARATOR, "caption"))
-            children.append(_entry(record, now))
+        for record in selected:
+            children.append(_entry(record, now, session_id))
     return {
         "type": "publish",
         "context_id": HISTORY_CONTEXT_ID,

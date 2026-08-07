@@ -16,6 +16,7 @@ class NotificationServiceTests(unittest.TestCase):
         self.cancelled = []
         self.temporary = tempfile.TemporaryDirectory()
         self.diagnostics = []
+        self.overlay_closes = []
         self.history = NotificationHistory(
             Path(self.temporary.name) / "history.json", diagnostic=self.diagnostics.append
         )
@@ -34,6 +35,7 @@ class NotificationServiceTests(unittest.TestCase):
             history=self.history,
             wall_time=lambda: 100.0,
             diagnostic=self.diagnostics.append,
+            close_overlay=lambda: self.overlay_closes.append(True),
         )
 
     def tearDown(self):
@@ -175,6 +177,101 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
         self.assertEqual(self.service.show_more(), 1)
 
+    def test_history_inactivity_closes_after_eight_seconds(self):
+        self.notify()
+        self.records.clear()
+        self.service.show_more()
+        self.service.history_opened()
+
+        timeout, callback = self.scheduled[-1]
+        self.assertEqual(timeout, 8000)
+        self.assertFalse(callback())
+
+        self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
+        self.assertEqual(self.overlay_closes, [True])
+
+    def test_click_masks_only_the_current_entry_without_backfill(self):
+        for index in range(4):
+            self.service.notify(
+                app_name="App",
+                replaces_id=0,
+                app_icon="",
+                summary=f"Item {index}",
+                body="",
+                actions=(),
+                hints={},
+                expire_timeout=1000,
+            )
+        self.records.clear()
+        for _ in range(3):
+            self.service.show_more()
+            self.service.history_opened()
+        selected = self.history.records[:3]
+        original_records = self.history.records
+        self.records.clear()
+
+        session_id = self.service._history_session_id
+        self.assertTrue(
+            self.service.action(f"history:{session_id}:hide:{selected[1].sequence}")
+        )
+
+        values = self.text_values(self.records[-1]["views"]["expanded"])
+        self.assertTrue(any(value.startswith("Item 3") for value in values))
+        self.assertTrue(any(value.startswith("Item 1") for value in values))
+        self.assertFalse(any(value.startswith("Item 2") for value in values))
+        self.assertFalse(any(value.startswith("Item 0") for value in values))
+        self.assertEqual(self.history.records, original_records)
+
+        self.service.show_more()
+        values = self.text_values(self.records[-1]["views"]["expanded"])
+        self.assertTrue(any(value.startswith("Item 0") for value in values))
+
+    def test_masking_the_last_entry_or_close_all_returns_to_compact(self):
+        self.notify()
+        sequence = self.history.records[0].sequence
+        self.records.clear()
+        self.service.show_more()
+        self.service.history_opened()
+
+        session_id = self.service._history_session_id
+        self.assertTrue(self.service.action(f"history:{session_id}:hide:{sequence}"))
+
+        self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
+        self.assertEqual(self.overlay_closes, [True])
+        self.assertEqual(len(self.history.records), 1)
+
+        self.service.show_more()
+        self.service.history_opened()
+        session_id = self.service._history_session_id
+        self.assertTrue(self.service.action(f"history:{session_id}:close-all"))
+        self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
+        self.assertEqual(self.overlay_closes, [True, True])
+
+    def test_stale_timers_and_actions_cannot_mutate_a_newer_session(self):
+        self.notify()
+        sequence = self.history.records[0].sequence
+        self.records.clear()
+
+        self.service.show_more()
+        stale_open_callback = self.scheduled[-1][1]
+        first_session = self.service._history_session_id
+        self.service.show_more()
+        self.assertFalse(stale_open_callback())
+        self.assertNotEqual(self.records[-1]["type"], "dismiss")
+
+        self.service.history_opened()
+        stale_inactivity_callback = self.scheduled[-1][1]
+        self.service.visibility("hidden")
+        self.service.show_more()
+        self.service.history_opened()
+        second_session = self.service._history_session_id
+
+        self.assertNotEqual(first_session, second_session)
+        self.assertFalse(stale_inactivity_callback())
+        self.assertFalse(self.service.action(f"history:{first_session}:hide:{sequence}"))
+        self.assertFalse(self.service.action(f"history:{first_session}:close-all"))
+        self.assertEqual(self.overlay_closes, [])
+
     def test_new_arrival_updates_open_history_without_duplicate_reveal(self):
         self.notify()
         self.notify()
@@ -208,6 +305,8 @@ class NotificationServiceTests(unittest.TestCase):
             values.append(node["value"])
         for child in node.get("children", []):
             values.extend(NotificationServiceTests.text_values(child))
+        if isinstance(node.get("content"), dict):
+            values.extend(NotificationServiceTests.text_values(node["content"]))
         return values
 
     def test_failed_replacement_preserves_live_notification_and_timer(self):

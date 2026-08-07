@@ -12,6 +12,7 @@ from .scenes import build_publication
 
 
 HISTORY_OPEN_TIMEOUT_MS = 2000
+HISTORY_INACTIVITY_TIMEOUT_MS = 8000
 
 
 class NotificationService:
@@ -27,6 +28,7 @@ class NotificationService:
         resolve_inline: Callable[[str], ImageData | None] = load_image_file,
         wall_time: Callable[[], float] = time.time,
         diagnostic: Callable[[str], None] = lambda _message: None,
+        close_overlay: Callable[[], None] = lambda: None,
     ):
         self.store = NotificationStore()
         self._write_record = write_record
@@ -39,6 +41,7 @@ class NotificationService:
         self._history = history
         self._wall_time = wall_time
         self._diagnostic = diagnostic
+        self._close_overlay = close_overlay
         self._timers: dict[int, Any] = {}
         self._routing: dict[int, dict[str, tuple[str, str]]] = {}
         self._history_sequences: dict[int, int] = {}
@@ -48,6 +51,11 @@ class NotificationService:
         self._history_was_expanded = False
         self._visibility = "hidden"
         self._history_open_timer = None
+        self._history_inactivity_timer = None
+        self._history_open_generation = 0
+        self._history_inactivity_generation = 0
+        self._history_session_id = 0
+        self._history_hidden_sequences: set[int] = set()
 
     def configure(self, configuration: dict[str, Any]) -> None:
         reveal_duration_ms = configuration.get("reveal_duration_ms", 1000)
@@ -144,19 +152,30 @@ class NotificationService:
         return notification.id
 
     def _history_publication(self, visible_count: int) -> dict[str, Any]:
+        records = tuple(
+            record
+            for record in self._history.records
+            if record.sequence not in self._history_hidden_sequences
+        )
         return build_history_publication(
-            self._history.records,
+            records,
             visible_count=visible_count,
             now=self._wall_time(),
+            session_id=self._history_session_id,
         )
 
     def show_more(self) -> int:
+        if self._history_visible_count == 0:
+            self._history_session_id += 1
+            self._history_hidden_sequences.clear()
         visible_count = min(self._history_visible_count + 1, self._history_visible_limit)
         self._write_record(self._history_publication(visible_count))
         self._history_visible_count = visible_count
+        self._cancel_history_inactivity_timer()
         self._cancel_history_open_timer()
         self._history_open_timer = self._schedule(
-            HISTORY_OPEN_TIMEOUT_MS, self._history_open_timeout
+            HISTORY_OPEN_TIMEOUT_MS,
+            lambda generation=self._history_open_generation: self._history_open_timeout(generation),
         )
         return visible_count
 
@@ -165,6 +184,7 @@ class NotificationService:
             raise ValueError("notification history is not pending")
         self._cancel_history_open_timer()
         self._history_was_expanded = True
+        self._rearm_history_inactivity_timer()
 
     def visibility(self, visibility: str) -> None:
         self._visibility = visibility
@@ -172,21 +192,93 @@ class NotificationService:
             self.history_opened()
         elif visibility == "hidden" and self._history_was_expanded:
             self._cancel_history_open_timer()
-            self._write_record({"type": "dismiss", "context_id": HISTORY_CONTEXT_ID})
-            self._history_visible_count = 0
-            self._history_was_expanded = False
+            self._cancel_history_inactivity_timer()
+            self._reset_history_session()
 
     def _cancel_history_open_timer(self) -> None:
+        self._history_open_generation += 1
         if self._history_open_timer is not None:
             self._cancel_timer(self._history_open_timer)
             self._history_open_timer = None
 
-    def _history_open_timeout(self) -> bool:
+    def _history_open_timeout(self, generation: int) -> bool:
+        if generation != self._history_open_generation:
+            return False
         self._history_open_timer = None
         if self._history_visible_count > 0 and not self._history_was_expanded:
-            self._write_record({"type": "dismiss", "context_id": HISTORY_CONTEXT_ID})
-            self._history_visible_count = 0
+            self._close_history()
         return False
+
+    def _cancel_history_inactivity_timer(self) -> None:
+        self._history_inactivity_generation += 1
+        if self._history_inactivity_timer is not None:
+            self._cancel_timer(self._history_inactivity_timer)
+            self._history_inactivity_timer = None
+
+    def _rearm_history_inactivity_timer(self) -> None:
+        self._cancel_history_inactivity_timer()
+        self._history_inactivity_timer = self._schedule(
+            HISTORY_INACTIVITY_TIMEOUT_MS,
+            lambda generation=self._history_inactivity_generation: self._history_inactivity_timeout(
+                generation
+            ),
+        )
+
+    def _history_inactivity_timeout(self, generation: int) -> bool:
+        if generation != self._history_inactivity_generation:
+            return False
+        self._history_inactivity_timer = None
+        self._close_history()
+        return False
+
+    def _reset_history_session(self) -> None:
+        self._write_record({"type": "dismiss", "context_id": HISTORY_CONTEXT_ID})
+        self._history_visible_count = 0
+        self._history_was_expanded = False
+        self._history_hidden_sequences.clear()
+
+    def _close_history(self) -> None:
+        self._cancel_history_open_timer()
+        self._cancel_history_inactivity_timer()
+        self._reset_history_session()
+        self._close_overlay()
+
+    def _history_action(self, action_id: str) -> bool:
+        if self._history_visible_count == 0:
+            return False
+        parts = action_id.split(":")
+        if len(parts) < 3 or parts[0] != "history":
+            return False
+        try:
+            session_id = int(parts[1])
+        except ValueError:
+            return False
+        if session_id != self._history_session_id:
+            return False
+        if parts[2:] == ["close-all"]:
+            self._close_history()
+            return True
+        if len(parts) != 4 or parts[2] != "hide":
+            return False
+        try:
+            sequence = int(parts[3])
+        except ValueError:
+            return False
+        visible_records = [
+            record
+            for record in self._history.records
+            if record.sequence not in self._history_hidden_sequences
+        ][: self._history_visible_count]
+        if not any(record.sequence == sequence for record in visible_records):
+            return False
+        self._history_hidden_sequences.add(sequence)
+        self._history_visible_count -= 1
+        if self._history_visible_count == 0:
+            self._close_history()
+        else:
+            self._write_record(self._history_publication(self._history_visible_count))
+            self._rearm_history_inactivity_timer()
+        return True
 
     def _cancel_notification_timer(self, notification_id: int) -> None:
         timer = self._timers.pop(notification_id, None)
@@ -211,6 +303,8 @@ class NotificationService:
         return True
 
     def action(self, action_id: str) -> bool:
+        if action_id.startswith("history:"):
+            return self._history_action(action_id)
         prefix, separator, _name = action_id.partition(":")
         if not separator or not prefix.startswith("notification-"):
             return False
@@ -239,6 +333,7 @@ class NotificationService:
 
     def shutdown(self) -> None:
         self._cancel_history_open_timer()
+        self._cancel_history_inactivity_timer()
         for timer in tuple(self._timers.values()):
             self._cancel_timer(timer)
         self._timers.clear()

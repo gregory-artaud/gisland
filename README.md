@@ -287,8 +287,11 @@ History stores bounded plain-text notification content under
 or arbitrary hints.
 
 Run `gisland-notification-history` to open the newest historical notification. Repeating the command
-adds one older entry below it, up to `history_visible_limit`; closing the overlay resets the next
-opening to one entry. A direct i3 binding is:
+adds one older entry below it, up to `history_visible_limit`. Clicking an entry masks it for the
+current opening without deleting persisted history; the close icon masks the complete current stack.
+Masking the final visible entry, using the close icon, or waiting eight seconds without interaction
+closes the overlay. Every invocation and click resets that inactivity deadline. The next opening
+restores all session-masked entries and starts again with one entry. A direct i3 binding is:
 
 ```i3
 bindsym $mod+n exec --no-startup-id ~/.local/bin/gisland-notification-history

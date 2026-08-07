@@ -1,9 +1,11 @@
 import sys
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .dbus_service import NotificationDBusService
 from .history import MAXIMUM_LIMIT, NotificationHistory, state_path
+from .history_control import resolve_gislandctl
 from .protocol import JsonlTransport, ProtocolController
 from .service import NotificationService
 
@@ -43,6 +45,7 @@ class Application:
             cancel_timer=GLib.source_remove,
             history=history,
             diagnostic=lambda message: print(f"gisland-notifications: {message}", file=sys.stderr),
+            close_overlay=self._close_overlay,
         )
         self._dbus.set_service(self._service)
         self._controller = ProtocolController(
@@ -69,6 +72,23 @@ class Application:
         except Exception as error:
             self._write_record({"type": "log", "level": "error", "message": str(error)})
             return False
+
+    def _close_overlay(self) -> None:
+        gislandctl = resolve_gislandctl(sys.argv[0])
+        if gislandctl is None:
+            print("gisland-notifications: gislandctl was not found", file=sys.stderr)
+            return
+        try:
+            result = subprocess.run(
+                [gislandctl, "close"], capture_output=True, text=True, check=False, timeout=0.5
+            )
+            if result.returncode != 0:
+                print(
+                    f"gisland-notifications: gislandctl close failed: {result.stderr.strip()}",
+                    file=sys.stderr,
+                )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"gisland-notifications: gislandctl close failed: {error}", file=sys.stderr)
 
     def _fatal(self, message: str) -> None:
         self._exit_code = 1

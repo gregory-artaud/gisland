@@ -304,6 +304,8 @@ class NotificationDBusProcessTests(unittest.TestCase):
             values = [node["value"]] if node.get("type") == "text" else []
             for child in node.get("children", []):
                 values.extend(text_values(child))
+            if isinstance(node.get("content"), dict):
+                values.extend(text_values(node["content"]))
             return values
 
         self.assertTrue(

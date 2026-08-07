@@ -143,7 +143,7 @@ class HistorySceneTests(unittest.TestCase):
         return values
 
     def test_empty_history_has_a_noninteractive_expanded_view(self):
-        publication = build_history_publication([], visible_count=1, now=100.0)
+        publication = build_history_publication([], visible_count=1, now=100.0, session_id=1)
 
         self.assertEqual(publication["context_id"], "history")
         self.assertEqual(publication["priority"], 100)
@@ -154,14 +154,14 @@ class HistorySceneTests(unittest.TestCase):
             ["Notifications", "Aucune notification"],
         )
 
-    def test_shows_newest_entries_with_simple_separators_and_relative_ages(self):
+    def test_shows_newest_clickable_entries_without_separators_and_with_relative_ages(self):
         records = [
             self.record(3, "Chat", "Newest", "hello", 99.0),
             self.record(2, "Files", "Middle", "archive", 40.0),
             self.record(1, "Calendar", "Oldest", "meeting", -7200.0),
         ]
 
-        publication = build_history_publication(records, visible_count=3, now=100.0)
+        publication = build_history_publication(records, visible_count=3, now=100.0, session_id=7)
         values = self.text_values(publication["views"]["expanded"])
 
         newest = next(index for index, value in enumerate(values) if value.startswith("Newest"))
@@ -169,24 +169,36 @@ class HistorySceneTests(unittest.TestCase):
         oldest = next(index for index, value in enumerate(values) if value.startswith("Oldest"))
         self.assertLess(newest, middle)
         self.assertLess(middle, oldest)
-        self.assertEqual(values.count("----------------"), 2)
+        self.assertNotIn("----------------", values)
         self.assertIn("maintenant", values)
         self.assertIn("1 min", values)
         self.assertIn("2 h", values)
+        root = publication["views"]["expanded"]
+        self.assertEqual(root["children"][0]["type"], "row")
+        self.assertEqual(
+            root["children"][0]["children"][-1]["action_id"], "history:7:close-all"
+        )
+        entries = [child for child in root["children"] if child["type"] == "action_region"]
+        self.assertEqual(
+            [entry["action_id"] for entry in entries],
+            ["history:7:hide:3", "history:7:hide:2", "history:7:hide:1"],
+        )
 
     def test_visible_count_is_bounded_by_records_and_five(self):
         records = [self.record(index, "App", f"Item {index}", "", 0.0) for index in range(8, 0, -1)]
 
-        publication = build_history_publication(records, visible_count=8, now=1.0)
+        publication = build_history_publication(records, visible_count=8, now=1.0, session_id=1)
         values = self.text_values(publication["views"]["expanded"])
 
         self.assertEqual(len([value for value in values if value.startswith("Item ")]), 5)
-        self.assertEqual(values.count("----------------"), 4)
+        self.assertNotIn("----------------", values)
 
     def test_every_generated_text_node_respects_the_core_byte_limit(self):
         record = self.record(1, "ß" * 4096, "s" * 4096, "b" * 4096, 0.0)
 
-        publication = build_history_publication([record], visible_count=1, now=1.0)
+        publication = build_history_publication(
+            [record], visible_count=1, now=1.0, session_id=1
+        )
         values = self.text_values(publication["views"]["expanded"])
 
         self.assertTrue(values)
