@@ -44,9 +44,8 @@ struct ModuleInstanceConfig {
   std::optional<std::filesystem::path> manifest_path;
   std::vector<std::string> command;
   ProtocolVersion minimum_protocol{1, 0};
-  ProtocolVersion maximum_protocol{1, 3};
+  ProtocolVersion maximum_protocol{1, 4};
   bool enabled{true};
-  std::chrono::milliseconds expanded_preview{0};
   ConfigValue::Table options;
   RestartPolicy restart{RestartPolicy::on_failure};
   ModuleTimings timings;
@@ -68,6 +67,8 @@ struct AppConfig {
   std::string monitor;
   std::string theme;
   std::string default_module;
+  std::string compact_default{};
+  std::string expanded_default{};
   InteractionConfig interaction;
   std::vector<ModuleInstanceConfig> modules;
 };

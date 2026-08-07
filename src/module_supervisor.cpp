@@ -898,11 +898,19 @@ private:
     }
     if (const auto *publish = std::get_if<PublishMessage>(&*message);
         publish != nullptr &&
-        (scene_uses_rich_content(publish->compact) ||
+        ((publish->compact && scene_uses_rich_content(*publish->compact)) ||
          (publish->expanded && scene_uses_rich_content(*publish->expanded))) &&
         !instance.negotiated_capabilities.contains("rich-content")) {
       record_violation(
           instance, ProtocolError{"/compact", "rich-content capability was not negotiated"}, now);
+      return;
+    }
+    if (const auto *publish = std::get_if<PublishMessage>(&*message);
+        publish != nullptr && publish->independent_views &&
+        !instance.negotiated_capabilities.contains("independent-views")) {
+      record_violation(instance,
+                       ProtocolError{"/views", "independent-views capability was not negotiated"},
+                       now);
       return;
     }
 
@@ -938,6 +946,12 @@ private:
         record_violation(
             instance, ProtocolError{"/capabilities", "rich-content requires protocol version 1.3"},
             now);
+        return false;
+      }
+      if (capability == "independent-views" && selected < ProtocolVersion{1, 4}) {
+        record_violation(
+            instance,
+            ProtocolError{"/capabilities", "independent-views requires protocol version 1.4"}, now);
         return false;
       }
     }

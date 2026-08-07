@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gisland/scene.hpp"
+#include "gisland/context.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -52,10 +52,12 @@ using CoreMessage = std::variant<InitMessage, ActionMessage, VisibilityMessage, 
 struct PublishMessage {
   std::string context_id;
   int priority;
-  std::optional<std::chrono::milliseconds> expires_in;
-  SceneNode compact;
-  std::optional<SceneNode> expanded;
+  std::optional<std::chrono::milliseconds> expires_in{};
+  std::optional<SceneNode> compact{};
+  std::optional<SceneNode> expanded{};
   std::vector<ImageResource> resources{};
+  std::optional<PresentationIntent> presentation{};
+  bool independent_views{false};
 };
 
 struct DismissMessage {

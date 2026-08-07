@@ -245,12 +245,19 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
 }
 
 struct RenderedContext {
-  ContextKey key;
-  std::uint64_t revision;
+  std::optional<ContextKey> compact_key;
+  std::optional<ContextKey> expanded_key;
+  std::uint64_t compact_revision;
+  std::uint64_t expanded_revision;
   LayoutPlan compact;
   std::optional<LayoutPlan> expanded;
   RenderTexture2D compact_content;
   std::optional<RenderTexture2D> expanded_content;
+};
+
+struct RenderContextError {
+  ViewSlot slot;
+  std::string message;
 };
 
 [[nodiscard]] RoundedView visible_surface(const RenderedContext &context, float mode_progress) {
@@ -321,65 +328,97 @@ render_content(const LayoutPlan &plan, const RaylibPainter &painter) {
   return texture;
 }
 
-[[nodiscard]] std::expected<RenderedContext, std::string>
-render_context(const PublishedContext &context, std::uint64_t revision, const Theme &theme,
+[[nodiscard]] std::expected<RenderedContext, RenderContextError>
+render_context(const RuntimeSelection &compact_selection,
+               const RuntimeSelection &expanded_selection, const Theme &theme,
                const RaylibFontBook &fonts, const PangoTextBook &rich_text) {
-  auto compact = layout_scene(context.compact, theme, ViewMode::compact, fonts, rich_text);
-  if (!compact) {
-    return std::unexpected(compact.error().path + ": " + compact.error().message);
+  if ((compact_selection.context == nullptr || compact_selection.scene == nullptr) &&
+      (expanded_selection.context == nullptr || expanded_selection.scene == nullptr)) {
+    return std::unexpected(
+        RenderContextError{ViewSlot::compact, "no view contribution is available"});
   }
-  std::optional<LayoutPlan> expanded;
-  if (context.expanded) {
-    auto candidate = layout_scene(*context.expanded, theme, ViewMode::expanded, fonts, rich_text);
+
+  const auto render_slot =
+      [&](const RuntimeSelection &selection,
+          ViewMode mode) -> std::expected<std::pair<LayoutPlan, RenderTexture2D>, std::string> {
+    auto plan = layout_scene(*selection.scene, theme, mode, fonts, rich_text);
+    if (!plan) {
+      return std::unexpected(plan.error().path + ": " + plan.error().message);
+    }
+    auto images = RaylibImageBook::load(selection.context->resources);
+    if (!images) {
+      return std::unexpected(images.error().message);
+    }
+    if (auto prepared = images->prepare(*plan); !prepared) {
+      return std::unexpected(prepared.error().message);
+    }
+    auto rich_textures = RaylibRichTextBook::load(rich_text, selection.context->resources);
+    if (!rich_textures) {
+      return std::unexpected(rich_textures.error().message);
+    }
+    if (auto prepared = rich_textures->prepare(*plan); !prepared) {
+      return std::unexpected(prepared.error().message);
+    }
+    const RaylibPainter slot_painter{fonts, *images, *rich_textures};
+    auto content = render_content(*plan, slot_painter);
+    if (!content) {
+      return std::unexpected(content.error());
+    }
+    return std::pair<LayoutPlan, RenderTexture2D>{std::move(*plan), *content};
+  };
+
+  std::optional<std::pair<LayoutPlan, RenderTexture2D>> compact;
+  if (compact_selection.context != nullptr && compact_selection.scene != nullptr) {
+    auto candidate = render_slot(compact_selection, ViewMode::compact);
     if (!candidate) {
-      return std::unexpected(candidate.error().path + ": " + candidate.error().message);
+      return std::unexpected(RenderContextError{ViewSlot::compact, candidate.error()});
+    }
+    compact = std::move(*candidate);
+  }
+  std::optional<std::pair<LayoutPlan, RenderTexture2D>> expanded;
+  if (expanded_selection.context != nullptr && expanded_selection.scene != nullptr) {
+    auto candidate = render_slot(expanded_selection, ViewMode::expanded);
+    if (!candidate) {
+      if (compact) {
+        UnloadRenderTexture(compact->second);
+      }
+      return std::unexpected(RenderContextError{ViewSlot::expanded, candidate.error()});
     }
     expanded = std::move(*candidate);
   }
-  auto images = RaylibImageBook::load(context.resources);
-  if (!images) {
-    return std::unexpected(images.error().message);
-  }
-  if (auto prepared = images->prepare(*compact); !prepared) {
-    return std::unexpected(prepared.error().message);
-  }
-  if (expanded) {
-    if (auto prepared = images->prepare(*expanded); !prepared) {
-      return std::unexpected(prepared.error().message);
-    }
-  }
-  auto rich_textures = RaylibRichTextBook::load(rich_text, context.resources);
-  if (!rich_textures) {
-    return std::unexpected(rich_textures.error().message);
-  }
-  if (auto prepared = rich_textures->prepare(*compact); !prepared) {
-    return std::unexpected(prepared.error().message);
-  }
-  if (expanded) {
-    if (auto prepared = rich_textures->prepare(*expanded); !prepared) {
-      return std::unexpected(prepared.error().message);
-    }
-  }
-  const RaylibPainter painter{fonts, *images, *rich_textures};
-  auto compact_content = render_content(*compact, painter);
-  if (!compact_content) {
-    return std::unexpected(compact_content.error());
-  }
+
+  std::optional<LayoutPlan> expanded_plan;
   std::optional<RenderTexture2D> expanded_content;
+  std::optional<ContextKey> expanded_key;
   if (expanded) {
-    auto candidate = render_content(*expanded, painter);
-    if (!candidate) {
-      UnloadRenderTexture(*compact_content);
-      return std::unexpected(candidate.error());
+    expanded_plan = std::move(expanded->first);
+    expanded_content = expanded->second;
+    expanded_key = expanded_selection.context->key;
+  }
+  if (!compact) {
+    RenderTexture2D blank = LoadRenderTexture(std::max(1, expanded_plan->view.bounds.width),
+                                              std::max(1, expanded_plan->view.bounds.height));
+    if (!IsRenderTextureValid(blank)) {
+      UnloadRenderTexture(*expanded_content);
+      return std::unexpected(RenderContextError{
+          ViewSlot::expanded, "could not allocate an empty compact render texture"});
     }
-    expanded_content = *candidate;
+    BeginTextureMode(blank);
+    ClearBackground(BLANK);
+    EndTextureMode();
+    SetTextureFilter(blank.texture, TEXTURE_FILTER_BILINEAR);
+    compact = std::pair<LayoutPlan, RenderTexture2D>{*expanded_plan, blank};
   }
   return RenderedContext{
-      .key = context.key,
-      .revision = revision,
-      .compact = std::move(*compact),
-      .expanded = std::move(expanded),
-      .compact_content = *compact_content,
+      .compact_key = compact_selection.context == nullptr
+                         ? std::nullopt
+                         : std::optional{compact_selection.context->key},
+      .expanded_key = std::move(expanded_key),
+      .compact_revision = compact_selection.revision,
+      .expanded_revision = expanded_selection.revision,
+      .compact = std::move(compact->first),
+      .expanded = std::move(expanded_plan),
+      .compact_content = compact->second,
       .expanded_content = expanded_content,
   };
 }
@@ -655,14 +694,25 @@ int Application::run() {
       candidate_monitor = std::move(selected->monitor);
     }
 
-    const auto *const candidate_selection = prepared_runtime->arbiter.active(now);
+    const auto make_selection = [&](ViewSlot slot) {
+      const auto *context = prepared_runtime->arbiter.active(slot, now);
+      const SceneNode *scene = nullptr;
+      if (context != nullptr) {
+        const auto &contribution = slot == ViewSlot::compact ? context->compact : context->expanded;
+        scene = contribution ? &*contribution : nullptr;
+      }
+      return RuntimeSelection{
+          context, context == nullptr ? prepared_runtime->revision : context->revision, scene};
+    };
+    const auto candidate_compact = make_selection(ViewSlot::compact);
+    const auto candidate_expanded = make_selection(ViewSlot::expanded);
     std::optional<RenderedContext> candidate_rendered;
-    if (candidate_selection != nullptr) {
+    if (candidate_compact.context != nullptr || candidate_expanded.context != nullptr) {
       auto candidate =
-          render_context(*candidate_selection, prepared_runtime->revision,
-                         candidate_bootstrap->theme, *candidate_fonts, *candidate_rich_text);
+          render_context(candidate_compact, candidate_expanded, candidate_bootstrap->theme,
+                         *candidate_fonts, *candidate_rich_text);
       if (!candidate) {
-        return std::unexpected(candidate.error());
+        return std::unexpected(candidate.error().message);
       }
       candidate_rendered.emplace(std::move(*candidate));
     }
@@ -775,31 +825,50 @@ int Application::run() {
     ipc->advance(now, [&dispatcher, now](const ControlCommand &command) {
       return dispatcher.dispatch(command, now);
     });
-    auto selection = runtime.active(now);
+    auto selection = runtime.selections(now);
+    const bool expanded_changed =
+        selection.expanded.context != nullptr
+            ? (!rendered || rendered->expanded_key != selection.expanded.context->key ||
+               rendered->expanded_revision != selection.expanded.revision)
+            : rendered && rendered->expanded_key.has_value();
+    const std::optional<ContextKey> compact_key =
+        selection.compact.context == nullptr
+            ? std::nullopt
+            : std::optional<ContextKey>{selection.compact.context->key};
     const bool changed =
-        selection.context != nullptr && (!rendered || rendered->key != selection.context->key ||
-                                         rendered->revision != selection.revision);
+        (selection.compact.context != nullptr || selection.expanded.context != nullptr) &&
+        (!rendered || rendered->compact_key != compact_key ||
+         rendered->compact_revision != selection.compact.revision || expanded_changed);
     if (changed) {
       const bool preserve_expanded =
-          mode_controller.mode() == IslandMode::expanded && selection.context->expanded.has_value();
-      auto candidate = render_context(*selection.context, selection.revision, bootstrap_.theme,
+          mode_controller.mode() == IslandMode::expanded && selection.expanded.context != nullptr;
+      auto candidate = render_context(selection.compact, selection.expanded, bootstrap_.theme,
                                       *fonts, *rich_text);
       if (!candidate) {
-        std::cerr << '[' << selection.context->key.instance_id << "] layout: " << candidate.error()
-                  << '\n';
-        runtime.reject(selection.context->key, now);
+        const RuntimeSelection &rejected =
+            candidate.error().slot == ViewSlot::compact ? selection.compact : selection.expanded;
+        std::cerr << '[' << rejected.context->key.instance_id
+                  << "] layout: " << candidate.error().message << '\n';
+        runtime.reject(rejected.context->key, now);
       } else {
-        runtime.accept(selection.context->key);
-        const auto owner =
-            std::ranges::find(bootstrap_.config.modules, selection.context->key.instance_id,
-                              &ModuleInstanceConfig::id);
-        const auto preview_duration = owner == bootstrap_.config.modules.end()
-                                          ? std::chrono::milliseconds{0}
-                                          : owner->expanded_preview;
+        if (selection.compact.context != nullptr) {
+          runtime.accept(selection.compact.context->key);
+        }
+        if (selection.expanded.context != nullptr) {
+          runtime.accept(selection.expanded.context->key);
+        }
         replace_rendered(std::move(*candidate), preserve_expanded, bootstrap_.theme.animation());
-        mode_controller.start_preview(selection.context->expanded.has_value(), preview_duration);
+        if (expanded_changed) {
+          if (selection.expanded.context != nullptr &&
+              selection.expanded.context->presentation.has_value()) {
+            mode_controller.set_reveal(true, selection.expanded.context->presentation->duration);
+          } else {
+            mode_controller.set_reveal(false);
+          }
+        }
       }
-    } else if (selection.context == nullptr && rendered) {
+    } else if (selection.compact.context == nullptr && selection.expanded.context == nullptr &&
+               rendered) {
       clear_outgoing();
       unload(*rendered);
       rendered.reset();
@@ -815,13 +884,18 @@ int Application::run() {
     }
 
     const auto send_action = [&](const std::optional<std::string> &action) {
-      if (!action || selection.context == nullptr) {
+      if (!action || !rendered) {
         return;
       }
-      if (auto sent = supervisor.send(selection.context->key.instance_id,
+      const auto &owner =
+          mode == IslandMode::expanded ? rendered->expanded_key : rendered->compact_key;
+      if (!owner) {
+        return;
+      }
+      if (auto sent = supervisor.send(owner->instance_id,
                                       ActionMessage{.action_id = *action, .value = std::nullopt});
           !sent) {
-        std::cerr << '[' << selection.context->key.instance_id << "] action delivery failed\n";
+        std::cerr << '[' << owner->instance_id << "] action delivery failed\n";
       }
     };
 
@@ -941,9 +1015,13 @@ int Application::run() {
         }
       }
       EndDrawing();
-      if (!visible) {
+      const bool should_be_visible = mode == IslandMode::expanded || rendered->compact_key;
+      if (should_be_visible && !visible) {
         Window::show();
         visible = true;
+      } else if (!should_be_visible && visible) {
+        Window::hide();
+        visible = false;
       }
     } else {
       BeginDrawing();

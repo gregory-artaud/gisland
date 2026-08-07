@@ -189,13 +189,18 @@ std::string format_control_output(const ControlResponse &response, bool json_out
           std::ostringstream output;
           output << "mode: " << (typed.mode == IslandMode::expanded ? "expanded" : "compact")
                  << '\n';
-          if (typed.active_context) {
-            output << "active: " << typed.active_context->instance_id << '/'
-                   << typed.active_context->context_id << " (priority "
-                   << typed.active_context->priority << ")\n";
-          } else {
-            output << "active: none\n";
-          }
+          const auto write_slot = [&output](std::string_view name,
+                                            const std::optional<ActiveContextStatus> &context) {
+            output << name << ": ";
+            if (context) {
+              output << context->instance_id << '/' << context->context_id << " (priority "
+                     << context->priority << ")\n";
+            } else {
+              output << "none\n";
+            }
+          };
+          write_slot("compact", typed.compact);
+          write_slot("expanded", typed.expanded);
           output << "socket: " << typed.socket << '\n' << human_modules(typed.modules);
           return output.str();
         }

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <expected>
+#include <optional>
 #include <vector>
 
 namespace gisland {
@@ -65,6 +66,8 @@ public:
 
   void update(bool hovered, bool has_expanded, float delta_seconds);
   void start_preview(bool has_expanded, std::chrono::milliseconds duration);
+  void set_reveal(bool has_expanded,
+                  std::optional<std::chrono::milliseconds> duration = std::nullopt);
   [[nodiscard]] std::expected<void, ModeControlError> open(bool has_expanded);
   void close();
   [[nodiscard]] std::expected<void, ModeControlError> toggle(bool has_expanded);
@@ -77,6 +80,7 @@ private:
   bool hover_suppressed_{false};
   bool hovered_{false};
   float preview_remaining_{0.0F};
+  bool persistent_reveal_{false};
 };
 
 class SpringProgress {

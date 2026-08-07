@@ -38,6 +38,18 @@ constexpr std::size_t maximum_image_bytes = std::size_t{4} * 1024U * 1024U;
   return path;
 }
 
+[[nodiscard]] std::expected<void, ProtocolError>
+reject_unknown_fields(const Json &object, const std::set<std::string_view> &allowed,
+                      std::string_view path) {
+  for (const auto &[key, value] : object.items()) {
+    (void)value;
+    if (!allowed.contains(key)) {
+      return std::unexpected(error_at(field_path(path, key), "unknown field"));
+    }
+  }
+  return {};
+}
+
 [[nodiscard]] std::expected<const Json *, ProtocolError>
 required_field(const Json &object, std::string_view key, std::string_view parent_path) {
   if (!object.is_object()) {
@@ -743,7 +755,6 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_publish(const Json &object) {
   auto context_id = required_string(object, "context_id", "");
   auto priority = required_integer<int>(object, "priority", "");
-  auto compact_field = required_field(object, "compact", "");
   if (!context_id.has_value()) {
     return std::unexpected(context_id.error());
   }
@@ -752,9 +763,6 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
   }
   if (!priority.has_value()) {
     return std::unexpected(priority.error());
-  }
-  if (!compact_field.has_value()) {
-    return std::unexpected(compact_field.error());
   }
   auto resources = parse_image_resources(object);
   if (!resources) {
@@ -773,45 +781,135 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
     expires_in = std::chrono::milliseconds{*milliseconds};
   }
 
-  auto compact = parse_scene(**compact_field, "/compact");
-  if (!compact.has_value()) {
-    return std::unexpected(compact.error());
-  }
-  if (auto validation_error = scene_validation_error(*compact, "/compact");
-      validation_error.has_value()) {
-    return std::unexpected(std::move(*validation_error));
+  std::optional<SceneNode> compact;
+  std::optional<SceneNode> expanded;
+
+  const auto views_iterator = object.find("views");
+  if (views_iterator != object.end()) {
+    if (!views_iterator->is_object()) {
+      return std::unexpected(error_at("/views", "expected an object"));
+    }
+    if (object.contains("compact") || object.contains("expanded")) {
+      return std::unexpected(
+          error_at("/views", "cannot be combined with legacy compact or expanded fields"));
+    }
+    auto known_views = reject_unknown_fields(
+        *views_iterator, std::set<std::string_view>{"compact", "expanded"}, "/views");
+    if (!known_views) {
+      return std::unexpected(known_views.error());
+    }
+    if (!views_iterator->contains("compact") && !views_iterator->contains("expanded")) {
+      return std::unexpected(error_at("/views", "at least one view is required"));
+    }
+    if (const auto iterator = views_iterator->find("compact"); iterator != views_iterator->end()) {
+      auto parsed = parse_scene(*iterator, "/views/compact");
+      if (!parsed) {
+        return std::unexpected(parsed.error());
+      }
+      if (auto error = scene_validation_error(*parsed, "/views/compact"); error) {
+        return std::unexpected(std::move(*error));
+      }
+      compact = std::move(*parsed);
+    }
+    if (const auto iterator = views_iterator->find("expanded"); iterator != views_iterator->end()) {
+      auto parsed = parse_scene(*iterator, "/views/expanded");
+      if (!parsed) {
+        return std::unexpected(parsed.error());
+      }
+      if (auto error = scene_validation_error(*parsed, "/views/expanded"); error) {
+        return std::unexpected(std::move(*error));
+      }
+      expanded = std::move(*parsed);
+    }
+  } else {
+    auto compact_field = required_field(object, "compact", "");
+    if (!compact_field) {
+      return std::unexpected(compact_field.error());
+    }
+    auto parsed_compact = parse_scene(**compact_field, "/compact");
+    if (!parsed_compact) {
+      return std::unexpected(parsed_compact.error());
+    }
+    if (auto error = scene_validation_error(*parsed_compact, "/compact"); error) {
+      return std::unexpected(std::move(*error));
+    }
+    compact = std::move(*parsed_compact);
+
+    const auto expanded_iterator = object.find("expanded");
+    if (expanded_iterator != object.end() && !expanded_iterator->is_null()) {
+      auto parsed_expanded = parse_scene(*expanded_iterator, "/expanded");
+      if (!parsed_expanded) {
+        return std::unexpected(parsed_expanded.error());
+      }
+      if (auto error = scene_validation_error(*parsed_expanded, "/expanded"); error) {
+        return std::unexpected(std::move(*error));
+      }
+      expanded = std::move(*parsed_expanded);
+    }
   }
 
-  std::optional<SceneNode> expanded;
-  const auto expanded_iterator = object.find("expanded");
-  if (expanded_iterator != object.end() && !expanded_iterator->is_null()) {
-    auto parsed_expanded = parse_scene(*expanded_iterator, "/expanded");
-    if (!parsed_expanded.has_value()) {
-      return std::unexpected(parsed_expanded.error());
+  std::optional<PresentationIntent> presentation;
+  const auto presentation_iterator = object.find("presentation");
+  if (presentation_iterator != object.end()) {
+    if (views_iterator == object.end()) {
+      return std::unexpected(error_at("/presentation", "presentation requires independent views"));
     }
-    if (auto validation_error = scene_validation_error(*parsed_expanded, "/expanded");
-        validation_error.has_value()) {
-      return std::unexpected(std::move(*validation_error));
+    if (!presentation_iterator->is_object()) {
+      return std::unexpected(error_at("/presentation", "expected an object"));
     }
-    expanded = std::move(*parsed_expanded);
+    auto known_presentation =
+        reject_unknown_fields(*presentation_iterator,
+                              std::set<std::string_view>{"reveal", "duration_ms"}, "/presentation");
+    if (!known_presentation) {
+      return std::unexpected(known_presentation.error());
+    }
+    auto reveal = required_string(*presentation_iterator, "reveal", "/presentation");
+    if (!reveal) {
+      return std::unexpected(reveal.error());
+    }
+    if (*reveal != "expanded") {
+      return std::unexpected(error_at("/presentation/reveal", "unknown reveal value"));
+    }
+    if (!expanded) {
+      return std::unexpected(error_at("/presentation", "presentation requires an expanded view"));
+    }
+    std::optional<std::chrono::milliseconds> duration;
+    if (presentation_iterator->contains("duration_ms")) {
+      auto milliseconds =
+          required_integer<std::int64_t>(*presentation_iterator, "duration_ms", "/presentation");
+      if (!milliseconds) {
+        return std::unexpected(milliseconds.error());
+      }
+      if (*milliseconds <= 0 || *milliseconds > 60000) {
+        return std::unexpected(error_at("/presentation/duration_ms",
+                                        "duration must be between 1 and 60000 milliseconds"));
+      }
+      duration = std::chrono::milliseconds{*milliseconds};
+    }
+    presentation = PresentationIntent{Reveal::expanded, duration};
   }
 
   std::set<std::string> resource_ids;
   for (const auto &resource : *resources) {
     resource_ids.insert(resource.id);
   }
-  if (auto reference_error = validate_image_references(*compact, resource_ids, "/compact")) {
-    return std::unexpected(std::move(*reference_error));
+  const std::string path_prefix = views_iterator != object.end() ? "/views" : "";
+  if (compact) {
+    if (auto reference_error =
+            validate_image_references(*compact, resource_ids, path_prefix + "/compact")) {
+      return std::unexpected(std::move(*reference_error));
+    }
   }
   if (expanded) {
-    if (auto reference_error = validate_image_references(*expanded, resource_ids, "/expanded")) {
+    if (auto reference_error =
+            validate_image_references(*expanded, resource_ids, path_prefix + "/expanded")) {
       return std::unexpected(std::move(*reference_error));
     }
   }
 
-  return ModuleMessage{PublishMessage{std::move(*context_id), *priority, expires_in,
-                                      std::move(*compact), std::move(expanded),
-                                      std::move(*resources)}};
+  return ModuleMessage{PublishMessage{
+      std::move(*context_id), *priority, expires_in, std::move(compact), std::move(expanded),
+      std::move(*resources), presentation, views_iterator != object.end()}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_action_result(const Json &object) {

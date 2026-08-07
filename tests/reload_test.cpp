@@ -86,14 +86,15 @@ TEST_CASE("reload planner classifies process and view changes in candidate order
   auto next_process = process;
   next_process.command = {"new-command"};
   auto next_stable = stable;
-  next_stable.expanded_preview = std::chrono::milliseconds{1000};
   auto next_disabled = disabled;
   next_disabled.enabled = false;
   auto next_enabled = enabled;
   next_enabled.enabled = true;
   auto added = module("added", "added-command");
-  const auto candidate =
+  auto candidate =
       config({added, next_enabled, next_stable, next_view, next_process, next_disabled});
+  candidate.compact_default = "added";
+  candidate.expanded_default = "view";
 
   const auto plan = gisland::plan_reload(current, candidate, "C", "UTC");
   REQUIRE(plan.has_value());
@@ -115,7 +116,8 @@ TEST_CASE("reload planner classifies process and view changes in candidate order
   CHECK(plan->supervisor.start_or_replace[0].instance_id == "added");
   CHECK(plan->supervisor.start_or_replace[1].instance_id == "enabled");
   CHECK(plan->supervisor.start_or_replace[2].instance_id == "process");
-  CHECK(plan->candidate.modules[2].expanded_preview == std::chrono::milliseconds{1000});
+  CHECK(plan->candidate.compact_default == "added");
+  CHECK(plan->candidate.expanded_default == "view");
 }
 
 TEST_CASE("reload candidate reuses the startup config path and resolves a changed user theme") {

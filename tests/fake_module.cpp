@@ -488,6 +488,30 @@ void read_init() {
     }
     return EXIT_SUCCESS;
   }
+  if (mode == "independent" || mode == "independent-without-capability") {
+    read_init();
+    nlohmann::json ready{{"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 4}};
+    if (mode == "independent") {
+      ready["capabilities"] = {"independent-views"};
+    }
+    write_json(ready);
+    write_json({
+        {"type", "publish"},
+        {"context_id", "independent"},
+        {"priority", 20},
+        {"views",
+         {{"expanded", {{"type", "text"}, {"value", "Expanded owner"}, {"role", "body"}}}}},
+        {"presentation", {{"reveal", "expanded"}, {"duration_ms", 1000}}},
+    });
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
   if (mode == "image" || mode == "image-without-capability") {
     read_init();
     nlohmann::json ready{

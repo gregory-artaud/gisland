@@ -42,7 +42,8 @@ TEST_CASE("a publish line is parsed into typed scenes") {
   CHECK(publish->expires_in.value_or(std::chrono::milliseconds{-1}) ==
         std::chrono::milliseconds{1500});
 
-  const auto *compact = std::get_if<gisland::Text>(&publish->compact.value);
+  REQUIRE(publish->compact.has_value());
+  const auto *compact = std::get_if<gisland::Text>(&publish->compact->value);
   REQUIRE(compact != nullptr);
   CHECK(compact->value == "14:32");
   CHECK(compact->role == "body");
@@ -55,6 +56,50 @@ TEST_CASE("a publish line is parsed into typed scenes") {
   REQUIRE(expanded != nullptr);
   REQUIRE(expanded->children.size() == 1);
   CHECK(std::holds_alternative<gisland::Text>(expanded->children.front()->value));
+}
+
+TEST_CASE("protocol 1.4 parses independent views and presentation intent") {
+  constexpr auto line = R"({
+    "type":"publish","context_id":"alert","priority":10,
+    "views":{"expanded":{"type":"text","value":"Alert","role":"body"}},
+    "presentation":{"reveal":"expanded","duration_ms":1000}
+  })";
+
+  const auto result = gisland::parse_module_message(line);
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  CHECK_FALSE(publish->compact.has_value());
+  REQUIRE(publish->expanded.has_value());
+  REQUIRE(publish->presentation.has_value());
+  CHECK(publish->presentation->duration == std::chrono::milliseconds{1000});
+}
+
+TEST_CASE("protocol 1.4 requires at least one independent view") {
+  const auto result = gisland::parse_module_message(
+      R"({"type":"publish","context_id":"empty","priority":0,"views":{}})");
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "/views");
+}
+
+TEST_CASE("protocol 1.4 validates presentation and independent view shape strictly") {
+  for (
+      const auto &[line, path] : std::vector<std::pair<std::string, std::string>>{
+          {R"({"type":"publish","context_id":"x","priority":0,"views":{"other":{}}})",
+           "/views/other"},
+          {R"({"type":"publish","context_id":"x","priority":0,"views":{"compact":{"type":"text","value":"x","role":"body"}},"presentation":{"reveal":"expanded"}})",
+           "/presentation"},
+          {R"({"type":"publish","context_id":"x","priority":0,"views":{"expanded":{"type":"text","value":"x","role":"body"}},"presentation":{"reveal":"expanded","duration_ms":0}})",
+           "/presentation/duration_ms"},
+          {R"({"type":"publish","context_id":"x","priority":0,"views":{"expanded":{"type":"text","value":"x","role":"body"}},"presentation":{"reveal":"compact"}})",
+           "/presentation/reveal"},
+      }) {
+    CAPTURE(line);
+    const auto result = gisland::parse_module_message(line);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == path);
+  }
 }
 
 TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
@@ -84,7 +129,8 @@ TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
   REQUIRE(result.has_value());
   const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
   REQUIRE(publish != nullptr);
-  const auto *row = std::get_if<gisland::Row>(&publish->compact.value);
+  REQUIRE(publish->compact.has_value());
+  const auto *row = std::get_if<gisland::Row>(&publish->compact->value);
   REQUIRE(row != nullptr);
   REQUIRE(row->children.size() == 4);
   CHECK(std::holds_alternative<gisland::Icon>(row->children[0]->value));
@@ -122,7 +168,8 @@ TEST_CASE("a publish line decodes context-owned RGBA8 image resources") {
   CHECK(resource.height == 1);
   REQUIRE(resource.pixels != nullptr);
   CHECK(*resource.pixels == std::vector<std::uint8_t>{255, 0, 0, 255});
-  const auto *image = std::get_if<gisland::Image>(&publish->compact.value);
+  REQUIRE(publish->compact.has_value());
+  const auto *image = std::get_if<gisland::Image>(&publish->compact->value);
   REQUIRE(image != nullptr);
   CHECK(image->resource_id == "app-icon");
   CHECK(image->role == "notification-icon");

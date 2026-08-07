@@ -39,6 +39,8 @@ gisland::AppConfig config() {
       .monitor = "primary",
       .theme = "default",
       .default_module = "clock",
+      .compact_default = "clock",
+      .expanded_default = "clock",
       .interaction = {},
       .modules = {std::move(clock), std::move(status), std::move(disabled)},
   };
@@ -70,7 +72,7 @@ TEST_CASE("runtime data snapshots atomically publish the configured default cont
   const auto selection = runtime.active(now);
   REQUIRE(selection.context != nullptr);
   CHECK(selection.context->key == gisland::ContextKey{"clock", "configured"});
-  CHECK(text(selection.context->compact).value == "12:34");
+  CHECK(text(*selection.context->compact).value == "12:34");
   REQUIRE(selection.context->expanded.has_value());
   CHECK(text(*selection.context->expanded).value == "Monday");
 
@@ -81,7 +83,7 @@ TEST_CASE("runtime data snapshots atomically publish the configured default cont
   const auto retained = runtime.active(now);
   REQUIRE(retained.context != nullptr);
   CHECK(retained.revision == revision);
-  CHECK(text(retained.context->compact).value == "12:34");
+  CHECK(text(*retained.context->compact).value == "12:34");
 }
 
 TEST_CASE("runtime arbitrates direct publications, dismissals, and rejected layouts") {
@@ -188,6 +190,48 @@ TEST_CASE("runtime removes stopped instances and emits only changed ready visibi
   CHECK(runtime.visibility_updates(now, gisland::IslandMode::compact).empty());
 }
 
+TEST_CASE("runtime selects and reports independent visible slot owners") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const auto now = gisland::MonotonicTime{} + std::chrono::seconds{4};
+  REQUIRE(runtime.consume(message("clock", gisland::ReadyMessage{1, 4, {"data-snapshots"}}, now))
+              .has_value());
+  REQUIRE(runtime.consume(message("status", gisland::ReadyMessage{1, 4, {}}, now)).has_value());
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+  REQUIRE(runtime
+              .consume(message("status",
+                               gisland::PublishMessage{
+                                   .context_id = "alert",
+                                   .priority = 10,
+                                   .expanded = gisland::SceneNode{gisland::Text{"Warning", "body"}},
+                                   .independent_views = true},
+                               now))
+              .has_value());
+
+  const auto selected = runtime.selections(now);
+  REQUIRE(selected.compact.context != nullptr);
+  REQUIRE(selected.expanded.context != nullptr);
+  CHECK(selected.compact.context->key.instance_id == "clock");
+  CHECK(selected.expanded.context->key.instance_id == "status");
+  REQUIRE(selected.compact.scene != nullptr);
+  REQUIRE(selected.expanded.scene != nullptr);
+  CHECK(text(*selected.compact.scene).value == "12:34");
+  CHECK(text(*selected.expanded.scene).value == "Warning");
+
+  const auto compact = runtime.visibility_updates(now, gisland::IslandMode::compact);
+  REQUIRE(compact.size() == 2);
+  CHECK(compact[0] == gisland::VisibilityUpdate{"clock", gisland::Visibility::compact_active});
+  CHECK(compact[1] == gisland::VisibilityUpdate{"status", gisland::Visibility::hidden});
+  const auto expanded = runtime.visibility_updates(now, gisland::IslandMode::expanded);
+  REQUIRE(expanded.size() == 2);
+  CHECK(expanded[0] == gisland::VisibilityUpdate{"clock", gisland::Visibility::hidden});
+  CHECK(expanded[1] == gisland::VisibilityUpdate{"status", gisland::Visibility::expanded_active});
+}
+
 TEST_CASE("runtime start requests preserve process config and offer snapshot capability") {
   gisland::ModuleInstanceConfig module;
   module.id = "clock";
@@ -209,9 +253,9 @@ TEST_CASE("runtime start requests preserve process config and offer snapshot cap
   CHECK(request.process.environment == module.environment);
   CHECK(request.process.working_directory == module.working_directory);
   CHECK(request.init.minimum == gisland::ProtocolVersion{1, 0});
-  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 3});
-  CHECK(request.init.capabilities ==
-        std::vector<std::string>{"data-snapshots", "context-images", "rich-content"});
+  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 4});
+  CHECK(request.init.capabilities == std::vector<std::string>{"data-snapshots", "context-images",
+                                                              "rich-content", "independent-views"});
   CHECK(request.init.configuration == nlohmann::json{{"format", "24h"}, {"week_start", 1}});
   CHECK(request.init.locale == "fr_FR.UTF-8");
   CHECK(request.init.timezone == "Europe/Paris");
@@ -244,7 +288,7 @@ TEST_CASE("supervised data flows through runtime into an active configured conte
   }
   REQUIRE(active != nullptr);
   CHECK(active->key == gisland::ContextKey{"clock", "configured"});
-  CHECK(text(active->compact).value == "14:35");
+  CHECK(text(*active->compact).value == "14:35");
   supervisor.shutdown();
 }
 
@@ -407,7 +451,7 @@ TEST_CASE("runtime preflights view reloads from retained snapshots without mutat
   REQUIRE(invalid_plan.has_value());
   CHECK_FALSE(runtime.prepare_reload(*invalid_plan).has_value());
   REQUIRE(runtime.active(now).context != nullptr);
-  CHECK(text(runtime.active(now).context->compact).value == "12:34");
+  CHECK(text(*runtime.active(now).context->compact).value == "12:34");
 
   auto candidate = current;
   candidate.modules[0].view = gisland::ModuleInstanceConfig::View{
@@ -418,7 +462,7 @@ TEST_CASE("runtime preflights view reloads from retained snapshots without mutat
   REQUIRE(prepared.has_value());
   runtime.commit_reload(std::move(*prepared));
   REQUIRE(runtime.active(now).context != nullptr);
-  CHECK(text(runtime.active(now).context->compact).value == "Monday");
+  CHECK(text(*runtime.active(now).context->compact).value == "Monday");
 }
 
 TEST_CASE("runtime view removal discards only the configured snapshot context") {

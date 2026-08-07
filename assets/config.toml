@@ -1,6 +1,8 @@
 monitor = "primary"
 theme = "default"
-default_module = "clock"
+[defaults]
+compact = "clock"
+expanded = "clock"
 
 [interaction]
 animation_speed = 1.25

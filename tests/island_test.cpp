@@ -259,6 +259,20 @@ TEST_CASE("a new overlay preview replaces the previous duration") {
   CHECK(controller.mode() == gisland::IslandMode::compact);
 }
 
+TEST_CASE("persistent reveal lasts until neutralized or its contribution disappears") {
+  gisland::OverlayModeController controller{120ms};
+  controller.set_reveal(true);
+  controller.update(false, true, 60.0F);
+  CHECK(controller.mode() == gisland::IslandMode::expanded);
+
+  controller.close();
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+
+  controller.set_reveal(true);
+  controller.update(false, false, 0.0F);
+  CHECK(controller.mode() == gisland::IslandMode::compact);
+}
+
 TEST_CASE("content crossfade starts with only compact content visible") {
   const gisland::ContentCrossfade crossfade;
 

@@ -39,6 +39,12 @@ struct RuntimeError {
 struct RuntimeSelection {
   const PublishedContext *context;
   std::uint64_t revision;
+  const SceneNode *scene;
+};
+
+struct RuntimeSelections {
+  RuntimeSelection compact;
+  RuntimeSelection expanded;
 };
 
 struct VisibilityUpdate {
@@ -78,11 +84,15 @@ public:
 
   [[nodiscard]] std::expected<void, RuntimeError> consume(const SupervisorEvent &event);
   [[nodiscard]] RuntimeSelection active(MonotonicTime now);
+  [[nodiscard]] RuntimeSelection active(ViewSlot slot, MonotonicTime now);
+  [[nodiscard]] RuntimeSelections selections(MonotonicTime now);
   [[nodiscard]] std::expected<ContextKey, RuntimeError>
   activate(std::string_view instance_id, std::optional<std::chrono::milliseconds> duration,
            MonotonicTime now);
   [[nodiscard]] std::expected<ContextKey, RuntimeError> dismiss_active(std::string_view context_id,
                                                                        MonotonicTime now);
+  [[nodiscard]] std::expected<ContextKey, RuntimeError>
+  dismiss_active(std::string_view context_id, ViewSlot slot, MonotonicTime now);
   [[nodiscard]] std::vector<RuntimeModuleStatus> module_statuses(MonotonicTime now);
   [[nodiscard]] std::expected<PreparedRuntimeReload, RuntimeError>
   prepare_reload(const ReloadPlan &plan) const;

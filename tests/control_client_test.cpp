@@ -70,12 +70,13 @@ TEST_CASE("control client reports unavailable and malformed peers") {
 TEST_CASE("control client formats stable JSON status results") {
   const gisland::ControlResponse response{gisland::ControlStatus{
       .mode = gisland::IslandMode::expanded,
-      .active_context = gisland::ActiveContextStatus{"clock", "configured", 0},
+      .compact = gisland::ActiveContextStatus{"clock", "configured", 0},
+      .expanded = gisland::ActiveContextStatus{"calendar", "configured", 0},
       .modules = {{"clock", gisland::ControlModuleState::running, true}},
       .socket = "/run/user/1000/gisland.sock",
   }};
   const auto output = nlohmann::json::parse(gisland::format_control_output(response, true));
-  CHECK(output.at("format_version") == 1);
+  CHECK(output.at("format_version") == 2);
   CHECK(output.at("mode") == "expanded");
   CHECK(output.at("modules").at(0).at("id") == "clock");
 }

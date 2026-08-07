@@ -91,7 +91,8 @@ TEST_CASE("control requests reject missing types and duration bounds") {
 TEST_CASE("control responses serialize stable success error and status shapes") {
   const gisland::ControlStatus status{
       .mode = gisland::IslandMode::expanded,
-      .active_context = gisland::ActiveContextStatus{"clock", "configured", 0},
+      .compact = gisland::ActiveContextStatus{"clock", "configured", 0},
+      .expanded = gisland::ActiveContextStatus{"calendar", "configured", 0},
       .modules = {{"clock", gisland::ControlModuleState::running, true},
                   {"weather", gisland::ControlModuleState::disabled, false}},
       .socket = "/run/user/1000/gisland.sock",
@@ -100,9 +101,10 @@ TEST_CASE("control responses serialize stable success error and status shapes") 
       nlohmann::json::parse(gisland::serialize_control_response(gisland::ControlResponse{status}));
   CHECK(success.at("version") == 1);
   CHECK(success.at("ok") == true);
-  CHECK(success.at("result").at("format_version") == 1);
+  CHECK(success.at("result").at("format_version") == 2);
   CHECK(success.at("result").at("mode") == "expanded");
-  CHECK(success.at("result").at("active_context").at("context_id") == "configured");
+  CHECK(success.at("result").at("compact").at("instance_id") == "clock");
+  CHECK(success.at("result").at("expanded").at("instance_id") == "calendar");
   CHECK(success.at("result").at("modules").at(1).at("state") == "disabled");
 
   const auto modules = nlohmann::json::parse(gisland::serialize_control_response(
@@ -116,12 +118,19 @@ TEST_CASE("control responses serialize stable success error and status shapes") 
   CHECK(error.at("ok") == false);
   CHECK(error.at("error").at("code") == "unknown_instance");
   CHECK(error.at("error").at("message") == "unknown module");
+
+  auto compact_only = status;
+  compact_only.expanded.reset();
+  const auto compact_only_json = nlohmann::json::parse(
+      gisland::serialize_control_response(gisland::ControlResponse{compact_only}));
+  CHECK(compact_only_json.at("result").at("expanded").is_null());
 }
 
 TEST_CASE("control responses parse back into typed values and reject malformed envelopes") {
   const gisland::ControlResponse original{gisland::ControlStatus{
       .mode = gisland::IslandMode::compact,
-      .active_context = gisland::ActiveContextStatus{"clock", "configured", 0},
+      .compact = gisland::ActiveContextStatus{"clock", "configured", 0},
+      .expanded = gisland::ActiveContextStatus{"clock", "configured", 0},
       .modules = {{"clock", gisland::ControlModuleState::running, true},
                   {"weather", gisland::ControlModuleState::disabled, false}},
       .socket = "/run/user/1000/gisland.sock",
@@ -131,6 +140,9 @@ TEST_CASE("control responses parse back into typed values and reject malformed e
   REQUIRE(parsed.has_value());
   const auto &status = std::get<gisland::ControlStatus>(parsed->value());
   CHECK(status.mode == gisland::IslandMode::compact);
+  REQUIRE(status.compact.has_value());
+  REQUIRE(status.expanded.has_value());
+  CHECK(status.compact->instance_id == "clock");
   CHECK(status.modules == std::vector<gisland::ModuleControlStatus>{
                               {"clock", gisland::ControlModuleState::running, true},
                               {"weather", gisland::ControlModuleState::disabled, false}});
@@ -144,6 +156,16 @@ TEST_CASE("control responses parse back into typed values and reject malformed e
     CAPTURE(record);
     CHECK_FALSE(gisland::parse_control_response(record).has_value());
   }
+}
+
+TEST_CASE("control response parser accepts legacy status format one") {
+  const auto parsed = gisland::parse_control_response(
+      R"({"version":1,"ok":true,"result":{"format_version":1,"mode":"compact","active_context":{"instance_id":"clock","context_id":"configured","priority":0},"modules":[],"socket":"/tmp/gisland.sock"}})");
+  REQUIRE(parsed.has_value());
+  const auto &status = std::get<gisland::ControlStatus>(parsed->value());
+  REQUIRE(status.compact.has_value());
+  CHECK(status.compact->instance_id == "clock");
+  CHECK_FALSE(status.expanded.has_value());
 }
 
 TEST_CASE("gislandctl grammar parses commands and bounded durations") {

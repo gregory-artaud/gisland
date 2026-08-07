@@ -60,6 +60,9 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
   if (config.maximum_protocol >= ProtocolVersion{1, 3}) {
     capabilities.emplace_back("rich-content");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 4}) {
+    capabilities.emplace_back("independent-views");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =
@@ -84,7 +87,8 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
 }
 
 RuntimeCoordinator::RuntimeCoordinator(const AppConfig &config)
-    : arbiter_(ContextKey{config.default_module, std::string{configured_context_id}}) {
+    : arbiter_(config.compact_default.empty() ? config.default_module : config.compact_default,
+               config.expanded_default.empty() ? config.default_module : config.expanded_default) {
   for (const auto &module : config.modules) {
     configured_instances_.emplace_back(module.id, module.enabled);
     if (!module.enabled) {
@@ -139,6 +143,8 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                   .compact = message.compact,
                   .expanded = message.expanded,
                   .resources = message.resources,
+                  .presentation = message.presentation,
+                  .revision = revision_ + 1,
               },
               event.at);
           ++revision_;
@@ -170,6 +176,7 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                   .expires_at = std::nullopt,
                   .compact = instantiated.compact,
                   .expanded = instantiated.expanded,
+                  .revision = revision_ + 1,
               },
               event.at);
           ++revision_;
@@ -189,11 +196,24 @@ void RuntimeCoordinator::remember_replacement(const ContextKey &key, MonotonicTi
 }
 
 RuntimeSelection RuntimeCoordinator::active(MonotonicTime now) {
-  const PublishedContext *selected = arbiter_.active(now);
+  return active(ViewSlot::compact, now);
+}
+
+RuntimeSelection RuntimeCoordinator::active(ViewSlot slot, MonotonicTime now) {
+  const PublishedContext *selected = arbiter_.active(slot, now);
   std::erase_if(pending_replacements_, [this, now](const auto &entry) {
     return arbiter_.find(entry.first, now) == nullptr;
   });
-  return RuntimeSelection{selected, revision_};
+  const SceneNode *scene = nullptr;
+  if (selected != nullptr) {
+    const auto &contribution = slot == ViewSlot::compact ? selected->compact : selected->expanded;
+    scene = contribution ? &*contribution : nullptr;
+  }
+  return RuntimeSelection{selected, selected == nullptr ? revision_ : selected->revision, scene};
+}
+
+RuntimeSelections RuntimeCoordinator::selections(MonotonicTime now) {
+  return RuntimeSelections{active(ViewSlot::compact, now), active(ViewSlot::expanded, now)};
 }
 
 std::expected<ContextKey, RuntimeError>
@@ -224,13 +244,18 @@ RuntimeCoordinator::activate(std::string_view instance_id,
 
 std::expected<ContextKey, RuntimeError>
 RuntimeCoordinator::dismiss_active(std::string_view context_id, MonotonicTime now) {
-  const PublishedContext *selected = arbiter_.active(now);
+  return dismiss_active(context_id, ViewSlot::compact, now);
+}
+
+std::expected<ContextKey, RuntimeError>
+RuntimeCoordinator::dismiss_active(std::string_view context_id, ViewSlot slot, MonotonicTime now) {
+  const PublishedContext *selected = arbiter_.active(slot, now);
   if (selected == nullptr || selected->key.context_id != context_id) {
     return std::unexpected(
         runtime_error(RuntimeErrorCode::unknown_context, "", "active context does not match"));
   }
   ContextKey key = selected->key;
-  static_cast<void>(arbiter_.dismiss_active(context_id, now));
+  arbiter_.dismiss(key);
   ++revision_;
   return key;
 }
@@ -326,6 +351,7 @@ RuntimeCoordinator::prepare_reload(const ReloadPlan &plan) const {
                 .expires_at = std::nullopt,
                 .compact = views->compact,
                 .expanded = views->expanded,
+                .revision = prepared.revision,
             },
             MonotonicTime{});
       } else {
@@ -334,7 +360,11 @@ RuntimeCoordinator::prepare_reload(const ReloadPlan &plan) const {
     }
     prepared.views.emplace(module.id, std::move(candidate_view));
   }
-  prepared.arbiter.set_default({plan.candidate.default_module, std::string{configured_context_id}});
+  prepared.arbiter.set_defaults(
+      plan.candidate.compact_default.empty() ? plan.candidate.default_module
+                                             : plan.candidate.compact_default,
+      plan.candidate.expanded_default.empty() ? plan.candidate.default_module
+                                              : plan.candidate.expanded_default);
   return prepared;
 }
 
@@ -370,7 +400,8 @@ void RuntimeCoordinator::reject(const ContextKey &key, MonotonicTime now) {
 
 std::vector<VisibilityUpdate> RuntimeCoordinator::visibility_updates(MonotonicTime now,
                                                                      IslandMode mode) {
-  const PublishedContext *selected = arbiter_.active(now);
+  const PublishedContext *selected =
+      arbiter_.active(mode == IslandMode::expanded ? ViewSlot::expanded : ViewSlot::compact, now);
   std::vector<VisibilityUpdate> updates;
   for (const auto &instance_id : enabled_instances_) {
     if (!ready_instances_.contains(instance_id)) {
@@ -378,8 +409,8 @@ std::vector<VisibilityUpdate> RuntimeCoordinator::visibility_updates(MonotonicTi
     }
     Visibility next = Visibility::hidden;
     if (selected != nullptr && selected->key.instance_id == instance_id) {
-      next = mode == IslandMode::expanded && selected->expanded ? Visibility::expanded_active
-                                                                : Visibility::compact_active;
+      next =
+          mode == IslandMode::expanded ? Visibility::expanded_active : Visibility::compact_active;
     }
     const auto previous = visibility_.find(instance_id);
     if (previous == visibility_.end() || previous->second != next) {

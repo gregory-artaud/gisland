@@ -5,7 +5,12 @@
 namespace gisland {
 
 ContextArbiter::ContextArbiter(ContextKey default_context)
-    : default_context_(std::move(default_context)) {}
+    : default_context_(std::move(default_context)), compact_default_(default_context_.instance_id),
+      expanded_default_(default_context_.instance_id) {}
+
+ContextArbiter::ContextArbiter(std::string compact_default, std::string expanded_default)
+    : default_context_{compact_default, {}}, compact_default_(std::move(compact_default)),
+      expanded_default_(std::move(expanded_default)) {}
 
 void ContextArbiter::publish(PublishedContext context, MonotonicTime now) {
   const ContextKey key = context.key;
@@ -43,6 +48,14 @@ void ContextArbiter::dismiss_instance(std::string_view instance_id) {
 
 void ContextArbiter::set_default(ContextKey default_context) {
   default_context_ = std::move(default_context);
+  compact_default_ = default_context_.instance_id;
+  expanded_default_ = default_context_.instance_id;
+}
+
+void ContextArbiter::set_defaults(std::string compact_default, std::string expanded_default) {
+  default_context_ = ContextKey{compact_default, {}};
+  compact_default_ = std::move(compact_default);
+  expanded_default_ = std::move(expanded_default);
 }
 
 void ContextArbiter::expire(MonotonicTime now) {
@@ -64,6 +77,25 @@ const ContextArbiter::Entry *ContextArbiter::best_for_instance(std::string_view 
   const Entry *best = nullptr;
   for (const auto &[key, entry] : contexts_) {
     if (key.instance_id != instance_id) {
+      continue;
+    }
+    if (best == nullptr || entry.context.priority > best->context.priority ||
+        (entry.context.priority == best->context.priority && entry.sequence > best->sequence)) {
+      best = &entry;
+    }
+  }
+  return best;
+}
+
+bool ContextArbiter::contributes(const PublishedContext &context, ViewSlot slot) {
+  return slot == ViewSlot::compact ? context.compact.has_value() : context.expanded.has_value();
+}
+
+const ContextArbiter::Entry *ContextArbiter::best_for_instance(std::string_view instance_id,
+                                                               ViewSlot slot) const {
+  const Entry *best = nullptr;
+  for (const auto &[key, entry] : contexts_) {
+    if (key.instance_id != instance_id || !contributes(entry.context, slot)) {
       continue;
     }
     if (best == nullptr || entry.context.priority > best->context.priority ||
@@ -108,16 +140,20 @@ const PublishedContext *ContextArbiter::find(const ContextKey &key, MonotonicTim
 }
 
 const PublishedContext *ContextArbiter::active(MonotonicTime now) {
+  return active(ViewSlot::compact, now);
+}
+
+const PublishedContext *ContextArbiter::active(ViewSlot slot, MonotonicTime now) {
   expire(now);
-  if (activation_) {
+  if (activation_ && contributes(contexts_.at(activation_->key).context, slot)) {
     return &contexts_.at(activation_->key).context;
   }
 
-  const Entry *default_entry = nullptr;
+  const std::string_view fallback = slot == ViewSlot::compact ? std::string_view{compact_default_}
+                                                              : std::string_view{expanded_default_};
   const Entry *temporary_entry = nullptr;
   for (const auto &[key, entry] : contexts_) {
-    if (key == default_context_) {
-      default_entry = &entry;
+    if (!contributes(entry.context, slot) || key.instance_id == fallback) {
       continue;
     }
     if (temporary_entry == nullptr || entry.context.priority > temporary_entry->context.priority ||
@@ -130,8 +166,8 @@ const PublishedContext *ContextArbiter::active(MonotonicTime now) {
   if (temporary_entry != nullptr) {
     return &temporary_entry->context;
   }
-  if (default_entry != nullptr) {
-    return &default_entry->context;
+  if (const Entry *fallback_entry = best_for_instance(fallback, slot); fallback_entry != nullptr) {
+    return &fallback_entry->context;
   }
   return nullptr;
 }

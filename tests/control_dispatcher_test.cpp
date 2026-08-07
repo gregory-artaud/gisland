@@ -81,9 +81,10 @@ TEST_CASE("control dispatcher mutates mode and recomputes status snapshots") {
   const auto status =
       std::get<gisland::ControlStatus>(dispatcher.dispatch(gisland::StatusControl{}, now).value());
   CHECK(status.mode == gisland::IslandMode::expanded);
-  REQUIRE(status.active_context.has_value());
-  CHECK(status.active_context->instance_id == "clock");
-  CHECK(status.active_context->context_id == "configured");
+  REQUIRE(status.compact.has_value());
+  REQUIRE(status.expanded.has_value());
+  CHECK(status.compact->instance_id == "clock");
+  CHECK(status.expanded->context_id == "configured");
   CHECK(status.modules == std::vector<gisland::ModuleControlStatus>{
                               {"clock", gisland::ControlModuleState::running, true},
                               {"status", gisland::ControlModuleState::stopped, false},
@@ -118,16 +119,50 @@ TEST_CASE("control dispatcher activation and dismissal update the next ordered q
       dispatcher.dispatch(gisland::ActivateControl{"clock", 10ms}, now + 1ms).value()));
   auto status = std::get<gisland::ControlStatus>(
       dispatcher.dispatch(gisland::StatusControl{}, now + 1ms).value());
-  REQUIRE(status.active_context.has_value());
-  CHECK(status.active_context->instance_id == "clock");
+  REQUIRE(status.compact.has_value());
+  CHECK(status.compact->instance_id == "clock");
 
   REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
       dispatcher.dispatch(gisland::DismissControl{"configured"}, now + 1ms).value()));
   status = std::get<gisland::ControlStatus>(
       dispatcher.dispatch(gisland::StatusControl{}, now + 1ms).value());
-  REQUIRE(status.active_context.has_value());
-  CHECK(status.active_context->instance_id == "status");
-  CHECK(status.active_context->context_id == "alert");
+  REQUIRE(status.compact.has_value());
+  CHECK(status.compact->instance_id == "status");
+  CHECK(status.compact->context_id == "alert");
+}
+
+TEST_CASE("control dispatcher opens and dismisses the independently selected expanded owner") {
+  const gisland::MonotonicTime now{};
+  gisland::RuntimeCoordinator runtime{config()};
+  gisland::OverlayModeController mode;
+  publish(runtime, "clock", "configured", 0, false, now);
+  REQUIRE(
+      runtime
+          .consume(gisland::ModuleMessageEvent{"status",
+                                               gisland::PublishMessage{.context_id = "alert",
+                                                                       .priority = 10,
+                                                                       .expanded = text("expanded"),
+                                                                       .independent_views = true},
+                                               now})
+          .has_value());
+  gisland::ControlDispatcher dispatcher{
+      runtime, mode,
+      [](std::string, std::uint64_t) -> std::expected<void, gisland::SupervisorCommandError> {
+        return {};
+      },
+      "/tmp/gisland.sock"};
+
+  CHECK(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::OpenControl{}, now).value()));
+  CHECK(mode.mode() == gisland::IslandMode::expanded);
+  CHECK(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::DismissControl{"alert"}, now).value()));
+
+  const auto status =
+      std::get<gisland::ControlStatus>(dispatcher.dispatch(gisland::StatusControl{}, now).value());
+  REQUIRE(status.compact.has_value());
+  CHECK(status.compact->instance_id == "clock");
+  CHECK_FALSE(status.expanded.has_value());
 }
 
 TEST_CASE("control dispatcher rejects invalid domain operations without mutation") {

@@ -216,6 +216,7 @@ void OverlayModeController::update(bool hovered, bool has_expanded, float delta_
     explicit_open_ = false;
     hover_suppressed_ = false;
     preview_remaining_ = 0.0F;
+    persistent_reveal_ = false;
     hover_.collapse();
     return;
   }
@@ -236,8 +237,15 @@ void OverlayModeController::update(bool hovered, bool has_expanded, float delta_
 }
 
 void OverlayModeController::start_preview(bool has_expanded, std::chrono::milliseconds duration) {
-  preview_remaining_ =
-      has_expanded ? std::max(std::chrono::duration<float>{duration}.count(), 0.0F) : 0.0F;
+  set_reveal(has_expanded, duration);
+}
+
+void OverlayModeController::set_reveal(bool has_expanded,
+                                       std::optional<std::chrono::milliseconds> duration) {
+  persistent_reveal_ = has_expanded && !duration.has_value();
+  preview_remaining_ = has_expanded && duration
+                           ? std::max(std::chrono::duration<float>{*duration}.count(), 0.0F)
+                           : 0.0F;
 }
 
 std::expected<void, ModeControlError> OverlayModeController::open(bool has_expanded) {
@@ -247,6 +255,7 @@ std::expected<void, ModeControlError> OverlayModeController::open(bool has_expan
   explicit_open_ = true;
   hover_suppressed_ = false;
   preview_remaining_ = 0.0F;
+  persistent_reveal_ = false;
   return {};
 }
 
@@ -254,6 +263,7 @@ void OverlayModeController::close() {
   explicit_open_ = false;
   hover_suppressed_ = hovered_;
   preview_remaining_ = 0.0F;
+  persistent_reveal_ = false;
   hover_.collapse();
 }
 
@@ -266,7 +276,8 @@ std::expected<void, ModeControlError> OverlayModeController::toggle(bool has_exp
 }
 
 IslandMode OverlayModeController::mode() const {
-  return explicit_open_ || preview_remaining_ > 0.0F ? IslandMode::expanded : hover_.mode();
+  return explicit_open_ || persistent_reveal_ || preview_remaining_ > 0.0F ? IslandMode::expanded
+                                                                           : hover_.mode();
 }
 
 void OverlayModeController::set_exit_tolerance(std::chrono::milliseconds exit_tolerance) {

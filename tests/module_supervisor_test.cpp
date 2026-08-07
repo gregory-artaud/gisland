@@ -257,6 +257,38 @@ TEST_CASE("supervisor emits image publications only after capability negotiation
   }
 }
 
+TEST_CASE("supervisor emits independent views only after protocol 1.4 capability negotiation") {
+  SECTION("negotiated independent views are emitted") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("independent", "independent");
+    request.init.maximum = {.major = 1, .minor = 4};
+    request.init.capabilities.emplace_back("independent-views");
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, "independent");
+    });
+    stop_and_wait(supervisor, events, "independent");
+  }
+
+  SECTION("independent views without capability are violations") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("unnegotiated-independent", "independent-without-capability");
+    request.init.maximum = {.major = 1, .minor = 4};
+    request.init.capabilities.emplace_back("independent-views");
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return count_events<gisland::ProtocolViolationEvent>(observed, "unnegotiated-independent") >
+             0;
+    });
+    CHECK_FALSE(has_message<gisland::PublishMessage>(events, "unnegotiated-independent"));
+    stop_and_wait(supervisor, events, "unnegotiated-independent");
+  }
+}
+
 TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
   gisland::ModuleSupervisor supervisor;
   EventLog events;

@@ -26,17 +26,6 @@ command = ["clock"]
 )";
 }
 
-[[nodiscard]] std::string config_with_module_field(std::string_view field) {
-  return std::string{R"(monitor = "primary"
-theme = "organic"
-default_module = "clock"
-
-[[modules]]
-id = "clock"
-command = ["clock"]
-)"} + std::string{field};
-}
-
 } // namespace
 
 TEST_CASE("minimum application configuration parses into typed values") {
@@ -174,44 +163,6 @@ command = ["clock"]
   }
 }
 
-TEST_CASE("module expanded preview duration is opt-in and bounded") {
-  SECTION("absent") {
-    const auto result = gisland::parse_config(config_with_module_field(""), "preview.toml");
-    REQUIRE(result.has_value());
-    CHECK(result->modules[0].expanded_preview == std::chrono::milliseconds{0});
-  }
-
-  SECTION("explicit values") {
-    const auto disabled = gisland::parse_config(
-        config_with_module_field("expanded_preview_ms = 0\n"), "preview.toml");
-    REQUIRE(disabled.has_value());
-    CHECK(disabled->modules[0].expanded_preview == std::chrono::milliseconds{0});
-
-    const auto enabled = gisland::parse_config(
-        config_with_module_field("expanded_preview_ms = 1000\n"), "preview.toml");
-    REQUIRE(enabled.has_value());
-    CHECK(enabled->modules[0].expanded_preview == std::chrono::milliseconds{1000});
-
-    const auto maximum = gisland::parse_config(
-        config_with_module_field("expanded_preview_ms = 60000\n"), "preview.toml");
-    REQUIRE(maximum.has_value());
-    CHECK(maximum->modules[0].expanded_preview == std::chrono::milliseconds{60000});
-  }
-}
-
-TEST_CASE("invalid module expanded preview duration is rejected at the TOML boundary") {
-  const auto check_error = [](std::string_view field) {
-    const auto result = gisland::parse_config(config_with_module_field(field), "preview.toml");
-    REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().path == "modules[0].expanded_preview_ms");
-  };
-
-  SECTION("negative") { check_error("expanded_preview_ms = -1\n"); }
-  SECTION("above maximum") { check_error("expanded_preview_ms = 60001\n"); }
-  SECTION("floating point") { check_error("expanded_preview_ms = 1000.0\n"); }
-  SECTION("string") { check_error("expanded_preview_ms = \"1000\"\n"); }
-}
-
 TEST_CASE("module views parse into typed templates") {
   constexpr auto source = R"(
 monitor = "primary"
@@ -343,6 +294,58 @@ enabled = false
   result = gisland::parse_config(disabled_default, "disabled.toml");
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().path == "default_module");
+}
+
+TEST_CASE("independent defaults parse enabled compact and expanded instances") {
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "organic"
+[defaults]
+compact = "clock"
+expanded = "calendar"
+[[modules]]
+id = "clock"
+command = ["clock"]
+[[modules]]
+id = "calendar"
+command = ["calendar"]
+)";
+
+  const auto result = gisland::parse_config(source, "defaults.toml");
+
+  REQUIRE(result.has_value());
+  CHECK(result->compact_default == "clock");
+  CHECK(result->expanded_default == "calendar");
+}
+
+TEST_CASE("independent defaults reject legacy mixing and incomplete slot values") {
+  const auto mixed = gisland::parse_config(R"(
+monitor = "primary"
+theme = "organic"
+default_module = "clock"
+[defaults]
+compact = "clock"
+expanded = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+)",
+                                           "mixed.toml");
+  REQUIRE_FALSE(mixed.has_value());
+  CHECK(mixed.error().path == "defaults");
+
+  const auto incomplete = gisland::parse_config(R"(
+monitor = "primary"
+theme = "organic"
+[defaults]
+compact = "clock"
+[[modules]]
+id = "clock"
+command = ["clock"]
+)",
+                                                "incomplete.toml");
+  REQUIRE_FALSE(incomplete.has_value());
+  CHECK(incomplete.error().path == "defaults.expanded");
 }
 
 TEST_CASE("module IDs are non-empty and unique") {

@@ -215,3 +215,51 @@ TEST_CASE("published contexts own immutable image resources") {
   CHECK(active->resources.front().pixels == pixels);
   CHECK(active->resources.front().pixels->at(0) == 255);
 }
+
+TEST_CASE("compact and expanded slots select independent owners") {
+  gisland::ContextArbiter arbiter{"clock", "clock"};
+  arbiter.publish(context("clock", "default", 0), epoch);
+  auto notification = context("notifications", "alert", 10);
+  notification.compact.reset();
+  arbiter.publish(std::move(notification), epoch + 1ms);
+
+  const auto *compact = arbiter.active(gisland::ViewSlot::compact, epoch + 1ms);
+  const auto *expanded = arbiter.active(gisland::ViewSlot::expanded, epoch + 1ms);
+
+  REQUIRE(compact != nullptr);
+  REQUIRE(expanded != nullptr);
+  CHECK(compact->key.instance_id == "clock");
+  CHECK(expanded->key.instance_id == "notifications");
+}
+
+TEST_CASE("slot defaults use the best contribution from each fallback instance") {
+  gisland::ContextArbiter arbiter{"clock", "calendar"};
+  auto compact = context("clock", "time", 1);
+  compact.expanded.reset();
+  arbiter.publish(std::move(compact), epoch);
+  auto expanded = context("calendar", "month", 2);
+  expanded.compact.reset();
+  arbiter.publish(std::move(expanded), epoch + 1ms);
+
+  REQUIRE(arbiter.active(gisland::ViewSlot::compact, epoch + 1ms) != nullptr);
+  REQUIRE(arbiter.active(gisland::ViewSlot::expanded, epoch + 1ms) != nullptr);
+  CHECK(arbiter.active(gisland::ViewSlot::compact, epoch + 1ms)->key.context_id == "time");
+  CHECK(arbiter.active(gisland::ViewSlot::expanded, epoch + 1ms)->key.context_id == "month");
+}
+
+TEST_CASE("activation pins only slots contributed by its selected context") {
+  gisland::ContextArbiter arbiter{"clock", "clock"};
+  arbiter.publish(context("clock", "default", 0), epoch);
+  auto music = context("music", "player", 10);
+  music.compact.reset();
+  arbiter.publish(std::move(music), epoch + 1ms);
+  auto timer = context("timer", "running", 100);
+  timer.expanded.reset();
+  arbiter.publish(std::move(timer), epoch + 2ms);
+
+  REQUIRE(arbiter.activate("music", std::nullopt, epoch + 2ms).has_value());
+  REQUIRE(arbiter.active(gisland::ViewSlot::compact, epoch + 2ms) != nullptr);
+  REQUIRE(arbiter.active(gisland::ViewSlot::expanded, epoch + 2ms) != nullptr);
+  CHECK(arbiter.active(gisland::ViewSlot::compact, epoch + 2ms)->key.instance_id == "timer");
+  CHECK(arbiter.active(gisland::ViewSlot::expanded, epoch + 2ms)->key.instance_id == "music");
+}

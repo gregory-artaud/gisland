@@ -193,27 +193,6 @@ parse_enabled(const toml::table &table, std::size_t module_index, std::string_vi
   return *value;
 }
 
-[[nodiscard]] std::expected<std::chrono::milliseconds, ConfigError>
-parse_expanded_preview(const toml::table &table, std::size_t module_index,
-                       std::string_view source_name) {
-  constexpr auto maximum = std::chrono::milliseconds{60000};
-  const auto *node = table.get("expanded_preview_ms");
-  if (node == nullptr) {
-    return std::chrono::milliseconds{0};
-  }
-  const std::string path = "modules[" + std::to_string(module_index) + "].expanded_preview_ms";
-  const auto value = node->value_exact<std::int64_t>();
-  if (!value.has_value()) {
-    return std::unexpected(error_at(source_name, path, "expected integer milliseconds", node));
-  }
-  const auto duration = std::chrono::milliseconds{*value};
-  if (duration < std::chrono::milliseconds{0} || duration > maximum) {
-    return std::unexpected(
-        error_at(source_name, path, "duration must be between 0 and 60000 milliseconds", node));
-  }
-  return duration;
-}
-
 [[nodiscard]] std::expected<ConfigValue::Table, ConfigError>
 parse_options(const toml::table &table, std::size_t module_index, std::string_view source_name) {
   const auto *node = table.get("options");
@@ -756,7 +735,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     std::string module_id;
     std::optional<std::filesystem::path> manifest_path;
     ProtocolVersion minimum_protocol{1, 0};
-    ProtocolVersion maximum_protocol{1, 3};
+    ProtocolVersion maximum_protocol{1, 4};
     std::expected<std::vector<std::string>, ConfigError> command =
         has_command
             ? parse_command(*module_table, index, source_name)
@@ -787,13 +766,13 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
       }
       manifest = &found->second;
       if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
-          manifest->minimum_protocol.minor > 3 || manifest->maximum_protocol.minor < 0) {
+          manifest->minimum_protocol.minor > 4 || manifest->maximum_protocol.minor < 0) {
         return std::unexpected(error_at(source_name, base_path + ".module",
                                         "module protocol range is incompatible",
                                         module_table->get("module")));
       }
       minimum_protocol = {1, std::max(0, manifest->minimum_protocol.minor)};
-      maximum_protocol = {1, std::min(3, manifest->maximum_protocol.minor)};
+      maximum_protocol = {1, std::min(4, manifest->maximum_protocol.minor)};
       auto arguments = parse_arguments(*module_table, index, source_name);
       if (!arguments) {
         return std::unexpected(arguments.error());
@@ -809,7 +788,6 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
       manifest_path = manifest->path;
     }
     auto enabled = parse_enabled(*module_table, index, source_name);
-    auto expanded_preview = parse_expanded_preview(*module_table, index, source_name);
     auto options = parse_options(*module_table, index, source_name);
     auto restart = parse_restart_policy(*module_table, index, source_name);
     auto timings = parse_timings(*module_table, index, source_name);
@@ -821,9 +799,6 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     }
     if (!enabled.has_value()) {
       return std::unexpected(enabled.error());
-    }
-    if (!expanded_preview.has_value()) {
-      return std::unexpected(expanded_preview.error());
     }
     if (!options.has_value()) {
       return std::unexpected(options.error());
@@ -877,7 +852,6 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
         .minimum_protocol = minimum_protocol,
         .maximum_protocol = maximum_protocol,
         .enabled = *enabled,
-        .expanded_preview = *expanded_preview,
         .options = std::move(*options),
         .restart = *restart,
         .timings = *timings,
@@ -940,16 +914,49 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
 parse_table(const toml::table &root, std::string_view source_name, const ModuleCatalog *catalog) {
   auto monitor = required_non_empty_string(root, "monitor", "monitor", source_name);
   auto theme = required_non_empty_string(root, "theme", "theme", source_name);
-  auto default_module =
-      required_non_empty_string(root, "default_module", "default_module", source_name);
   if (!monitor.has_value()) {
     return std::unexpected(monitor.error());
   }
   if (!theme.has_value()) {
     return std::unexpected(theme.error());
   }
-  if (!default_module.has_value()) {
-    return std::unexpected(default_module.error());
+
+  const auto *legacy_default = root.get("default_module");
+  const auto *defaults_node = root.get("defaults");
+  if (legacy_default != nullptr && defaults_node != nullptr) {
+    return std::unexpected(
+        error_at(source_name, "defaults", "cannot be combined with default_module", defaults_node));
+  }
+
+  std::expected<std::string, ConfigError> compact_default =
+      std::unexpected(error_at(source_name, "defaults", "missing required defaults"));
+  std::expected<std::string, ConfigError> expanded_default =
+      std::unexpected(error_at(source_name, "defaults", "missing required defaults"));
+  if (legacy_default != nullptr) {
+    compact_default =
+        required_non_empty_string(root, "default_module", "default_module", source_name);
+    expanded_default = compact_default;
+  } else if (defaults_node != nullptr) {
+    const auto *defaults = defaults_node->as_table();
+    if (defaults == nullptr) {
+      return std::unexpected(error_at(source_name, "defaults", "expected a table", defaults_node));
+    }
+    for (const auto &[key, value] : *defaults) {
+      if (key != "compact" && key != "expanded") {
+        return std::unexpected(error_at(source_name, "defaults." + std::string{key.str()},
+                                        "unknown defaults property", &value));
+      }
+    }
+    compact_default =
+        required_non_empty_string(*defaults, "compact", "defaults.compact", source_name);
+    expanded_default =
+        required_non_empty_string(*defaults, "expanded", "defaults.expanded", source_name);
+  }
+  if (!compact_default) {
+    return std::unexpected(compact_default.error());
+  }
+  if (!expanded_default) {
+    return std::unexpected(expanded_default.error());
   }
 
   auto interaction = parse_interaction(root, source_name);
@@ -962,21 +969,34 @@ parse_table(const toml::table &root, std::string_view source_name, const ModuleC
     return std::unexpected(modules.error());
   }
 
-  bool default_is_enabled = false;
+  bool compact_default_is_enabled = false;
+  bool expanded_default_is_enabled = false;
   for (const auto &module : *modules) {
-    if (module.id == *default_module && module.enabled) {
-      default_is_enabled = true;
-      break;
+    if (module.enabled) {
+      compact_default_is_enabled = compact_default_is_enabled || module.id == *compact_default;
+      expanded_default_is_enabled = expanded_default_is_enabled || module.id == *expanded_default;
     }
   }
-  if (!default_is_enabled) {
-    return std::unexpected(error_at(source_name, "default_module",
-                                    "default module must reference an enabled instance",
-                                    root.get("default_module")));
+  if (!compact_default_is_enabled) {
+    const std::string path = legacy_default != nullptr ? "default_module" : "defaults.compact";
+    return std::unexpected(error_at(
+        source_name, path, "default module must reference an enabled instance",
+        legacy_default != nullptr ? legacy_default : defaults_node->as_table()->get("compact")));
+  }
+  if (!expanded_default_is_enabled) {
+    const std::string path = legacy_default != nullptr ? "default_module" : "defaults.expanded";
+    return std::unexpected(error_at(
+        source_name, path, "default module must reference an enabled instance",
+        legacy_default != nullptr ? legacy_default : defaults_node->as_table()->get("expanded")));
   }
 
-  return AppConfig{std::move(*monitor), std::move(*theme), std::move(*default_module), *interaction,
-                   std::move(*modules)};
+  return AppConfig{.monitor = std::move(*monitor),
+                   .theme = std::move(*theme),
+                   .default_module = *compact_default,
+                   .compact_default = std::move(*compact_default),
+                   .expanded_default = std::move(*expanded_default),
+                   .interaction = *interaction,
+                   .modules = std::move(*modules)};
 }
 
 } // namespace

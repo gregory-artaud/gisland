@@ -110,17 +110,39 @@ request_duration(const Json &request) {
 }
 
 [[nodiscard]] OrderedJson status_json(const ControlStatus &status) {
-  OrderedJson active = nullptr;
-  if (status.active_context) {
-    active = OrderedJson{{"instance_id", status.active_context->instance_id},
-                         {"context_id", status.active_context->context_id},
-                         {"priority", status.active_context->priority}};
-  }
-  return OrderedJson{{"format_version", 1},
+  const auto context_json = [](const std::optional<ActiveContextStatus> &context) {
+    if (!context) {
+      return OrderedJson(nullptr);
+    }
+    return OrderedJson{{"instance_id", context->instance_id},
+                       {"context_id", context->context_id},
+                       {"priority", context->priority}};
+  };
+  return OrderedJson{{"format_version", 2},
                      {"mode", status.mode == IslandMode::expanded ? "expanded" : "compact"},
-                     {"active_context", std::move(active)},
+                     {"compact", context_json(status.compact)},
+                     {"expanded", context_json(status.expanded)},
                      {"modules", modules_json(status.modules)},
                      {"socket", status.socket}};
+}
+
+[[nodiscard]] std::expected<std::optional<ActiveContextStatus>, std::string>
+parse_active_context(const Json &value) {
+  if (value.is_null()) {
+    return std::nullopt;
+  }
+  if (!value.is_object() || !has_exact_fields(value, {"context_id", "instance_id", "priority"}) ||
+      !value.at("context_id").is_string() || !value.at("instance_id").is_string() ||
+      !value.at("priority").is_number_integer()) {
+    return std::unexpected("response has an invalid active context: " + value.dump());
+  }
+  try {
+    return ActiveContextStatus{value.at("instance_id").get<std::string>(),
+                               value.at("context_id").get<std::string>(),
+                               value.at("priority").get<int>()};
+  } catch (const Json::exception &) {
+    return std::unexpected("response active context priority is out of range");
+  }
 }
 
 [[nodiscard]] std::optional<ControlErrorCode> parse_error_code(std::string_view name) {
@@ -412,40 +434,55 @@ std::expected<ControlResponse, std::string> parse_control_response(std::string_v
     }
     return ControlResponse{ModulesStatus{std::move(*modules)}};
   }
-  if (!has_exact_fields(result,
-                        {"active_context", "format_version", "mode", "modules", "socket"}) ||
-      !result.at("format_version").is_number_integer() || result.at("format_version") != 1 ||
-      !result.at("mode").is_string() || !result.at("socket").is_string()) {
+  if (!result.contains("format_version") || !result.at("format_version").is_number_integer() ||
+      !result.contains("mode") || !result.at("mode").is_string() || !result.contains("modules") ||
+      !result.contains("socket") || !result.at("socket").is_string()) {
+    return std::unexpected("response has an invalid status result");
+  }
+  const int format_version = result.at("format_version").get<int>();
+  const bool legacy = format_version == 1;
+  if ((legacy && !has_exact_fields(
+                     result, {"active_context", "format_version", "mode", "modules", "socket"})) ||
+      (!legacy &&
+       (format_version != 2 || !has_exact_fields(result, {"compact", "expanded", "format_version",
+                                                          "mode", "modules", "socket"})))) {
     return std::unexpected("response has an invalid status result");
   }
   const auto mode_name = result.at("mode").get<std::string>();
   if (mode_name != "compact" && mode_name != "expanded") {
     return std::unexpected("response has an unknown mode");
   }
-  std::optional<ActiveContextStatus> active;
-  const Json &active_value = result.at("active_context");
-  if (!active_value.is_null()) {
-    if (!active_value.is_object() ||
-        !has_exact_fields(active_value, {"context_id", "instance_id", "priority"}) ||
-        !active_value.at("context_id").is_string() || !active_value.at("instance_id").is_string() ||
-        !active_value.at("priority").is_number_integer()) {
-      return std::unexpected("response has an invalid active context");
+  std::optional<ActiveContextStatus> compact;
+  std::optional<ActiveContextStatus> expanded;
+  if (legacy) {
+    auto active = parse_active_context(result.at("active_context"));
+    if (!active) {
+      return std::unexpected(active.error());
     }
-    try {
-      active = ActiveContextStatus{active_value.at("instance_id").get<std::string>(),
-                                   active_value.at("context_id").get<std::string>(),
-                                   active_value.at("priority").get<int>()};
-    } catch (const Json::exception &) {
-      return std::unexpected("response active context priority is out of range");
+    if (mode_name == "expanded") {
+      expanded = std::move(*active);
+    } else {
+      compact = std::move(*active);
     }
+  } else {
+    auto parsed_compact = parse_active_context(result.at("compact"));
+    auto parsed_expanded = parse_active_context(result.at("expanded"));
+    if (!parsed_compact) {
+      return std::unexpected(parsed_compact.error());
+    }
+    if (!parsed_expanded) {
+      return std::unexpected(parsed_expanded.error());
+    }
+    compact = std::move(*parsed_compact);
+    expanded = std::move(*parsed_expanded);
   }
   auto modules = parse_modules(result.at("modules"));
   if (!modules) {
     return std::unexpected(modules.error());
   }
   return ControlResponse{ControlStatus{
-      mode_name == "expanded" ? IslandMode::expanded : IslandMode::compact, std::move(active),
-      std::move(*modules), result.at("socket").get<std::string>()}};
+      mode_name == "expanded" ? IslandMode::expanded : IslandMode::compact, std::move(compact),
+      std::move(expanded), std::move(*modules), result.at("socket").get<std::string>()}};
 }
 
 std::string serialize_control_result(const ControlResponse &response) {

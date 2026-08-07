@@ -85,7 +85,8 @@ struct ModuleControlStatus {
 
 struct ControlStatus {
   IslandMode mode;
-  std::optional<ActiveContextStatus> active_context;
+  std::optional<ActiveContextStatus> compact;
+  std::optional<ActiveContextStatus> expanded;
   std::vector<ModuleControlStatus> modules;
   std::string socket;
 };

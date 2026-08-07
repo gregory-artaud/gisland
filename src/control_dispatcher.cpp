@@ -64,18 +64,16 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
       [this, now](const auto &typed_command) -> ControlResponse {
         using Command = std::decay_t<decltype(typed_command)>;
         if constexpr (std::is_same_v<Command, OpenControl>) {
-          const auto selected = runtime_.active(now);
-          if (selected.context == nullptr || !mode_.open(selected.context->expanded.has_value())) {
+          const auto selected = runtime_.active(ViewSlot::expanded, now);
+          if (!mode_.open(selected.context != nullptr)) {
             return control_error(ControlErrorCode::unavailable_context,
                                  "the active context has no expanded view");
           }
         } else if constexpr (std::is_same_v<Command, CloseControl>) {
           mode_.close();
         } else if constexpr (std::is_same_v<Command, ToggleControl>) {
-          const auto selected = runtime_.active(now);
-          const bool has_expanded =
-              selected.context != nullptr && selected.context->expanded.has_value();
-          if (!mode_.toggle(has_expanded)) {
+          const auto selected = runtime_.active(ViewSlot::expanded, now);
+          if (!mode_.toggle(selected.context != nullptr)) {
             return control_error(ControlErrorCode::unavailable_context,
                                  "the active context has no expanded view");
           }
@@ -101,7 +99,9 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
                                  activated.error().message);
           }
         } else if constexpr (std::is_same_v<Command, DismissControl>) {
-          const auto dismissed = runtime_.dismiss_active(typed_command.context_id, now);
+          const auto dismissed = runtime_.dismiss_active(
+              typed_command.context_id,
+              mode_.mode() == IslandMode::expanded ? ViewSlot::expanded : ViewSlot::compact, now);
           if (!dismissed) {
             return control_error(control_error_code(dismissed.error().code),
                                  dismissed.error().message);
@@ -120,15 +120,16 @@ void ControlDispatcher::consume(const RestartCompletedEvent &event) {
 }
 
 ControlResponse ControlDispatcher::status(MonotonicTime now) {
-  const auto selected = runtime_.active(now);
-  std::optional<ActiveContextStatus> active_context;
-  if (selected.context != nullptr) {
-    active_context =
-        ActiveContextStatus{selected.context->key.instance_id, selected.context->key.context_id,
-                            selected.context->priority};
-  }
-  return ControlResponse{
-      ControlStatus{mode_.mode(), std::move(active_context), modules(now), socket_path_}};
+  const auto selected = runtime_.selections(now);
+  const auto status = [](const RuntimeSelection &selection) -> std::optional<ActiveContextStatus> {
+    if (selection.context == nullptr) {
+      return std::nullopt;
+    }
+    return ActiveContextStatus{selection.context->key.instance_id,
+                               selection.context->key.context_id, selection.context->priority};
+  };
+  return ControlResponse{ControlStatus{mode_.mode(), status(selected.compact),
+                                       status(selected.expanded), modules(now), socket_path_}};
 }
 
 std::vector<ModuleControlStatus> ControlDispatcher::modules(MonotonicTime now) {
