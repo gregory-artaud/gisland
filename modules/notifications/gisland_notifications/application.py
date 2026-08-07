@@ -1,7 +1,9 @@
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .dbus_service import NotificationDBusService
+from .history import MAXIMUM_LIMIT, NotificationHistory, state_path
 from .protocol import JsonlTransport, ProtocolController
 from .service import NotificationService
 
@@ -21,13 +23,26 @@ class Application:
         self._stopping = False
         self._transport = None
         self._controller = None
+        self._history_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="gisland-notification-history"
+        )
         self._dbus = NotificationDBusService(self._bus_ready, self._fatal, version)
+        history = NotificationHistory(
+            state_path(),
+            limit=MAXIMUM_LIMIT,
+            diagnostic=lambda message: print(
+                f"gisland-notifications: {message}", file=sys.stderr
+            ),
+            schedule_save=self._history_executor.submit,
+        )
         self._service = NotificationService(
             write_record=self._write_record,
             emit_signal=self._dbus.emit_signal,
             launch_uri=self._launch_uri,
             schedule=lambda timeout, callback: GLib.timeout_add(timeout, callback),
             cancel_timer=GLib.source_remove,
+            history=history,
+            diagnostic=lambda message: print(f"gisland-notifications: {message}", file=sys.stderr),
         )
         self._dbus.set_service(self._service)
         self._controller = ProtocolController(
@@ -36,6 +51,7 @@ class Application:
             shutdown=self.stop,
             fatal=self._fatal,
             configure=self._service.configure,
+            visibility=self._service.visibility,
         )
         self._transport = JsonlTransport(self._controller.handle, self.stop)
 
@@ -73,6 +89,7 @@ class Application:
             return
         self._stopping = True
         self._service.shutdown()
+        self._history_executor.shutdown(wait=True)
         self._dbus.stop()
         if self._transport is not None:
             self._transport.stop()

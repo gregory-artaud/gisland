@@ -1,5 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
+from gisland_notifications.history import NotificationHistory
 from gisland_notifications.model import CloseReason
 from gisland_notifications.service import NotificationService
 
@@ -11,6 +14,11 @@ class NotificationServiceTests(unittest.TestCase):
         self.launched = []
         self.scheduled = []
         self.cancelled = []
+        self.temporary = tempfile.TemporaryDirectory()
+        self.diagnostics = []
+        self.history = NotificationHistory(
+            Path(self.temporary.name) / "history.json", diagnostic=self.diagnostics.append
+        )
         self.service = NotificationService(
             write_record=self.records.append,
             emit_signal=lambda name, notification_id, value: self.signals.append(
@@ -23,7 +31,13 @@ class NotificationServiceTests(unittest.TestCase):
             cancel_timer=self.cancelled.append,
             resolve_image=lambda hints, app_icon: None,
             resolve_inline=lambda source: None,
+            history=self.history,
+            wall_time=lambda: 100.0,
+            diagnostic=self.diagnostics.append,
         )
+
+    def tearDown(self):
+        self.temporary.cleanup()
 
     def notify(self, resident=False, replaces_id=0):
         return self.service.notify(
@@ -47,7 +61,9 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertEqual(self.cancelled, [1])
 
     def test_configures_the_generic_reveal_intent(self):
-        self.service.configure({"reveal_duration_ms": 2500})
+        self.service.configure(
+            {"reveal_duration_ms": 2500, "history_limit": 20, "history_visible_limit": 3}
+        )
 
         self.notify()
 
@@ -55,12 +71,144 @@ class NotificationServiceTests(unittest.TestCase):
             self.records[-1]["presentation"],
             {"reveal": "expanded", "duration_ms": 2500},
         )
+        self.assertEqual(self.history.limit, 20)
 
     def test_rejects_invalid_reveal_durations(self):
         for value in (-1, 60001, True, 1.5, "1000"):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "reveal_duration_ms"):
                     self.service.configure({"reveal_duration_ms": value})
+
+    def test_rejects_invalid_history_configuration(self):
+        for configuration in (
+            {"history_limit": 0},
+            {"history_limit": 1001},
+            {"history_limit": True},
+            {"history_visible_limit": 0},
+            {"history_visible_limit": 6},
+            {"history_visible_limit": 1.5},
+            {"history_limit": 3, "history_visible_limit": 4},
+        ):
+            with self.subTest(configuration=configuration):
+                with self.assertRaises(ValueError):
+                    self.service.configure(configuration)
+
+    def test_history_survives_close_and_replacement_updates_one_record(self):
+        notification_id = self.notify()
+        self.service.close(notification_id, CloseReason.EXPIRED)
+
+        self.assertEqual(len(self.history.records), 1)
+        self.assertEqual(self.history.records[0].summary, "Ready")
+        self.assertNotIn(notification_id, self.service._history_sequences)
+
+        second_id = self.notify()
+        self.service.notify(
+            app_name="Files",
+            replaces_id=second_id,
+            app_icon="",
+            summary="Updated",
+            body="new body",
+            actions=(),
+            hints={},
+            expire_timeout=1000,
+        )
+        self.assertEqual(len(self.history.records), 2)
+        self.assertEqual(self.history.records[0].summary, "Updated")
+
+    def test_show_more_grows_to_five_and_initial_hidden_does_not_reset(self):
+        for index in range(6):
+            self.service.notify(
+                app_name="App",
+                replaces_id=0,
+                app_icon="",
+                summary=f"Item {index}",
+                body="",
+                actions=(),
+                hints={},
+                expire_timeout=1000,
+            )
+        self.records.clear()
+
+        self.assertEqual(self.service.show_more(), 1)
+        self.service.visibility("hidden")
+        for expected in range(2, 6):
+            self.assertEqual(self.service.show_more(), expected)
+        self.assertEqual(self.service.show_more(), 5)
+
+        publications = [record for record in self.records if record["type"] == "publish"]
+        self.assertEqual(len(publications), 6)
+        values = self.text_values(publications[-1]["views"]["expanded"])
+        self.assertEqual(len([value for value in values if value.startswith("Item ")]), 5)
+
+    def test_expanded_then_hidden_dismisses_history_and_resets(self):
+        self.notify()
+        self.records.clear()
+        self.service.show_more()
+        self.service.visibility("expanded-active")
+
+        self.service.visibility("hidden")
+
+        self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
+        self.assertEqual(self.service.show_more(), 1)
+
+    def test_history_opened_while_module_is_expanded_still_resets(self):
+        self.notify()
+        self.service.visibility("expanded-active")
+        self.records.clear()
+
+        self.service.show_more()
+        self.service.history_opened()
+        self.service.visibility("hidden")
+
+        self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
+        self.assertEqual(self.service.show_more(), 1)
+
+    def test_history_that_never_opens_resets_after_its_deadline(self):
+        self.notify()
+        self.records.clear()
+
+        self.service.show_more()
+        timeout, callback = self.scheduled[-1]
+        self.assertEqual(timeout, 2000)
+        self.assertFalse(callback())
+
+        self.assertEqual(self.records[-1], {"type": "dismiss", "context_id": "history"})
+        self.assertEqual(self.service.show_more(), 1)
+
+    def test_new_arrival_updates_open_history_without_duplicate_reveal(self):
+        self.notify()
+        self.notify()
+        self.records.clear()
+        self.service.show_more()
+        self.service.show_more()
+        self.service.visibility("expanded-active")
+        self.records.clear()
+
+        self.service.notify(
+            app_name="Chat",
+            replaces_id=0,
+            app_icon="",
+            summary="Newest",
+            body="message",
+            actions=(),
+            hints={},
+            expire_timeout=1000,
+        )
+
+        self.assertEqual([record["type"] for record in self.records], ["publish", "publish"])
+        self.assertNotIn("presentation", self.records[0])
+        history_values = self.text_values(self.records[1]["views"]["expanded"])
+        self.assertTrue(any(value.startswith("Newest") for value in history_values))
+        self.assertEqual(len([value for value in history_values if value.startswith("Ready")]), 1)
+
+    @staticmethod
+    def text_values(node):
+        values = []
+        if node.get("type") == "text":
+            values.append(node["value"])
+        for child in node.get("children", []):
+            values.extend(NotificationServiceTests.text_values(child))
+        return values
 
     def test_failed_replacement_preserves_live_notification_and_timer(self):
         notification_id = self.notify()

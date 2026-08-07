@@ -264,9 +264,39 @@ protocol presentation intent. Compact content remains owned by the configured co
 Reveal expiration returns to compact mode unless the pointer is hovering or the overlay was opened
 explicitly.
 
+The reveal duration and bounded external history are module options:
+
+```toml
+[[modules]]
+id = "notifications"
+module = "notifications"
+enabled = true
+restart = "on-failure"
+
+[modules.options]
+reveal_duration_ms = 1000
+history_limit = 100
+history_visible_limit = 5
+```
+
+`reveal_duration_ms` accepts `0..60000`, where zero disables automatic reveal. `history_limit`
+accepts `1..1000`; `history_visible_limit` accepts `1..5` and cannot exceed the retained limit.
+History stores bounded plain-text notification content under
+`$XDG_STATE_HOME/gisland/notifications-history.json`, falling back to
+`$HOME/.local/state/gisland/notifications-history.json`. It does not retain actions, links, images,
+or arbitrary hints.
+
+Run `gisland-notification-history` to open the newest historical notification. Repeating the command
+adds one older entry below it, up to `history_visible_limit`; closing the overlay resets the next
+opening to one entry. A direct i3 binding is:
+
+```i3
+bindsym $mod+n exec --no-startup-id ~/.local/bin/gisland-notification-history
+```
+
 Links are opened through Gio only for `http`, `https`, and `mailto` URIs. The daemon never invokes a
-shell or executes action strings supplied by applications. Notifications exist only in memory while
-gisland is running; no history or persistence is provided.
+shell or executes action strings supplied by applications. Live notification actions remain in
+memory only; history is non-interactive and storage failures remain logs-only.
 
 ## Control
 

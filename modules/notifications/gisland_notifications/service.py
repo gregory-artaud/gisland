@@ -1,11 +1,17 @@
 from collections.abc import Callable
+import time
 from typing import Any
 from urllib.parse import urlparse
 
+from .history import NotificationHistory
+from .history_scenes import HISTORY_CONTEXT_ID, build_history_publication
 from .images import ImageData, encode_resource, load_image_file, resolve_app_image
 from .markup import parse_body
 from .model import CloseReason, NotificationStore
 from .scenes import build_publication
+
+
+HISTORY_OPEN_TIMEOUT_MS = 2000
 
 
 class NotificationService:
@@ -16,8 +22,11 @@ class NotificationService:
         launch_uri: Callable[[str], bool],
         schedule: Callable[[int, Callable[[], bool]], Any],
         cancel_timer: Callable[[Any], None],
+        history: NotificationHistory,
         resolve_image: Callable[[dict[str, Any], str], ImageData | None] = resolve_app_image,
         resolve_inline: Callable[[str], ImageData | None] = load_image_file,
+        wall_time: Callable[[], float] = time.time,
+        diagnostic: Callable[[str], None] = lambda _message: None,
     ):
         self.store = NotificationStore()
         self._write_record = write_record
@@ -27,15 +36,34 @@ class NotificationService:
         self._cancel_timer = cancel_timer
         self._resolve_image = resolve_image
         self._resolve_inline = resolve_inline
+        self._history = history
+        self._wall_time = wall_time
+        self._diagnostic = diagnostic
         self._timers: dict[int, Any] = {}
         self._routing: dict[int, dict[str, tuple[str, str]]] = {}
+        self._history_sequences: dict[int, int] = {}
         self._reveal_duration_ms = 1000
+        self._history_visible_limit = 5
+        self._history_visible_count = 0
+        self._history_was_expanded = False
+        self._visibility = "hidden"
+        self._history_open_timer = None
 
     def configure(self, configuration: dict[str, Any]) -> None:
         reveal_duration_ms = configuration.get("reveal_duration_ms", 1000)
         if type(reveal_duration_ms) is not int or not 0 <= reveal_duration_ms <= 60000:
             raise ValueError("reveal_duration_ms must be an integer between 0 and 60000")
+        history_limit = configuration.get("history_limit", 100)
+        if type(history_limit) is not int or not 1 <= history_limit <= 1000:
+            raise ValueError("history_limit must be an integer between 1 and 1000")
+        history_visible_limit = configuration.get("history_visible_limit", 5)
+        if type(history_visible_limit) is not int or not 1 <= history_visible_limit <= 5:
+            raise ValueError("history_visible_limit must be an integer between 1 and 5")
+        if history_visible_limit > history_limit:
+            raise ValueError("history_visible_limit must not exceed history_limit")
         self._reveal_duration_ms = reveal_duration_ms
+        self._history.configure_limit(history_limit)
+        self._history_visible_limit = history_visible_limit
 
     def notify(
         self,
@@ -72,7 +100,9 @@ class NotificationService:
 
         publication, routing = build_publication(
             notification,
-            reveal_duration_ms=self._reveal_duration_ms,
+            reveal_duration_ms=(
+                0 if self._history_visible_count > 0 else self._reveal_duration_ms
+            ),
             app_resource=app_resource,
             inline_resources=inline_resources,
         )
@@ -81,12 +111,82 @@ class NotificationService:
             self._cancel_notification_timer(notification.id)
         self.store.commit(notification)
         self._routing[notification.id] = routing
+        sequence = self._history_sequences.get(notification.id) if replacing is not None else None
+        received_at = self._wall_time()
+        if sequence is not None and self._history.has_sequence(sequence):
+            self._history.replace(
+                sequence,
+                notification.id,
+                notification.app_name,
+                notification.summary,
+                notification.body,
+                received_at,
+            )
+        else:
+            sequence = self._history.add(
+                notification.id,
+                notification.app_name,
+                notification.summary,
+                notification.body,
+                received_at,
+            )
+        self._history_sequences[notification.id] = sequence
+        if self._history_visible_count > 0:
+            try:
+                self._write_record(self._history_publication(self._history_visible_count))
+            except ValueError as error:
+                self._diagnostic(f"could not update notification history: {error}")
         if notification.timeout_ms is not None:
             self._timers[notification.id] = self._schedule(
                 notification.timeout_ms,
                 lambda notification_id=notification.id: self._expire(notification_id),
             )
         return notification.id
+
+    def _history_publication(self, visible_count: int) -> dict[str, Any]:
+        return build_history_publication(
+            self._history.records,
+            visible_count=visible_count,
+            now=self._wall_time(),
+        )
+
+    def show_more(self) -> int:
+        visible_count = min(self._history_visible_count + 1, self._history_visible_limit)
+        self._write_record(self._history_publication(visible_count))
+        self._history_visible_count = visible_count
+        self._cancel_history_open_timer()
+        self._history_open_timer = self._schedule(
+            HISTORY_OPEN_TIMEOUT_MS, self._history_open_timeout
+        )
+        return visible_count
+
+    def history_opened(self) -> None:
+        if self._history_visible_count == 0:
+            raise ValueError("notification history is not pending")
+        self._cancel_history_open_timer()
+        self._history_was_expanded = True
+
+    def visibility(self, visibility: str) -> None:
+        self._visibility = visibility
+        if visibility == "expanded-active" and self._history_visible_count > 0:
+            self.history_opened()
+        elif visibility == "hidden" and self._history_was_expanded:
+            self._cancel_history_open_timer()
+            self._write_record({"type": "dismiss", "context_id": HISTORY_CONTEXT_ID})
+            self._history_visible_count = 0
+            self._history_was_expanded = False
+
+    def _cancel_history_open_timer(self) -> None:
+        if self._history_open_timer is not None:
+            self._cancel_timer(self._history_open_timer)
+            self._history_open_timer = None
+
+    def _history_open_timeout(self) -> bool:
+        self._history_open_timer = None
+        if self._history_visible_count > 0 and not self._history_was_expanded:
+            self._write_record({"type": "dismiss", "context_id": HISTORY_CONTEXT_ID})
+            self._history_visible_count = 0
+        return False
 
     def _cancel_notification_timer(self, notification_id: int) -> None:
         timer = self._timers.pop(notification_id, None)
@@ -105,6 +205,7 @@ class NotificationService:
         notification, close_reason = closed
         self._cancel_notification_timer(notification_id)
         self._routing.pop(notification_id, None)
+        self._history_sequences.pop(notification_id, None)
         self._write_record({"type": "dismiss", "context_id": notification.context_id})
         self._emit_signal("NotificationClosed", notification_id, close_reason)
         return True
@@ -137,7 +238,9 @@ class NotificationService:
         return True
 
     def shutdown(self) -> None:
+        self._cancel_history_open_timer()
         for timer in tuple(self._timers.values()):
             self._cancel_timer(timer)
         self._timers.clear()
         self._routing.clear()
+        self._history.flush()

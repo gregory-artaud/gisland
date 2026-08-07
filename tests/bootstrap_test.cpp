@@ -159,6 +159,10 @@ TEST_CASE(
   CHECK(bootstrap->config.modules[1].command.front() == "gisland-notifications");
   CHECK(std::get<std::int64_t>(
             bootstrap->config.modules[1].options.at("reveal_duration_ms").value) == 1000);
+  CHECK(std::get<std::int64_t>(bootstrap->config.modules[1].options.at("history_limit").value) ==
+        100);
+  CHECK(std::get<std::int64_t>(
+            bootstrap->config.modules[1].options.at("history_visible_limit").value) == 5);
   REQUIRE(bootstrap->manifest_paths.size() == 2);
   CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
   const auto *clock_view =

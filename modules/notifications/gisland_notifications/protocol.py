@@ -49,12 +49,14 @@ class ProtocolController:
         shutdown: Callable[[], None],
         fatal: Callable[[str], None],
         configure: Callable[[dict[str, Any]], None],
+        visibility: Callable[[str], None],
     ):
         self._write_record = write_record
         self._action = action
         self._shutdown = shutdown
         self._fatal = fatal
         self._configure = configure
+        self._visibility = visibility
         self._initialized = False
         self._bus_ready = False
         self._ready_sent = False
@@ -118,6 +120,11 @@ class ProtocolController:
                     "accepted": accepted,
                 }
             )
+            return
+        if message_type == "visibility" and self._ready_sent:
+            visibility = record.get("visibility")
+            if visibility in ("hidden", "compact-active", "expanded-active"):
+                self._visibility(visibility)
             return
         if message_type == "shutdown" and not self._shutdown_sent:
             self._shutdown_sent = True

@@ -3,6 +3,7 @@ import os
 import selectors
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -28,18 +29,30 @@ class NotificationDBusProcessTests(unittest.TestCase):
         if "DBUS_SESSION_BUS_ADDRESS" not in os.environ:
             self.skipTest("requires dbus-run-session")
         root = Path(__file__).resolve().parents[2]
-        module_root = root / "modules/notifications"
-        environment = dict(os.environ)
-        environment["PYTHONPATH"] = str(module_root)
+        self.module_root = root / "modules/notifications"
+        self.temporary = tempfile.TemporaryDirectory()
+        self.environment = dict(os.environ)
+        self.environment["PYTHONPATH"] = str(self.module_root)
+        self.environment["XDG_STATE_HOME"] = self.temporary.name
+        self.start_process()
+
+    def start_process(self):
         self.process = subprocess.Popen(
-            [sys.executable, str(module_root / "gisland-notifications")],
+            [sys.executable, str(self.module_root / "gisland-notifications")],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=environment,
+            env=self.environment,
             text=True,
         )
         self.send(init_message())
+
+    def stop_process(self):
+        if self.process.poll() is None:
+            self.send({"type": "shutdown", "deadline_ms": 1000})
+            self.process.wait(timeout=3)
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            stream.close()
 
     def tearDown(self):
         if self.process.poll() is None:
@@ -55,6 +68,7 @@ class NotificationDBusProcessTests(unittest.TestCase):
                 print(stderr, file=sys.stderr)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             stream.close()
+        self.temporary.cleanup()
 
     def send(self, message):
         self.process.stdin.write(json.dumps(message) + "\n")
@@ -86,6 +100,22 @@ class NotificationDBusProcessTests(unittest.TestCase):
             "org.freedesktop.Notifications",
             "/org/freedesktop/Notifications",
             "org.freedesktop.Notifications",
+            None,
+        )
+
+    def history_proxy(self):
+        import gi
+
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+
+        return Gio.DBusProxy.new_for_bus_sync(
+            Gio.BusType.SESSION,
+            Gio.DBusProxyFlags.NONE,
+            None,
+            "org.freedesktop.Notifications",
+            "/org/gisland/Notifications/History",
+            "org.gisland.Notifications.History",
             None,
         )
 
@@ -220,6 +250,68 @@ class NotificationDBusProcessTests(unittest.TestCase):
             self.record(), {"type": "dismiss", "context_id": f"notification-{expiring_id}"}
         )
         self.wait_for_signal(signals, ("NotificationClosed", (expiring_id, 1)))
+
+    def test_private_history_interface_publishes_empty_state(self):
+        self.assertEqual(self.record()["type"], "ready")
+
+        import gi
+
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+
+        count = self.history_proxy().call_sync(
+            "ShowMore", None, Gio.DBusCallFlags.NONE, 2000, None
+        ).unpack()[0]
+
+        self.assertEqual(count, 1)
+        publication = self.record()
+        self.assertEqual(publication["context_id"], "history")
+        self.assertEqual(publication["priority"], 100)
+        self.assertNotIn("presentation", publication)
+
+    def test_history_survives_daemon_restart(self):
+        self.assertEqual(self.record()["type"], "ready")
+
+        import gi
+
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+
+        self.proxy().call_sync(
+            "Notify",
+            GLib.Variant(
+                "(susssasa{sv}i)",
+                ("Files", 0, "", "Persisted", "Across restart", [], {}, 1000),
+            ),
+            Gio.DBusCallFlags.NONE,
+            2000,
+            None,
+        )
+        self.assertEqual(self.record()["type"], "publish")
+        self.stop_process()
+        self.start_process()
+        self.assertEqual(self.record()["type"], "ready")
+
+        self.assertEqual(
+            self.history_proxy()
+            .call_sync("ShowMore", None, Gio.DBusCallFlags.NONE, 2000, None)
+            .unpack()[0],
+            1,
+        )
+        publication = self.record()
+
+        def text_values(node):
+            values = [node["value"]] if node.get("type") == "text" else []
+            for child in node.get("children", []):
+                values.extend(text_values(child))
+            return values
+
+        self.assertTrue(
+            any(
+                value.startswith("Persisted")
+                for value in text_values(publication["views"]["expanded"])
+            )
+        )
 
     def test_rejects_a_second_bus_name_owner(self):
         self.assertEqual(self.record()["type"], "ready")

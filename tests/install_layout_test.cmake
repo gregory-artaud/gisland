@@ -16,6 +16,7 @@ set(required_files
     "${root}/${BINDIR}/gislandctl"
     "${root}/${BINDIR}/gisland-clock-calendar"
     "${root}/${BINDIR}/gisland-notifications"
+    "${root}/${BINDIR}/gisland-notification-history"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
@@ -50,7 +51,10 @@ endif()
 string(FIND "${notification_manifest}" "reveal_duration_ms = 1000" notification_default_position)
 string(FIND "${notification_manifest}" "[options_schema.reveal_duration_ms]"
        notification_schema_position)
-if(notification_default_position EQUAL -1 OR notification_schema_position EQUAL -1)
+string(FIND "${notification_manifest}" "history_limit = 100" history_limit_position)
+string(FIND "${notification_manifest}" "history_visible_limit = 5" history_visible_position)
+if(notification_default_position EQUAL -1 OR notification_schema_position EQUAL -1 OR
+   history_limit_position EQUAL -1 OR history_visible_position EQUAL -1)
   message(FATAL_ERROR "installed notification manifest lacks reveal duration configuration: ${notification_manifest}")
 endif()
 
@@ -58,6 +62,12 @@ file(READ "${root}/${BINDIR}/gisland-notifications" notification_executable)
 string(FIND "${notification_executable}" "main(\"1.0.0\")" notification_version_position)
 if(notification_version_position EQUAL -1)
   message(FATAL_ERROR "installed notification daemon has the wrong project version")
+endif()
+
+file(READ "${root}/${BINDIR}/gisland-notification-history" history_executable)
+string(FIND "${history_executable}" "main()" history_entrypoint_position)
+if(history_entrypoint_position EQUAL -1)
+  message(FATAL_ERROR "installed notification history helper has the wrong entry point")
 endif()
 
 file(READ "${root}/${DATADIR}/systemd/user/gisland.service" service)

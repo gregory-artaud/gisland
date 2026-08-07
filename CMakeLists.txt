@@ -195,8 +195,17 @@ configure_file(
   "${PROJECT_BINARY_DIR}/gisland-notifications"
   @ONLY
 )
+configure_file(
+  packaging/gisland-notification-history.in
+  "${PROJECT_BINARY_DIR}/gisland-notification-history"
+  @ONLY
+)
 file(
   CHMOD "${PROJECT_BINARY_DIR}/gisland-notifications"
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+file(
+  CHMOD "${PROJECT_BINARY_DIR}/gisland-notification-history"
   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
 )
 set(
@@ -206,6 +215,11 @@ set(
 configure_file(
   packaging/gisland-notifications.in
   "${PROJECT_BINARY_DIR}/install/gisland-notifications"
+  @ONLY
+)
+configure_file(
+  packaging/gisland-notification-history.in
+  "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
   @ONLY
 )
 configure_file(
@@ -230,7 +244,9 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
 )
 install(
-  PROGRAMS "${PROJECT_BINARY_DIR}/install/gisland-notifications"
+  PROGRAMS
+    "${PROJECT_BINARY_DIR}/install/gisland-notifications"
+    "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(
@@ -350,6 +366,7 @@ if(BUILD_TESTING)
         GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
         GISLAND_CLOCK_CALENDAR_PATH="$<TARGET_FILE:gisland_clock_calendar>"
         GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+        GISLAND_NOTIFICATION_HISTORY_PATH="${PROJECT_BINARY_DIR}/gisland-notification-history"
     )
     gisland_set_project_options(gisland_application_x11_smoke_tests)
     add_dependencies(

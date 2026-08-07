@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -34,6 +35,7 @@ public:
     if (pid_ == 0) {
       setenv("XDG_CONFIG_HOME", config_home.c_str(), 1);
       setenv("XDG_RUNTIME_DIR", config_home.c_str(), 1);
+      setenv("XDG_STATE_HOME", config_home.c_str(), 1);
       setenv("TZ", "UTC", 1);
       std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
       path += ':';
@@ -236,6 +238,52 @@ struct ShapeBounds {
   if (pid == 0) {
     execlp("notify-send", "notify-send", "--app-name=Files", "--urgency=critical",
            "--expire-time=0", "Download complete", "The archive is ready", nullptr);
+    _exit(127);
+  }
+  if (pid < 0) {
+    return false;
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) {
+      return false;
+    }
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+[[nodiscard]] bool send_history_notification(std::string_view summary) {
+  const pid_t pid = fork();
+  if (pid == 0) {
+    const std::string owned_summary{summary};
+    execlp("notify-send", "notify-send", "--app-name=History", "--urgency=normal",
+           "--expire-time=500", owned_summary.c_str(), "Stored notification", nullptr);
+    _exit(127);
+  }
+  if (pid < 0) {
+    return false;
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) {
+      return false;
+    }
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+[[nodiscard]] bool open_notification_history(const std::filesystem::path &runtime_directory) {
+  const pid_t pid = fork();
+  if (pid == 0) {
+    setenv("XDG_RUNTIME_DIR", runtime_directory.c_str(), 1);
+    setenv("XDG_STATE_HOME", runtime_directory.c_str(), 1);
+    std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
+    path += ':';
+    if (const char *existing_path = std::getenv("PATH"); existing_path != nullptr) {
+      path += existing_path;
+    }
+    setenv("PATH", path.c_str(), 1);
+    execl(GISLAND_NOTIFICATION_HISTORY_PATH, GISLAND_NOTIFICATION_HISTORY_PATH, nullptr);
     _exit(127);
   }
   if (pid < 0) {
@@ -671,7 +719,94 @@ TEST_CASE("application renders a freedesktop notification from the shipped daemo
     const auto shape = input_shape_bounds(display, *window);
     return shape && shape->width >= 360 && shape->height >= 96 && shape->height < 300;
   }));
-  CHECK(read_text(config.application_log()).find("[notifications] layout:") == std::string::npos);
+  const auto application_log = read_text(config.application_log());
+  INFO(application_log);
+  CHECK(application_log.find("[notifications] layout:") == std::string::npos);
+
+  XCloseDisplay(display);
+}
+
+TEST_CASE("external notification history grows on repeated commands and resets after close") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config{false};
+  ChildProcess child{config.home(), config.application_log()};
+
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  }));
+  const auto socket = (config.home() / "gisland.sock").string();
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!status) {
+      return false;
+    }
+    const auto &modules = std::get<gisland::ControlStatus>(status->value()).modules;
+    return std::ranges::any_of(modules, [](const auto &module) {
+      return module.id == "notifications" && module.state == gisland::ControlModuleState::running;
+    });
+  }));
+
+  REQUIRE(send_history_notification("First"));
+  REQUIRE(send_history_notification("Second"));
+  REQUIRE(send_history_notification("Third"));
+  REQUIRE(send_history_notification("Fourth"));
+  REQUIRE(send_history_notification("Fifth"));
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::compact;
+  }));
+
+  std::array<int, 5> heights{};
+  for (std::size_t index = 0; index < heights.size(); ++index) {
+    REQUIRE(open_notification_history(config.home()));
+    REQUIRE(wait_until([&] {
+      const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+      if (!status) {
+        return false;
+      }
+      const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+      return snapshot.mode == gisland::IslandMode::expanded && snapshot.expanded &&
+             snapshot.expanded->instance_id == "notifications" &&
+             snapshot.expanded->context_id == "history";
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds{400});
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    REQUIRE(shape.has_value());
+    heights[index] = shape->height;
+    if (index > 0) {
+      CHECK(heights[index] > heights[index - 1]);
+    }
+  }
+
+  REQUIRE(gisland::send_control_command(socket, gisland::CloseControl{}).has_value());
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!status) {
+      return false;
+    }
+    const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+    return snapshot.mode == gisland::IslandMode::compact && snapshot.expanded &&
+           snapshot.expanded->context_id != "history";
+  }));
+  REQUIRE(open_notification_history(config.home()));
+  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->height == heights[0];
+  }));
+  const auto history_application_log = read_text(config.application_log());
+  INFO(history_application_log);
+  CHECK(history_application_log.find("[notifications] layout:") == std::string::npos);
 
   XCloseDisplay(display);
 }

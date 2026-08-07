@@ -6,6 +6,8 @@ from .model import CloseReason
 BUS_NAME = "org.freedesktop.Notifications"
 OBJECT_PATH = "/org/freedesktop/Notifications"
 INTERFACE_NAME = BUS_NAME
+HISTORY_OBJECT_PATH = "/org/gisland/Notifications/History"
+HISTORY_INTERFACE_NAME = "org.gisland.Notifications.History"
 
 INTROSPECTION_XML = """
 <node>
@@ -45,6 +47,17 @@ INTROSPECTION_XML = """
 </node>
 """
 
+HISTORY_INTROSPECTION_XML = """
+<node>
+  <interface name="org.gisland.Notifications.History">
+    <method name="ShowMore">
+      <arg direction="out" name="visible_count" type="u"/>
+    </method>
+    <method name="ConfirmVisible"/>
+  </interface>
+</node>
+"""
+
 CAPABILITIES = [
     "actions",
     "body",
@@ -75,6 +88,7 @@ class NotificationDBusService:
         self._connection = None
         self._owner_id = 0
         self._registration_id = 0
+        self._history_registration_id = 0
         self._stopping = False
 
     def set_service(self, service) -> None:
@@ -102,6 +116,14 @@ class NotificationDBusService:
         node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
         self._registration_id = connection.register_object(
             OBJECT_PATH, node.interfaces[0], self._method_call, None, None
+        )
+        history_node = Gio.DBusNodeInfo.new_for_xml(HISTORY_INTROSPECTION_XML)
+        self._history_registration_id = connection.register_object(
+            HISTORY_OBJECT_PATH,
+            history_node.interfaces[0],
+            self._history_method_call,
+            None,
+            None,
         )
 
     def _name_acquired(self, _connection, _name) -> None:
@@ -159,6 +181,37 @@ class NotificationDBusService:
         except Exception as error:
             invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", str(error))
 
+    def _history_method_call(
+        self,
+        _connection,
+        _sender,
+        _object_path,
+        _interface_name,
+        method_name,
+        _parameters,
+        invocation,
+    ) -> None:
+        from gi.repository import GLib
+
+        if self._service is None:
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", "service unavailable")
+            return
+        if method_name not in ("ShowMore", "ConfirmVisible"):
+            invocation.return_dbus_error(
+                "org.freedesktop.DBus.Error.UnknownMethod", f"unknown method: {method_name}"
+            )
+            return
+        try:
+            if method_name == "ShowMore":
+                invocation.return_value(GLib.Variant("(u)", (self._service.show_more(),)))
+            else:
+                self._service.history_opened()
+                invocation.return_value(None)
+        except (TypeError, ValueError) as error:
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", str(error))
+        except Exception as error:
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", str(error))
+
     def emit_signal(self, name: str, notification_id: int, value: Any) -> None:
         if self._connection is None:
             return
@@ -172,6 +225,9 @@ class NotificationDBusService:
 
     def stop(self) -> None:
         self._stopping = True
+        if self._connection is not None and self._history_registration_id:
+            self._connection.unregister_object(self._history_registration_id)
+            self._history_registration_id = 0
         if self._connection is not None and self._registration_id:
             self._connection.unregister_object(self._registration_id)
             self._registration_id = 0

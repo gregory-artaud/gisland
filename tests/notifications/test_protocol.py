@@ -40,12 +40,14 @@ class ProtocolControllerTests(unittest.TestCase):
         self.shutdowns = []
         self.failures = []
         self.configurations = []
+        self.visibilities = []
         self.controller = ProtocolController(
             write_record=self.records.append,
             action=lambda action_id: self.actions.append(action_id) or action_id.endswith("close"),
             shutdown=lambda: self.shutdowns.append(True),
             fatal=self.failures.append,
             configure=self.configurations.append,
+            visibility=self.visibilities.append,
         )
 
     @staticmethod
@@ -116,6 +118,20 @@ class ProtocolControllerTests(unittest.TestCase):
         self.controller.handle({"type": "shutdown", "deadline_ms": 1000})
 
         self.assertEqual(self.shutdowns, [True])
+
+    def test_routes_valid_visibility_only_after_ready(self):
+        self.controller.handle({"type": "visibility", "visibility": "hidden"})
+        self.controller.handle(self.init())
+        self.controller.bus_ready()
+
+        for value in ("hidden", "compact-active", "expanded-active"):
+            self.controller.handle({"type": "visibility", "visibility": value})
+        self.controller.handle({"type": "visibility", "visibility": "invalid"})
+
+        self.assertEqual(
+            self.visibilities,
+            ["hidden", "compact-active", "expanded-active"],
+        )
 
 
 if __name__ == "__main__":
