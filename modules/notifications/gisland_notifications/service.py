@@ -29,6 +29,13 @@ class NotificationService:
         self._resolve_inline = resolve_inline
         self._timers: dict[int, Any] = {}
         self._routing: dict[int, dict[str, tuple[str, str]]] = {}
+        self._reveal_duration_ms = 1000
+
+    def configure(self, configuration: dict[str, Any]) -> None:
+        reveal_duration_ms = configuration.get("reveal_duration_ms", 1000)
+        if type(reveal_duration_ms) is not int or not 0 <= reveal_duration_ms <= 60000:
+            raise ValueError("reveal_duration_ms must be an integer between 0 and 60000")
+        self._reveal_duration_ms = reveal_duration_ms
 
     def notify(
         self,
@@ -64,7 +71,10 @@ class NotificationService:
                 inline_resources[resource_id] = encode_resource(resource_id, image)
 
         publication, routing = build_publication(
-            notification, app_resource=app_resource, inline_resources=inline_resources
+            notification,
+            reveal_duration_ms=self._reveal_duration_ms,
+            app_resource=app_resource,
+            inline_resources=inline_resources,
         )
         self._write_record(publication)
         if replacing is not None:

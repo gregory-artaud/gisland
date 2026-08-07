@@ -157,6 +157,8 @@ TEST_CASE(
   CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
   CHECK(bootstrap->config.modules[1].module_id == "notifications");
   CHECK(bootstrap->config.modules[1].command.front() == "gisland-notifications");
+  CHECK(std::get<std::int64_t>(
+            bootstrap->config.modules[1].options.at("reveal_duration_ms").value) == 1000);
   REQUIRE(bootstrap->manifest_paths.size() == 2);
   CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
   const auto *clock_view =

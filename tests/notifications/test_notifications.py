@@ -130,6 +130,7 @@ class SceneTests(unittest.TestCase):
         )
         publication, routing = build_publication(
             notification,
+            reveal_duration_ms=2500,
             app_resource={
                 "id": "app-image",
                 "format": "rgba8",
@@ -145,7 +146,7 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(set(publication["views"]), {"expanded"})
         self.assertEqual(publication["views"]["expanded"]["type"], "action_region")
         self.assertEqual(
-            publication["presentation"], {"reveal": "expanded", "duration_ms": 1000}
+            publication["presentation"], {"reveal": "expanded", "duration_ms": 2500}
         )
         prefix = f"notification-{notification.id}:"
         self.assertEqual(publication["views"]["expanded"]["action_id"], prefix + "default")
@@ -157,9 +158,10 @@ class SceneTests(unittest.TestCase):
         store = NotificationStore()
         notification = store.create("", "", "body", (), {}, 0)
 
-        publication, routing = build_publication(notification)
+        publication, routing = build_publication(notification, reveal_duration_ms=0)
 
         self.assertNotIn("compact", publication["views"])
+        self.assertNotIn("presentation", publication)
         self.assertEqual(publication["views"]["expanded"]["type"], "column")
         prefix = f"notification-{notification.id}:"
         self.assertNotIn(prefix + "default", routing)

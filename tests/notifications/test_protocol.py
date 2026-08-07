@@ -39,11 +39,13 @@ class ProtocolControllerTests(unittest.TestCase):
         self.actions = []
         self.shutdowns = []
         self.failures = []
+        self.configurations = []
         self.controller = ProtocolController(
             write_record=self.records.append,
             action=lambda action_id: self.actions.append(action_id) or action_id.endswith("close"),
             shutdown=lambda: self.shutdowns.append(True),
             fatal=self.failures.append,
+            configure=self.configurations.append,
         )
 
     @staticmethod
@@ -65,8 +67,11 @@ class ProtocolControllerTests(unittest.TestCase):
         }
 
     def test_sends_ready_only_after_init_and_bus_ownership(self):
-        self.controller.handle(self.init())
+        message = self.init()
+        message["configuration"] = {"reveal_duration_ms": 2500}
+        self.controller.handle(message)
         self.assertEqual(self.records, [])
+        self.assertEqual(self.configurations, [{"reveal_duration_ms": 2500}])
 
         self.controller.bus_ready()
 

@@ -17,7 +17,7 @@ def init_message():
         },
         "instance_id": "notifications",
         "capabilities": ["context-images", "rich-content", "independent-views"],
-        "configuration": {},
+        "configuration": {"reveal_duration_ms": 2500},
         "locale": "C",
         "timezone": "UTC",
     }
@@ -147,7 +147,7 @@ class NotificationDBusProcessTests(unittest.TestCase):
         self.assertEqual(publication["priority"], 20)
         self.assertEqual(set(publication["views"]), {"expanded"})
         self.assertEqual(
-            publication["presentation"], {"reveal": "expanded", "duration_ms": 1000}
+            publication["presentation"], {"reveal": "expanded", "duration_ms": 2500}
         )
 
         proxy.call_sync(

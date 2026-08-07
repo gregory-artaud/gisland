@@ -48,11 +48,13 @@ class ProtocolController:
         action: Callable[[str], bool],
         shutdown: Callable[[], None],
         fatal: Callable[[str], None],
+        configure: Callable[[dict[str, Any]], None],
     ):
         self._write_record = write_record
         self._action = action
         self._shutdown = shutdown
         self._fatal = fatal
+        self._configure = configure
         self._initialized = False
         self._bus_ready = False
         self._ready_sent = False
@@ -93,6 +95,15 @@ class ProtocolController:
             capabilities = record.get("capabilities")
             if not isinstance(capabilities, list) or not set(CAPABILITIES).issubset(capabilities):
                 self._fatal("core does not offer notification capabilities")
+                return
+            configuration = record.get("configuration")
+            if not isinstance(configuration, dict):
+                self._fatal("configuration must be an object")
+                return
+            try:
+                self._configure(configuration)
+            except ValueError as error:
+                self._fatal(str(error))
                 return
             self._initialized = True
             self._maybe_ready()

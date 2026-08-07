@@ -35,6 +35,7 @@ class Application:
             action=self._service.action,
             shutdown=self.stop,
             fatal=self._fatal,
+            configure=self._service.configure,
         )
         self._transport = JsonlTransport(self._controller.handle, self.stop)
 

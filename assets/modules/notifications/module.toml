@@ -7,3 +7,9 @@ command = ["gisland-notifications"]
 major = 1
 minimum_minor = 4
 maximum_minor = 4
+
+[defaults]
+reveal_duration_ms = 1000
+
+[options_schema.reveal_duration_ms]
+type = "integer"

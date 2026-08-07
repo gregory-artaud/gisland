@@ -10,6 +10,7 @@ def _text(value: str, role: str) -> dict[str, Any]:
 
 def build_publication(
     notification: Notification,
+    reveal_duration_ms: int = 1000,
     app_resource: dict[str, Any] | None = None,
     inline_resources: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, tuple[str, str]]]:
@@ -118,8 +119,12 @@ def build_publication(
         "context_id": notification.context_id,
         "priority": notification.priority,
         "views": {"expanded": expanded},
-        "presentation": {"reveal": "expanded", "duration_ms": 1000},
     }
+    if reveal_duration_ms > 0:
+        publication["presentation"] = {
+            "reveal": "expanded",
+            "duration_ms": reveal_duration_ms,
+        }
     if resources:
         publication["resources"] = resources
     return publication, routing

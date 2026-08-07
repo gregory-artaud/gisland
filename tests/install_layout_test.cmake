@@ -47,6 +47,12 @@ string(FIND "${notification_manifest}" "maximum_minor = 4" notification_maximum_
 if(notification_minimum_position EQUAL -1 OR notification_maximum_position EQUAL -1)
   message(FATAL_ERROR "installed notification manifest has the wrong protocol: ${notification_manifest}")
 endif()
+string(FIND "${notification_manifest}" "reveal_duration_ms = 1000" notification_default_position)
+string(FIND "${notification_manifest}" "[options_schema.reveal_duration_ms]"
+       notification_schema_position)
+if(notification_default_position EQUAL -1 OR notification_schema_position EQUAL -1)
+  message(FATAL_ERROR "installed notification manifest lacks reveal duration configuration: ${notification_manifest}")
+endif()
 
 file(READ "${root}/${BINDIR}/gisland-notifications" notification_executable)
 string(FIND "${notification_executable}" "main(\"1.0.0\")" notification_version_position)

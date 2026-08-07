@@ -46,6 +46,22 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertEqual([timeout for timeout, _ in self.scheduled], [1000, 1000])
         self.assertEqual(self.cancelled, [1])
 
+    def test_configures_the_generic_reveal_intent(self):
+        self.service.configure({"reveal_duration_ms": 2500})
+
+        self.notify()
+
+        self.assertEqual(
+            self.records[-1]["presentation"],
+            {"reveal": "expanded", "duration_ms": 2500},
+        )
+
+    def test_rejects_invalid_reveal_durations(self):
+        for value in (-1, 60001, True, 1.5, "1000"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "reveal_duration_ms"):
+                    self.service.configure({"reveal_duration_ms": value})
+
     def test_failed_replacement_preserves_live_notification_and_timer(self):
         notification_id = self.notify()
         original = self.service.store.get(notification_id)
