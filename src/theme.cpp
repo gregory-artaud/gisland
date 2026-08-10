@@ -476,6 +476,64 @@ parse_theme_color(const toml::node *node, const std::string &path, std::string_v
   return ButtonStyle{std::move(*background), std::move(*disabled), std::move(*hover)};
 }
 
+[[nodiscard]] std::expected<ProgressStyle, ThemeError>
+parse_progress(const toml::table &root, std::string_view source_name) {
+  const auto *node = root.get("progress");
+  if (node == nullptr) {
+    return ProgressStyle{32.0, 4.0, 48.0, std::string{"muted"}, 0.25};
+  }
+  const auto *table = node->as_table();
+  if (table == nullptr) {
+    return std::unexpected(error_at(source_name, "progress", "expected a table", node));
+  }
+  auto keys = reject_unknown(
+      *table, {"ring_diameter", "ring_thickness", "compact_height", "track", "ring_track_opacity"},
+      "progress", source_name);
+  if (!keys) {
+    return std::unexpected(keys.error());
+  }
+  auto diameter = number_value(table->get("ring_diameter"), "progress.ring_diameter", source_name,
+                               1.0, maximum_pixels);
+  auto thickness = number_value(table->get("ring_thickness"), "progress.ring_thickness",
+                                source_name, 1.0, maximum_pixels);
+  auto compact_height = number_value(table->get("compact_height"), "progress.compact_height",
+                                     source_name, 1.0, maximum_pixels);
+  auto track = parse_theme_color(table->get("track"), "progress.track", source_name);
+  std::optional<double> ring_track_opacity;
+  if (table->get("ring_track_opacity") != nullptr) {
+    auto opacity = number_value(table->get("ring_track_opacity"), "progress.ring_track_opacity",
+                                source_name, 0.0, 1.0);
+    if (!opacity) {
+      return std::unexpected(opacity.error());
+    }
+    ring_track_opacity = *opacity;
+  }
+  if (!diameter) {
+    return std::unexpected(diameter.error());
+  }
+  if (!thickness) {
+    return std::unexpected(thickness.error());
+  }
+  if (!compact_height) {
+    return std::unexpected(compact_height.error());
+  }
+  if (!track) {
+    return std::unexpected(track.error());
+  }
+  if ((*thickness * 2.0) > *diameter) {
+    return std::unexpected(error_at(source_name, "progress.ring_thickness",
+                                    "ring thickness must not exceed its radius",
+                                    table->get("ring_thickness")));
+  }
+  if (*compact_height < *diameter) {
+    return std::unexpected(error_at(source_name, "progress.compact_height",
+                                    "compact height must contain the ring diameter",
+                                    table->get("compact_height")));
+  }
+  return ProgressStyle{*diameter, *thickness, *compact_height, std::move(*track),
+                       ring_track_opacity};
+}
+
 [[nodiscard]] std::expected<ShadowStyle, ThemeError> parse_shadow(const toml::table &root,
                                                                   std::string_view source_name) {
   auto table = required_table(root, "shadow", "shadow", source_name);
@@ -786,8 +844,8 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
 [[nodiscard]] std::expected<void, ThemeError>
 validate_references(const Theme::Typography &typography, const Theme::Icons &icons,
                     const Theme::FontResources &fonts, const Theme::Palette &palette,
-                    const ButtonStyle &buttons, const ShadowStyle &shadow,
-                    std::string_view source_name) {
+                    const ButtonStyle &buttons, const ProgressStyle &progress,
+                    const ShadowStyle &shadow, std::string_view source_name) {
   for (const auto &[role, style] : typography) {
     if (!fonts.contains(style.font)) {
       return std::unexpected(error_at(source_name, "typography." + role + ".font",
@@ -818,25 +876,30 @@ validate_references(const Theme::Typography &typography, const Theme::Icons &ico
       return std::unexpected(error_at(source_name, path, "referenced palette role does not exist"));
     }
   }
+  if (const auto *role = std::get_if<std::string>(&progress.track);
+      role != nullptr && !palette.contains(*role)) {
+    return std::unexpected(
+        error_at(source_name, "progress.track", "referenced palette role does not exist"));
+  }
   return {};
 }
 
 } // namespace
 
 Theme::Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-             ThemeViews views, ButtonStyle buttons, ShadowStyle shadow, AnimationStyle animation,
-             FontResources fonts, Icons icons, ImageRoles images)
+             ThemeViews views, ButtonStyle buttons, ProgressStyle progress, ShadowStyle shadow,
+             AnimationStyle animation, FontResources fonts, Icons icons, ImageRoles images)
     : palette_(std::move(palette)), typography_(std::move(typography)), gaps_(std::move(gaps)),
       spacers_(std::move(spacers)), views_(views), buttons_(std::move(buttons)),
-      shadow_(std::move(shadow)), animation_(animation), fonts_(std::move(fonts)),
-      icons_(std::move(icons)), images_(std::move(images)) {}
+      progress_(std::move(progress)), shadow_(std::move(shadow)), animation_(animation),
+      fonts_(std::move(fonts)), icons_(std::move(icons)), images_(std::move(images)) {}
 
 std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_view source_name) {
   try {
     const auto root = toml::parse(text, source_name);
     auto keys = reject_unknown(root,
                                {"palette", "typography", "gaps", "spacers", "view", "buttons",
-                                "shadow", "animation", "fonts", "icons", "images"},
+                                "progress", "shadow", "animation", "fonts", "icons", "images"},
                                "", source_name);
     if (!keys) {
       return std::unexpected(keys.error());
@@ -849,6 +912,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     auto spacers = parse_pixel_tokens(root, "spacers", source_name);
     auto views = parse_views(root, source_name);
     auto buttons = parse_buttons(root, source_name);
+    auto progress = parse_progress(root, source_name);
     auto shadow = parse_shadow(root, source_name);
     auto animation = parse_animation(root, source_name);
     auto icons = parse_icons(root, source_name);
@@ -874,6 +938,9 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!buttons) {
       return std::unexpected(buttons.error());
     }
+    if (!progress) {
+      return std::unexpected(progress.error());
+    }
     if (!shadow) {
       return std::unexpected(shadow.error());
     }
@@ -886,8 +953,8 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!images) {
       return std::unexpected(images.error());
     }
-    auto references =
-        validate_references(*typography, *icons, *fonts, *palette, *buttons, *shadow, source_name);
+    auto references = validate_references(*typography, *icons, *fonts, *palette, *buttons,
+                                          *progress, *shadow, source_name);
     if (!references) {
       return std::unexpected(references.error());
     }
@@ -897,6 +964,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
                  std::move(*spacers),
                  *views,
                  std::move(*buttons),
+                 std::move(*progress),
                  std::move(*shadow),
                  *animation,
                  std::move(*fonts),

@@ -17,11 +17,14 @@ set(required_files
     "${root}/${BINDIR}/gisland-clock-calendar"
     "${root}/${BINDIR}/gisland-notifications"
     "${root}/${BINDIR}/gisland-notification-history"
+    "${root}/${BINDIR}/gisland-battery"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
     "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
+    "${root}/${DATADIR}/gisland/battery/gisland_battery/application.py"
     "${root}/${DATADIR}/systemd/user/gisland.service")
 foreach(required_file IN LISTS required_files)
   if(NOT EXISTS "${required_file}")

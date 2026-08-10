@@ -44,6 +44,22 @@ TEST_CASE("higher-priority temporary context wins") {
   CHECK((active->key == gisland::ContextKey{"timer", "done"}));
 }
 
+TEST_CASE("configured contexts remain activation-only outside their default slots") {
+  gisland::ContextArbiter arbiter{"clock", "clock"};
+  auto clock = context("clock", "configured", 0);
+  clock.fallback_only = true;
+  auto battery = context("battery", "configured", 0);
+  battery.fallback_only = true;
+  arbiter.publish(std::move(clock), epoch);
+  arbiter.publish(std::move(battery), epoch + 1ms);
+
+  REQUIRE(arbiter.active(epoch + 2ms) != nullptr);
+  CHECK(arbiter.active(epoch + 2ms)->key.instance_id == "clock");
+  REQUIRE(arbiter.activate("battery", epoch + 3s, epoch + 2ms).has_value());
+  REQUIRE(arbiter.active(epoch + 2ms) != nullptr);
+  CHECK(arbiter.active(epoch + 2ms)->key.instance_id == "battery");
+}
+
 TEST_CASE("newest publication wins equal priority") {
   gisland::ContextArbiter arbiter{{"clock", "default"}};
   publish_default(arbiter);
@@ -164,6 +180,23 @@ TEST_CASE("activation duration and natural expiration restore normal arbitration
   CHECK((arbiter.active(epoch + 19ms)->key == gisland::ContextKey{"music", "playing"}));
   REQUIRE(arbiter.active(epoch + 20ms) != nullptr);
   CHECK((arbiter.active(epoch + 20ms)->key == gisland::ContextKey{"timer", "urgent"}));
+}
+
+TEST_CASE("held activation remains selected past its deadline and expires immediately on release") {
+  gisland::ContextArbiter arbiter{{"clock", "default"}};
+  publish_default(arbiter);
+  auto battery = context("battery", "configured", 0);
+  battery.fallback_only = true;
+  arbiter.publish(std::move(battery), epoch);
+
+  REQUIRE(arbiter.activate("battery", epoch + 3s, epoch).has_value());
+  arbiter.set_activation_held(true);
+  REQUIRE(arbiter.active(epoch + 4s) != nullptr);
+  CHECK((arbiter.active(epoch + 4s)->key == gisland::ContextKey{"battery", "configured"}));
+
+  arbiter.set_activation_held(false);
+  REQUIRE(arbiter.active(epoch + 4s) != nullptr);
+  CHECK((arbiter.active(epoch + 4s)->key == gisland::ContextKey{"clock", "default"}));
 }
 
 TEST_CASE("activation follows same-key updates and clears on dismissal or owner removal") {

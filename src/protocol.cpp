@@ -341,6 +341,7 @@ parse_emphasis(const Json &object, const std::string &path) {
   auto value = required_number(object, "value", path);
   auto label = optional_string(object, "label", "", path);
   auto state = optional_string(object, "state", "normal", path);
+  auto shape = optional_string(object, "shape", "linear", path);
   if (!value.has_value()) {
     return std::unexpected(value.error());
   }
@@ -350,7 +351,18 @@ parse_emphasis(const Json &object, const std::string &path) {
   if (!state.has_value()) {
     return std::unexpected(state.error());
   }
-  return SceneNode{Progress{*value, std::move(*label), std::move(*state)}};
+  if (!shape.has_value()) {
+    return std::unexpected(shape.error());
+  }
+  ProgressShape progress_shape{};
+  if (*shape == "linear") {
+    progress_shape = ProgressShape::linear;
+  } else if (*shape == "ring") {
+    progress_shape = ProgressShape::ring;
+  } else {
+    return std::unexpected(error_at(path + "/shape", "unsupported progress shape"));
+  }
+  return SceneNode{Progress{*value, std::move(*label), std::move(*state), progress_shape}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_row(const Json &object,

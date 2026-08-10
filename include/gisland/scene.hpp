@@ -80,10 +80,13 @@ struct Spacer {
   std::string size_token;
 };
 
+enum class ProgressShape { linear, ring };
+
 struct Progress {
   double value{};
   std::string label;
   std::string state;
+  ProgressShape shape{ProgressShape::linear};
 };
 
 struct Row {

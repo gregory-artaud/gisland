@@ -119,7 +119,8 @@ bool equal_template(const SceneTemplate &left, const SceneTemplate &right) {
         } else if constexpr (std::is_same_v<Value, TemplateProgress>) {
           return equal_template_value(left_value.value, right_value.value) &&
                  equal_template_value(left_value.label, right_value.label) &&
-                 equal_template_value(left_value.state, right_value.state);
+                 equal_template_value(left_value.state, right_value.state) &&
+                 equal_template_value(left_value.shape, right_value.shape);
         } else {
           return equal_template_pointer(left_value.content, right_value.content) &&
                  left_value.action_id == right_value.action_id &&

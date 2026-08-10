@@ -125,6 +125,15 @@ struct ProgressDrawCommand {
   Rgba fill_color;
 };
 
+struct RingProgressDrawCommand {
+  Rect bounds;
+  Rect clip;
+  double value;
+  int thickness;
+  Rgba track_color;
+  Rgba fill_color;
+};
+
 struct ButtonDecorationDrawCommand {
   Rect bounds;
   Rect clip;
@@ -134,7 +143,7 @@ struct ButtonDecorationDrawCommand {
 
 using ContentDrawCommand =
     std::variant<TextDrawCommand, RichTextDrawCommand, IconDrawCommand, ImageDrawCommand,
-                 ProgressDrawCommand, ButtonDecorationDrawCommand>;
+                 ProgressDrawCommand, RingProgressDrawCommand, ButtonDecorationDrawCommand>;
 
 enum class InteractionKind { button, link, action_region };
 

@@ -39,6 +39,7 @@ struct TemplateProgress {
   TemplateValue<double> value;
   TemplateValue<std::string> label{std::string{}};
   TemplateValue<std::string> state{std::string{}};
+  TemplateValue<std::string> shape{std::string{"linear"}};
 };
 
 struct SceneTemplate;

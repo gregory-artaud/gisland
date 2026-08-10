@@ -189,6 +189,11 @@ configure_file(
   "${PROJECT_BINARY_DIR}/install/notifications.module.toml"
   @ONLY
 )
+configure_file(
+  packaging/battery.module.toml.in
+  "${PROJECT_BINARY_DIR}/install/battery.module.toml"
+  @ONLY
+)
 set(GISLAND_NOTIFICATION_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/notifications")
 configure_file(
   packaging/gisland-notifications.in
@@ -208,6 +213,16 @@ file(
   CHMOD "${PROJECT_BINARY_DIR}/gisland-notification-history"
   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
 )
+set(GISLAND_BATTERY_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/battery")
+configure_file(
+  packaging/gisland-battery.in
+  "${PROJECT_BINARY_DIR}/gisland-battery"
+  @ONLY
+)
+file(
+  CHMOD "${PROJECT_BINARY_DIR}/gisland-battery"
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
 set(
   GISLAND_NOTIFICATION_PYTHON_ROOT
   "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
@@ -220,6 +235,12 @@ configure_file(
 configure_file(
   packaging/gisland-notification-history.in
   "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
+  @ONLY
+)
+set(GISLAND_BATTERY_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/battery")
+configure_file(
+  packaging/gisland-battery.in
+  "${PROJECT_BINARY_DIR}/install/gisland-battery"
   @ONLY
 )
 configure_file(
@@ -244,14 +265,25 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
 )
 install(
+  FILES "${PROJECT_BINARY_DIR}/install/battery.module.toml"
+  RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/battery"
+)
+install(
   PROGRAMS
     "${PROJECT_BINARY_DIR}/install/gisland-notifications"
     "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
+    "${PROJECT_BINARY_DIR}/install/gisland-battery"
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(
   DIRECTORY modules/notifications/gisland_notifications
   DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/notifications"
+  PATTERN "__pycache__" EXCLUDE
+)
+install(
+  DIRECTORY modules/battery/gisland_battery
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/battery"
   PATTERN "__pycache__" EXCLUDE
 )
 install(
@@ -266,6 +298,14 @@ if(BUILD_TESTING)
       dbus-run-session -- env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/notifications"
       "${Python3_EXECUTABLE}" -m unittest discover -s
       "${PROJECT_SOURCE_DIR}/tests/notifications" -p "test_*.py" -v
+  )
+  add_test(
+    NAME battery_python
+    COMMAND
+      env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/battery"
+      "GISLAND_BATTERY_PATH=${PROJECT_BINARY_DIR}/gisland-battery"
+      "${Python3_EXECUTABLE}" -m unittest discover -s
+      "${PROJECT_SOURCE_DIR}/tests/battery" -p "test_*.py" -v
   )
   add_test(
     NAME install_local_script

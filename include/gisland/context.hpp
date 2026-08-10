@@ -41,6 +41,7 @@ struct PublishedContext {
   std::vector<ImageResource> resources{};
   std::optional<PresentationIntent> presentation{};
   std::uint64_t revision{};
+  bool fallback_only{};
 };
 
 enum class ContextActivationError { unavailable_instance };
@@ -57,6 +58,7 @@ public:
   void set_defaults(std::string compact_default, std::string expanded_default);
   [[nodiscard]] std::expected<ContextKey, ContextActivationError>
   activate(std::string_view instance_id, std::optional<MonotonicTime> deadline, MonotonicTime now);
+  void set_activation_held(bool held);
   [[nodiscard]] bool dismiss_active(std::string_view context_id, MonotonicTime now);
   [[nodiscard]] bool available(std::string_view instance_id, MonotonicTime now);
   [[nodiscard]] const PublishedContext *find(const ContextKey &key, MonotonicTime now);
@@ -84,6 +86,7 @@ private:
   std::uint64_t sequence_{0};
   std::map<ContextKey, Entry> contexts_;
   std::optional<Activation> activation_;
+  bool activation_held_{};
 };
 
 } // namespace gisland

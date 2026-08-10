@@ -159,6 +159,19 @@ template <typename Draw> [[nodiscard]] Image render_image(Draw &&draw) {
   return count;
 }
 
+[[nodiscard]] int partially_covered_pixels(const Image &image, gisland::Rect area) {
+  int count = 0;
+  for (int y = area.y; y < area.y + area.height; ++y) {
+    for (int x = area.x; x < area.x + area.width; ++x) {
+      const auto alpha = GetImageColor(image, x, y).a;
+      if (alpha > 0 && alpha < 255) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
 } // namespace
 
 TEST_CASE_METHOD(HiddenWindow, "font book loads pinned glyphs and measures UTF-8") {
@@ -357,6 +370,30 @@ TEST_CASE_METHOD(HiddenWindow, "painter composites a translucent button hover ov
   CHECK(std::abs(static_cast<int>(actual.g) - blended(background.g)) <= 1);
   CHECK(std::abs(static_cast<int>(actual.b) - blended(background.b)) <= 1);
   CHECK(actual.a > 200);
+  UnloadImage(rendered);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "painter renders ring progress clockwise over its track") {
+  auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  const gisland::LayoutPlan plan{
+      {},
+      {gisland::RingProgressDrawCommand{{16, 16, 32, 32},
+                                        {16, 16, 32, 32},
+                                        0.25,
+                                        4,
+                                        gisland::Rgba{64, 80, 96, 255},
+                                        gisland::Rgba{32, 192, 96, 255}}},
+      {}};
+
+  Image rendered = render_image([&] { REQUIRE(painter.draw_content(plan).has_value()); });
+
+  CHECK(same_color(GetImageColor(rendered, 32, 18), gisland::Rgba{32, 192, 96, 255}));
+  const auto end_cap = GetImageColor(rendered, 46, 32);
+  CHECK(same_color(end_cap, gisland::Rgba{32, 192, 96, 255}));
+  CHECK(same_color(GetImageColor(rendered, 32, 46), gisland::Rgba{64, 80, 96, 255}));
+  CHECK(partially_covered_pixels(rendered, gisland::Rect{15, 15, 34, 34}) > 0);
   UnloadImage(rendered);
 }
 

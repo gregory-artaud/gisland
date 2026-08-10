@@ -56,6 +56,61 @@ struct PreparedImageKey {
   return Color{value.red, value.green, value.blue, value.alpha};
 }
 
+void ring_vertex(Vector2 center, float angle, float radius, Color tint, unsigned char alpha) {
+  const auto blended_alpha = static_cast<unsigned char>(
+      (static_cast<unsigned int>(tint.a) * static_cast<unsigned int>(alpha)) / 255U);
+  rlColor4ub(tint.r, tint.g, tint.b, blended_alpha);
+  rlVertex2f(center.x + (std::cos(angle * DEG2RAD) * radius),
+             center.y + (std::sin(angle * DEG2RAD) * radius));
+}
+
+void draw_antialiased_ring(Vector2 center, float inner_radius, float outer_radius,
+                           float start_angle, float end_angle, Color tint) {
+  constexpr float feather = 1.0F;
+  constexpr float degrees_per_segment = 4.0F;
+  const float sweep = end_angle - start_angle;
+  const int segments = std::max(1, static_cast<int>(std::ceil(sweep / degrees_per_segment)));
+  const float step = sweep / static_cast<float>(segments);
+  const std::array radii{inner_radius - feather, inner_radius, outer_radius,
+                         outer_radius + feather};
+  constexpr std::array<unsigned char, 4> alphas{0, 255, 255, 0};
+
+  rlSetTexture(0);
+  rlBegin(RL_QUADS);
+  for (int segment = 0; segment < segments; ++segment) {
+    const float angle = start_angle + (static_cast<float>(segment) * step);
+    const float next_angle = angle + step;
+    for (std::size_t band = 0; band + 1 < radii.size(); ++band) {
+      ring_vertex(center, angle, radii[band + 1], tint, alphas[band + 1]);
+      ring_vertex(center, angle, radii[band], tint, alphas[band]);
+      ring_vertex(center, next_angle, radii[band], tint, alphas[band]);
+      ring_vertex(center, next_angle, radii[band + 1], tint, alphas[band + 1]);
+    }
+  }
+  rlEnd();
+}
+
+void draw_antialiased_cap(Vector2 center, float radius, Color tint) {
+  constexpr float feather = 1.0F;
+  constexpr int segments = 24;
+  const float core_radius = radius;
+  const float outer_radius = radius + feather;
+  const float step = 360.0F / static_cast<float>(segments);
+
+  DrawCircleV(center, core_radius, tint);
+  rlSetTexture(0);
+  rlBegin(RL_QUADS);
+  for (int segment = 0; segment < segments; ++segment) {
+    const float angle = static_cast<float>(segment) * step;
+    const float next_angle = angle + step;
+    ring_vertex(center, angle, outer_radius, tint, 0);
+    ring_vertex(center, angle, core_radius, tint, 255);
+    ring_vertex(center, next_angle, core_radius, tint, 255);
+    ring_vertex(center, next_angle, outer_radius, tint, 0);
+  }
+  rlEnd();
+}
+
 [[nodiscard]] std::expected<Rect, RendererError>
 checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height) {
   constexpr auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
@@ -853,6 +908,37 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
             if (command.fill.width > 0 && command.fill.height > 0) {
               DrawRectangleRounded(rectangle(*rendered_fill), 1.0F, 16, color(command.fill_color));
             }
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
+                                              RingProgressDrawCommand>) {
+            const Scissor scissor{*rendered_clip};
+            const Vector2 center{static_cast<float>(rendered_bounds->x) +
+                                     (static_cast<float>(rendered_bounds->width) / 2.0F),
+                                 static_cast<float>(rendered_bounds->y) +
+                                     (static_cast<float>(rendered_bounds->height) / 2.0F)};
+            const float outer_radius =
+                static_cast<float>(std::min(rendered_bounds->width, rendered_bounds->height)) /
+                2.0F;
+            const float thickness = static_cast<float>(command.thickness);
+            const float inner_radius = outer_radius - thickness;
+            rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE,
+                                      RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+            BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+            draw_antialiased_ring(center, inner_radius, outer_radius, -90.0F, 270.0F,
+                                  color(command.track_color));
+            if (command.value > 0.0) {
+              const float end_angle = -90.0F + static_cast<float>(command.value * 360.0);
+              draw_antialiased_ring(center, inner_radius, outer_radius, -90.0F, end_angle,
+                                    color(command.fill_color));
+              const float middle_radius = inner_radius + (thickness / 2.0F);
+              const auto cap_center = [&](float angle) {
+                return Vector2{center.x + (std::cos(angle * DEG2RAD) * middle_radius),
+                               center.y + (std::sin(angle * DEG2RAD) * middle_radius)};
+              };
+              draw_antialiased_cap(cap_center(-90.0F), thickness / 2.0F, color(command.fill_color));
+              draw_antialiased_cap(cap_center(end_angle), thickness / 2.0F,
+                                   color(command.fill_color));
+            }
+            EndBlendMode();
           } else {
             const Scissor scissor{*rendered_clip};
             DrawRectangleRounded(rectangle(*rendered_bounds), 1.0F, 16, color(command.color));

@@ -49,6 +49,24 @@ struct MeasuredNode {
   std::vector<MeasuredNode> children;
 };
 
+[[nodiscard]] bool contains_ring_progress(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &node) {
+        using Node = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<Node, Progress>) {
+          return node.shape == ProgressShape::ring;
+        } else if constexpr (std::is_same_v<Node, Row> || std::is_same_v<Node, Column>) {
+          return std::any_of(
+              node.children.begin(), node.children.end(),
+              [](const SceneChild &child) { return contains_ring_progress(*child); });
+        } else if constexpr (std::is_same_v<Node, Button> || std::is_same_v<Node, ActionRegion>) {
+          return contains_ring_progress(*node.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
 [[nodiscard]] LayoutError error(LayoutErrorCode code, std::string path, std::string message) {
   return LayoutError{code, std::move(path), std::move(message)};
 }
@@ -517,6 +535,24 @@ private:
     if (color == theme_.palette().end()) {
       return std::unexpected(
           error(LayoutErrorCode::unknown_role, path + "/state", "unknown progress state role"));
+    }
+    if (progress.shape == ProgressShape::ring) {
+      auto diameter = rounded_pixel(theme_.progress().ring_diameter, path);
+      auto thickness = rounded_pixel(theme_.progress().ring_thickness, path);
+      if (!diameter) {
+        return std::unexpected(diameter.error());
+      }
+      if (!thickness) {
+        return std::unexpected(thickness.error());
+      }
+      MeasuredNode result{&scene, path};
+      result.width = *diameter;
+      result.height = *diameter;
+      result.minimum_width = *diameter;
+      result.minimum_height = *diameter;
+      result.track_height = *thickness;
+      result.color = color->second;
+      return result;
     }
     auto role = typography("body", path + "/label");
     if (!role) {
@@ -1085,6 +1121,17 @@ private:
     if (!clipped) {
       return std::unexpected(clipped.error());
     }
+    if (progress.shape == ProgressShape::ring) {
+      auto track_color = resolve_theme_color(theme_, theme_.progress().track);
+      if (const auto opacity = theme_.progress().ring_track_opacity) {
+        track_color = node.color;
+        track_color.alpha = static_cast<std::uint8_t>(
+            std::lround(static_cast<double>(track_color.alpha) * *opacity));
+      }
+      commands.emplace_back(RingProgressDrawCommand{bounds, *clipped, progress.value,
+                                                    node.track_height, track_color, node.color});
+      return {};
+    }
     if (!progress.label.empty()) {
       commands.emplace_back(TextDrawCommand{
           Rect{assigned.x, *y, node.label_width, node.label_height}, *clipped, progress.label,
@@ -1404,6 +1451,18 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
     }
   }
 
+  if (mode == ViewMode::compact && contains_ring_progress(scene)) {
+    auto compact_height = rounded_pixel(theme.progress().compact_height, "progress.compact_height");
+    if (!compact_height) {
+      return std::unexpected(compact_height.error());
+    }
+    const int extra_height = std::max(0, *compact_height - measured->height);
+    *vertical_padding = std::max(*vertical_padding, (extra_height + 1) / 2);
+    *minimum_height = std::max(*minimum_height, *compact_height);
+    *maximum_height = std::max(*maximum_height, *compact_height);
+    *radius = std::max(*radius, *compact_height / 2);
+  }
+
   int leading_inset = *horizontal_padding;
   if (leading_cap != nullptr) {
     auto image_width = rounded_pixel(leading_cap->width, "/children/0/role");
@@ -1483,8 +1542,8 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
   }
   const Rect content_bounds{leading_inset, *vertical_padding, *content_width, *content_height};
   LayoutPlan plan{
-      RoundedView{view_bounds, *radius, *border, theme.palette().at("surface"),
-                  theme.palette().at("muted"),
+      RoundedView{view_bounds, std::min(*radius, std::min(view_width, view_height) / 2), *border,
+                  theme.palette().at("surface"), theme.palette().at("muted"),
                   ViewShadow{*shadow_offset_x, *shadow_offset_y, *shadow_blur, *shadow_spread,
                              resolve_theme_color(theme, theme.shadow().color)}},
       {},

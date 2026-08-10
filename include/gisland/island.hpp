@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gisland/context.hpp"
 #include "gisland/theme.hpp"
 
 #include <chrono>
@@ -132,6 +133,16 @@ struct ContextTransitionVisual {
   float incoming_opacity;
 };
 
+enum class ContextTransitionKind { full_crossfade, aligned_content_crossfade };
+
+[[nodiscard]] ContextTransitionKind
+classify_context_transition(const std::optional<ContextKey> &current_compact,
+                            const std::optional<ContextKey> &current_expanded,
+                            const std::optional<ContextKey> &next_compact,
+                            const std::optional<ContextKey> &next_expanded);
+[[nodiscard]] float context_incoming_opacity(ContextTransitionKind kind,
+                                             const ContextTransitionVisual &visual);
+
 class ContextTransition {
 public:
   void start(IslandGeometry source, IslandGeometry target, std::chrono::milliseconds duration,
@@ -152,6 +163,7 @@ private:
 
 [[nodiscard]] IslandGeometry geometry_for(IslandMode mode);
 [[nodiscard]] IslandCanvasSize island_canvas_size();
+[[nodiscard]] IslandCanvasSize fixed_canvas_for(const Theme &theme);
 [[nodiscard]] IslandPlacement place_at_top_center(const IslandGeometry &geometry,
                                                   const IslandCanvasSize &canvas);
 [[nodiscard]] IslandGeometry interpolate(const IslandGeometry &from, const IslandGeometry &to,

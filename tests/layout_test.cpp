@@ -625,6 +625,35 @@ TEST_CASE("progress emits a measured label and rounded track fill") {
   CHECK(std::holds_alternative<gisland::ProgressDrawCommand>(unlabeled->content.front()));
 }
 
+TEST_CASE("ring progress creates a 48 pixel intrinsic compact capsule") {
+  const auto theme =
+      make_theme_with("padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = "
+                      "100\nmin_height = 20\nmax_height = 50",
+                      "padding_horizontal = 4\npadding_vertical = 4\nradius = 16\nborder = "
+                      "1\nmin_width = 48\nmax_width = 100\nmin_height = 32\nmax_height = 48");
+  const auto result = gisland::layout_scene(
+      gisland::SceneNode{gisland::Progress{0.72, "", "success", gisland::ProgressShape::ring}},
+      theme, gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds.height == 48);
+  CHECK(result->view.radius == 24);
+  REQUIRE(result->content.size() == 1);
+  const auto &ring = command_at<gisland::RingProgressDrawCommand>(*result, 0);
+  CHECK(ring.bounds == gisland::Rect{4, 8, 32, 32});
+  CHECK(ring.value == 0.72);
+  CHECK(ring.thickness == 4);
+  CHECK(ring.fill_color == gisland::Rgba{32, 192, 96, 255});
+  CHECK(ring.track_color == gisland::Rgba{32, 192, 96, 64});
+
+  const auto warning = gisland::layout_scene(
+      gisland::SceneNode{gisland::Progress{0.25, "", "warning", gisland::ProgressShape::ring}},
+      theme, gisland::ViewMode::compact, TestGlyphMetrics{});
+  REQUIRE(warning.has_value());
+  CHECK(command_at<gisland::RingProgressDrawCommand>(*warning, 0).track_color ==
+        gisland::Rgba{240, 160, 32, 64});
+}
+
 TEST_CASE("buttons emit disabled decoration before centered child content") {
   const auto result = gisland::layout_scene(
       gisland::SceneNode{

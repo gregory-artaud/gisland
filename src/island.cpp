@@ -59,6 +59,31 @@ IslandGeometry geometry_for(IslandMode mode) {
 
 IslandCanvasSize island_canvas_size() { return {.width = 440.0F, .height = 232.0F}; }
 
+IslandCanvasSize fixed_canvas_for(const Theme &theme) {
+  const auto rounded = [](double value) { return static_cast<int>(std::lround(value)); };
+  const auto &views = theme.views();
+  const auto &shadow = theme.shadow();
+  const int surface_width = rounded(std::max(views.compact.max_width, views.expanded.max_width));
+  const int surface_height = rounded(std::max(
+      {views.compact.max_height, theme.progress().compact_height, views.expanded.max_height}));
+  const int shadow_radius = rounded(shadow.blur) + rounded(shadow.spread);
+  const int shadow_x = rounded(shadow.offset_x);
+  const int shadow_y = rounded(shadow.offset_y);
+  const bool has_shadow = resolve_theme_color(theme, shadow.color).alpha != 0;
+  const int left = has_shadow ? std::max(0, shadow_radius - shadow_x) : 0;
+  const int top = has_shadow ? std::max(0, shadow_radius - shadow_y) : 0;
+  const int right = has_shadow ? std::max(0, shadow_radius + shadow_x) : 0;
+  const int bottom = has_shadow ? std::max(0, shadow_radius + shadow_y) : 0;
+  return {
+      .width = static_cast<float>(left + surface_width + right),
+      .height = static_cast<float>(top + surface_height + bottom),
+      .surface_x = static_cast<float>(left),
+      .surface_y = static_cast<float>(top),
+      .surface_width = static_cast<float>(surface_width),
+      .surface_height = static_cast<float>(surface_height),
+  };
+}
+
 IslandPlacement place_at_top_center(const IslandGeometry &geometry,
                                     const IslandCanvasSize &canvas) {
   const float surface_width = canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
@@ -152,6 +177,19 @@ void ContextTransition::start(IslandGeometry source, IslandGeometry target,
   easing_ = easing;
   active_ = duration_seconds_ > 0.0F;
   progress_ = active_ ? 0.0F : 1.0F;
+}
+
+ContextTransitionKind classify_context_transition(const std::optional<ContextKey> &current_compact,
+                                                  const std::optional<ContextKey> &current_expanded,
+                                                  const std::optional<ContextKey> &next_compact,
+                                                  const std::optional<ContextKey> &next_expanded) {
+  return current_compact == next_compact && current_expanded == next_expanded
+             ? ContextTransitionKind::aligned_content_crossfade
+             : ContextTransitionKind::full_crossfade;
+}
+
+float context_incoming_opacity(ContextTransitionKind kind, const ContextTransitionVisual &visual) {
+  return kind == ContextTransitionKind::aligned_content_crossfade ? 1.0F : visual.incoming_opacity;
 }
 
 void ContextTransition::update(float delta_seconds) {

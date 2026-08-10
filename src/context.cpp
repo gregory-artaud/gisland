@@ -67,8 +67,9 @@ void ContextArbiter::expire(MonotonicTime now) {
       ++iterator;
     }
   }
-  if (activation_ && ((activation_->deadline && *activation_->deadline <= now) ||
-                      !contexts_.contains(activation_->key))) {
+  if (activation_ &&
+      ((!activation_held_ && activation_->deadline && *activation_->deadline <= now) ||
+       !contexts_.contains(activation_->key))) {
     activation_.reset();
   }
 }
@@ -118,6 +119,8 @@ ContextArbiter::activate(std::string_view instance_id, std::optional<MonotonicTi
   return best->context.key;
 }
 
+void ContextArbiter::set_activation_held(bool held) { activation_held_ = held; }
+
 bool ContextArbiter::dismiss_active(std::string_view context_id, MonotonicTime now) {
   const PublishedContext *selected = active(now);
   if (selected == nullptr || selected->key.context_id != context_id) {
@@ -153,7 +156,8 @@ const PublishedContext *ContextArbiter::active(ViewSlot slot, MonotonicTime now)
                                                               : std::string_view{expanded_default_};
   const Entry *temporary_entry = nullptr;
   for (const auto &[key, entry] : contexts_) {
-    if (!contributes(entry.context, slot) || key.instance_id == fallback) {
+    if (!contributes(entry.context, slot) || key.instance_id == fallback ||
+        entry.context.fallback_only) {
       continue;
     }
     if (temporary_entry == nullptr || entry.context.priority > temporary_entry->context.priority ||

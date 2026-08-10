@@ -63,6 +63,9 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
   if (config.maximum_protocol >= ProtocolVersion{1, 4}) {
     capabilities.emplace_back("independent-views");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 5}) {
+    capabilities.emplace_back("ring-progress");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =
@@ -177,6 +180,7 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                   .compact = instantiated.compact,
                   .expanded = instantiated.expanded,
                   .revision = revision_ + 1,
+                  .fallback_only = true,
               },
               event.at);
           ++revision_;
@@ -241,6 +245,8 @@ RuntimeCoordinator::activate(std::string_view instance_id,
   ++revision_;
   return *activated;
 }
+
+void RuntimeCoordinator::set_activation_held(bool held) { arbiter_.set_activation_held(held); }
 
 std::expected<ContextKey, RuntimeError>
 RuntimeCoordinator::dismiss_active(std::string_view context_id, MonotonicTime now) {
@@ -352,6 +358,7 @@ RuntimeCoordinator::prepare_reload(const ReloadPlan &plan) const {
                 .compact = views->compact,
                 .expanded = views->expanded,
                 .revision = prepared.revision,
+                .fallback_only = true,
             },
             MonotonicTime{});
       } else {

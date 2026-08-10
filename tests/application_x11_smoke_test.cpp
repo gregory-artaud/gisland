@@ -206,6 +206,21 @@ struct ShapeBounds {
   int height;
 };
 
+struct WindowPosition {
+  int x;
+  int y;
+};
+
+[[nodiscard]] std::optional<WindowPosition> root_position(Display *display, Window window) {
+  Window child = None;
+  WindowPosition position{};
+  if (XTranslateCoordinates(display, window, DefaultRootWindow(display), 0, 0, &position.x,
+                            &position.y, &child) == 0) {
+    return std::nullopt;
+  }
+  return position;
+}
+
 [[nodiscard]] std::optional<ShapeBounds> input_shape_bounds(Display *display, Window window) {
   int rectangle_count = 0;
   int ordering = 0;
@@ -308,10 +323,10 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(display != nullptr);
   TemporaryConfig config;
   ChildProcess child{config.home(), config.application_log()};
-  constexpr int canvas_x = 442;
+  constexpr int canvas_x = 406;
   constexpr int canvas_y = -4;
-  constexpr int canvas_width = 396;
-  constexpr int canvas_height = 132;
+  constexpr int canvas_width = 468;
+  constexpr int canvas_height = 380;
   constexpr int surface_x = 18;
   constexpr int surface_y = 12;
 
@@ -326,27 +341,31 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   CHECK(attributes.map_state != IsViewable);
 
+  std::optional<WindowPosition> window_position;
   const bool mapped = wait_until([&] {
     XSync(display, False);
+    window_position = root_position(display, *window);
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
            attributes.map_state == IsViewable && attributes.width == canvas_width &&
-           attributes.height == canvas_height && attributes.x == canvas_x &&
-           attributes.y == canvas_y;
+           attributes.height == canvas_height && window_position &&
+           window_position->x == canvas_x && window_position->y == canvas_y;
   });
-  INFO("native window: " << attributes.x << ',' << attributes.y << ' ' << attributes.width << 'x'
-                         << attributes.height << " state=" << attributes.map_state);
+  INFO("native window: " << (window_position ? window_position->x : -999) << ','
+                         << (window_position ? window_position->y : -999) << ' ' << attributes.width
+                         << 'x' << attributes.height << " state=" << attributes.map_state);
   REQUIRE(mapped);
+  REQUIRE(window_position.has_value());
   CHECK(attributes.width == canvas_width);
   CHECK(attributes.height == canvas_height);
-  CHECK(attributes.x == canvas_x);
-  CHECK(attributes.y == canvas_y);
+  CHECK(window_position->x == canvas_x);
+  CHECK(window_position->y == canvas_y);
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
   XSync(display, False);
   std::optional<ShapeBounds> compact_shape;
   const bool compact = wait_until([&] {
     compact_shape = input_shape_bounds(display, *window);
     return compact_shape && compact_shape->width == 230 && compact_shape->height == 32 &&
-           compact_shape->x == surface_x + 65 && compact_shape->y == surface_y;
+           compact_shape->x == surface_x + 101 && compact_shape->y == surface_y;
   });
   if (compact_shape) {
     INFO("initial shape: " << compact_shape->x << ',' << compact_shape->y << ' '
@@ -410,7 +429,7 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x &&
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x + 36 &&
            shape->y == surface_y;
   }));
   REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
@@ -419,27 +438,30 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 65 &&
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 101 &&
            shape->y == surface_y;
   }));
 
-  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + surface_x + 180,
-                               attributes.y + surface_y + 16, CurrentTime) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                               window_position->x + surface_x + 216,
+                               window_position->y + surface_y + 16, CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x &&
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x + 36 &&
            shape->y == surface_y;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  window_position = root_position(display, *window);
+  REQUIRE(window_position.has_value());
   CHECK(attributes.width == canvas_width);
   CHECK(attributes.height == canvas_height);
-  CHECK(attributes.x == canvas_x);
+  CHECK(window_position->x == canvas_x);
   std::this_thread::sleep_for(std::chrono::milliseconds{800});
 
-  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), attributes.x + surface_x + 48,
-                               attributes.y + surface_y + 48, CurrentTime) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), window_position->x + surface_x + 84,
+                               window_position->y + surface_y + 48, CurrentTime) != 0);
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
   XSync(display, False);
   std::this_thread::sleep_for(std::chrono::milliseconds{50});
@@ -457,14 +479,16 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 65 &&
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 101 &&
            shape->y == surface_y;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  window_position = root_position(display, *window);
+  REQUIRE(window_position.has_value());
   CHECK(attributes.width == canvas_width);
   CHECK(attributes.height == canvas_height);
-  CHECK(attributes.x == canvas_x);
-  CHECK(attributes.y == canvas_y);
+  CHECK(window_position->x == canvas_x);
+  CHECK(window_position->y == canvas_y);
 
   XCloseDisplay(display);
 }
@@ -765,6 +789,9 @@ TEST_CASE("external notification history grows on repeated commands and resets a
            std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::compact;
   }));
 
+  XWindowAttributes initial_attributes{};
+  REQUIRE(XGetWindowAttributes(display, *window, &initial_attributes) != 0);
+
   std::array<int, 5> heights{};
   for (std::size_t index = 0; index < heights.size(); ++index) {
     REQUIRE(open_notification_history(config.home()));
@@ -782,19 +809,23 @@ TEST_CASE("external notification history grows on repeated commands and resets a
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
     REQUIRE(shape.has_value());
+    XWindowAttributes current_attributes{};
+    REQUIRE(XGetWindowAttributes(display, *window, &current_attributes) != 0);
+    CHECK(current_attributes.width == initial_attributes.width);
+    CHECK(current_attributes.height == initial_attributes.height);
     heights[index] = shape->height;
     if (index > 0) {
       CHECK(heights[index] > heights[index - 1]);
     }
   }
 
-  XWindowAttributes attributes{};
-  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   auto shape = input_shape_bounds(display, *window);
   REQUIRE(shape.has_value());
+  auto window_position = root_position(display, *window);
+  REQUIRE(window_position.has_value());
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
-                               attributes.x + shape->x + shape->width / 2,
-                               attributes.y + shape->y + 70, CurrentTime) != 0);
+                               window_position->x + shape->x + shape->width / 2,
+                               window_position->y + shape->y + 70, CurrentTime) != 0);
   XSync(display, False);
   std::this_thread::sleep_for(std::chrono::milliseconds{100});
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
@@ -802,11 +833,25 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   std::this_thread::sleep_for(std::chrono::milliseconds{50});
   REQUIRE(XTestFakeButtonEvent(display, Button1, False, CurrentTime) != 0);
   XSync(display, False);
-  REQUIRE(wait_until([&] {
+  bool saw_intermediate_mask_height = false;
+  int last_mask_height = heights.back();
+  const bool mask_settled = wait_until([&] {
     XSync(display, False);
     const auto masked_shape = input_shape_bounds(display, *window);
-    return masked_shape && masked_shape->height < heights.back();
-  }));
+    if (!masked_shape) {
+      return false;
+    }
+    last_mask_height = masked_shape->height;
+    saw_intermediate_mask_height =
+        saw_intermediate_mask_height ||
+        (masked_shape->height < heights.back() && masked_shape->height > heights[3]);
+    return masked_shape->height == heights[3];
+  });
+  INFO("history heights: " << heights[0] << ", " << heights[1] << ", " << heights[2] << ", "
+                           << heights[3] << ", " << heights[4]);
+  INFO("last masked height: " << last_mask_height);
+  REQUIRE(mask_settled);
+  CHECK(saw_intermediate_mask_height);
 
   REQUIRE(open_notification_history(config.home()));
   std::this_thread::sleep_for(std::chrono::milliseconds{400});
@@ -814,10 +859,11 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   REQUIRE(shape.has_value());
   CHECK(shape->height == heights.back());
 
-  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  window_position = root_position(display, *window);
+  REQUIRE(window_position.has_value());
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
-                               attributes.x + shape->x + shape->width - 28,
-                               attributes.y + shape->y + 28, CurrentTime) != 0);
+                               window_position->x + shape->x + shape->width - 28,
+                               window_position->y + shape->y + 28, CurrentTime) != 0);
   XSync(display, False);
   std::this_thread::sleep_for(std::chrono::milliseconds{100});
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);

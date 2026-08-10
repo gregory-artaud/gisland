@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+import sys
+
+sys.path.insert(0, "@GISLAND_BATTERY_PYTHON_ROOT@")
+
+from gisland_battery.application import main
+
+
+raise SystemExit(main())

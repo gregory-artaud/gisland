@@ -75,12 +75,16 @@ TEST_CASE("scene templates instantiate every scalar primitive strictly") {
       .value = gisland::DataBinding{"progress"},
       .label = std::string{"Loading"},
       .state = std::string{"normal"},
+      .shape = std::string{"ring"},
   }};
   const nlohmann::json snapshot{{"icon", "clock"}, {"flexible", false}, {"progress", 0.5}};
 
   CHECK(gisland::instantiate_template(icon, snapshot).has_value());
   CHECK(gisland::instantiate_template(spacer, snapshot).has_value());
-  CHECK(gisland::instantiate_template(progress, snapshot).has_value());
+  const auto instantiated_progress = gisland::instantiate_template(progress, snapshot);
+  REQUIRE(instantiated_progress.has_value());
+  CHECK(std::get<gisland::Progress>(instantiated_progress->value).shape ==
+        gisland::ProgressShape::ring);
 
   const auto invalid_bool = gisland::instantiate_template(spacer, {{"flexible", "false"}});
   REQUIRE_FALSE(invalid_bool.has_value());

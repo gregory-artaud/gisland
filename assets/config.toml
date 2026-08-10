@@ -51,3 +51,56 @@ id = "notifications"
 module = "notifications"
 enabled = true
 restart = "on-failure"
+
+[[modules]]
+id = "battery"
+module = "battery"
+enabled = true
+restart = "on-failure"
+protocol_min = "1.5"
+protocol_max = "1.5"
+
+[modules.options]
+warning_percent = 20
+persistent_percent = 10
+critical_percent = 5
+yellow_percent = 30
+red_percent = 15
+preview_duration_ms = 3000
+
+[modules.view.compact]
+type = "row"
+gap = "small"
+children = [
+  { type = "progress", shape = "ring", value = { bind = "level" }, state = { bind = "semantic_state" } },
+  { type = "text", value = { bind = "percent_text" }, role = "compact-primary" },
+  { type = "spacer", flexible = true },
+  { type = "text", value = { bind = "estimate_compact" }, role = "compact-secondary" }
+]
+
+[modules.view.expanded]
+type = "column"
+gap = "normal"
+children = [
+  { type = "row", gap = "normal", children = [
+    { type = "progress", shape = "ring", value = { bind = "level" }, state = { bind = "semantic_state" } },
+    { type = "text", value = { bind = "percent_text" }, role = "title" },
+    { type = "spacer", flexible = true },
+    { type = "text", value = { bind = "state_text" }, role = "body" }
+  ] },
+  { type = "row", gap = "small", children = [
+    { type = "text", value = "Autonomie", role = "caption" },
+    { type = "spacer", flexible = true },
+    { type = "text", value = { bind = "estimate_detail" }, role = "body" }
+  ] },
+  { type = "row", gap = "small", children = [
+    { type = "text", value = "Santé", role = "caption" },
+    { type = "spacer", flexible = true },
+    { type = "text", value = { bind = "health_text" }, role = "body" }
+  ] },
+  { type = "row", gap = "small", children = [
+    { type = "text", value = "Puissance", role = "caption" },
+    { type = "spacer", flexible = true },
+    { type = "text", value = { bind = "power_text" }, role = "body" }
+  ] }
+]

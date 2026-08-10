@@ -954,6 +954,12 @@ private:
             ProtocolError{"/capabilities", "independent-views requires protocol version 1.4"}, now);
         return false;
       }
+      if (capability == "ring-progress" && selected < ProtocolVersion{1, 5}) {
+        record_violation(
+            instance, ProtocolError{"/capabilities", "ring-progress requires protocol version 1.5"},
+            now);
+        return false;
+      }
     }
     instance.negotiated_version = selected;
     instance.negotiated_capabilities =

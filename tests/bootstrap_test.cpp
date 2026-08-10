@@ -110,6 +110,7 @@ TEST_CASE("bootstrap loads config and distributed theme before graphical startup
   CHECK(bootstrap->theme.views().compact.min_width == 230.0);
   CHECK(bootstrap->theme.views().compact.min_height == 32.0);
   CHECK(bootstrap->theme.views().compact.max_height == 32.0);
+  CHECK(bootstrap->theme.progress().compact_height == 48.0);
   CHECK(bootstrap->theme.views().compact.border == 0.0);
   CHECK(bootstrap->theme.views().expanded.min_height == 96.0);
   CHECK(bootstrap->theme.views().expanded.border == 0.0);
@@ -149,10 +150,13 @@ TEST_CASE(
   const auto bootstrap = gisland::load_runtime_bootstrap(gisland::RuntimeRoots{
       temporary.path() / "config", temporary.path() / "data", GISLAND_TEST_ASSET_ROOT});
 
+  if (!bootstrap.has_value()) {
+    FAIL(bootstrap.error().path << ": " << bootstrap.error().message);
+  }
   REQUIRE(bootstrap.has_value());
   CHECK(bootstrap->config_path == std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml");
   CHECK(bootstrap->config.default_module == "clock");
-  REQUIRE(bootstrap->config.modules.size() == 2);
+  REQUIRE(bootstrap->config.modules.size() == 3);
   CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
   CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
   CHECK(bootstrap->config.modules[1].module_id == "notifications");
@@ -163,7 +167,11 @@ TEST_CASE(
         100);
   CHECK(std::get<std::int64_t>(
             bootstrap->config.modules[1].options.at("history_visible_limit").value) == 5);
-  REQUIRE(bootstrap->manifest_paths.size() == 2);
+  CHECK(bootstrap->config.modules[2].module_id == "battery");
+  CHECK(bootstrap->config.modules[2].command.front() == "gisland-battery");
+  CHECK(bootstrap->config.modules[2].minimum_protocol == gisland::ProtocolVersion{1, 5});
+  CHECK(bootstrap->config.modules[2].maximum_protocol == gisland::ProtocolVersion{1, 5});
+  REQUIRE(bootstrap->manifest_paths.size() == 3);
   CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
   const auto *clock_view =
       bootstrap->config.modules.front().view ? &*bootstrap->config.modules.front().view : nullptr;
@@ -177,6 +185,13 @@ TEST_CASE(
       std::get<gisland::SceneTemplatePtr>(compact.children[2])->value);
   CHECK(std::get<std::string>(primary.role) == "compact-primary");
   CHECK(std::get<std::string>(secondary.role) == "compact-secondary");
+  REQUIRE(bootstrap->config.modules[2].view.has_value());
+  const auto &battery_compact =
+      std::get<gisland::TemplateRow>(bootstrap->config.modules[2].view->compact.value);
+  REQUIRE(battery_compact.children.size() == 4);
+  const auto &battery_progress = std::get<gisland::TemplateProgress>(
+      std::get<gisland::SceneTemplatePtr>(battery_compact.children.front())->value);
+  CHECK(std::get<std::string>(battery_progress.shape) == "ring");
 }
 
 TEST_CASE("bootstrap reports a missing config without creating graphical state") {

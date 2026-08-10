@@ -1,3 +1,4 @@
+#include "gisland/context.hpp"
 #include "gisland/island.hpp"
 #include "gisland/x11_shape.hpp"
 
@@ -426,6 +427,33 @@ TEST_CASE("context transition crossfades content when geometry is unchanged") {
   transition.update(0.125F);
   CHECK(transition.visual().outgoing_opacity == Approx(0.5F));
   CHECK(transition.visual().incoming_opacity == Approx(0.5F));
+}
+
+TEST_CASE("context transition policy aligns revisions with stable identity") {
+  const std::optional<gisland::ContextKey> clock{gisland::ContextKey{"clock", "configured"}};
+  const std::optional<gisland::ContextKey> history{gisland::ContextKey{"notifications", "history"}};
+
+  CHECK(gisland::classify_context_transition(clock, history, clock, history) ==
+        gisland::ContextTransitionKind::aligned_content_crossfade);
+  CHECK(gisland::classify_context_transition(clock, history, clock, std::nullopt) ==
+        gisland::ContextTransitionKind::full_crossfade);
+  CHECK(gisland::classify_context_transition(clock, std::nullopt, clock, std::nullopt) ==
+        gisland::ContextTransitionKind::aligned_content_crossfade);
+}
+
+TEST_CASE("aligned content transition keeps incoming content fully opaque") {
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry source{360.0F, 272.0F, 24.0F};
+  const gisland::IslandGeometry target{360.0F, 232.0F, 24.0F};
+  transition.start(source, target, 250ms, gisland::Easing::linear);
+  transition.update(0.125F);
+
+  const auto visual = transition.visual();
+  CHECK(visual.outgoing_opacity == Approx(0.5F));
+  CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::aligned_content_crossfade,
+                                          visual) == Approx(1.0F));
+  CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::full_crossfade, visual) ==
+        Approx(0.5F));
 }
 
 TEST_CASE("rounded mask covers the middle and insets its edges") {

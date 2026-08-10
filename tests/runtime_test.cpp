@@ -253,9 +253,10 @@ TEST_CASE("runtime start requests preserve process config and offer snapshot cap
   CHECK(request.process.environment == module.environment);
   CHECK(request.process.working_directory == module.working_directory);
   CHECK(request.init.minimum == gisland::ProtocolVersion{1, 0});
-  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 4});
+  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 5});
   CHECK(request.init.capabilities == std::vector<std::string>{"data-snapshots", "context-images",
-                                                              "rich-content", "independent-views"});
+                                                              "rich-content", "independent-views",
+                                                              "ring-progress"});
   CHECK(request.init.configuration == nlohmann::json{{"format", "24h"}, {"week_start", 1}});
   CHECK(request.init.locale == "fr_FR.UTF-8");
   CHECK(request.init.timezone == "Europe/Paris");
@@ -318,6 +319,10 @@ TEST_CASE("runtime activation overrides global arbitration until its deadline") 
   CHECK((*activated == gisland::ContextKey{"clock", "configured"}));
   REQUIRE(runtime.active(now + 10ms).context != nullptr);
   CHECK(runtime.active(now + 10ms).context->key == gisland::ContextKey{"clock", "configured"});
+  runtime.set_activation_held(true);
+  REQUIRE(runtime.active(now + 11ms).context != nullptr);
+  CHECK(runtime.active(now + 11ms).context->key == gisland::ContextKey{"clock", "configured"});
+  runtime.set_activation_held(false);
   REQUIRE(runtime.active(now + 11ms).context != nullptr);
   CHECK(runtime.active(now + 11ms).context->key == gisland::ContextKey{"status", "alert"});
 }

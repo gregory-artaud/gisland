@@ -3,9 +3,9 @@ surface = "#000000"
 foreground = "#F7F7F8"
 muted = "#8B8B93"
 accent = "#7C5CFC"
-success = "#35C98B"
-warning = "#F5B942"
-error = "#F06464"
+success = "#30D158"
+warning = "#FFD60A"
+error = "#FF453A"
 
 [fonts]
 regular = "fonts/Inter-Regular.ttf"
@@ -137,6 +137,13 @@ min_width = 360
 max_width = 432
 min_height = 96
 max_height = 344
+
+[progress]
+ring_diameter = 32
+ring_thickness = 4
+compact_height = 48
+track = "muted"
+ring_track_opacity = 0.25
 
 [shadow]
 offset_x = 0

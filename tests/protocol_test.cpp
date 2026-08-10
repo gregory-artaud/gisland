@@ -112,7 +112,7 @@ TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
       "children": [
         {"type": "icon", "name": "clock", "accessible_label": "Clock"},
         {"type": "spacer", "flexible": false, "size_token": "small"},
-        {"type": "progress", "value": 0.75, "label": "75%", "state": "success"},
+        {"type": "progress", "value": 0.75, "label": "75%", "state": "success", "shape": "ring"},
         {
           "type": "button",
           "content": {"type": "text", "value": "Open", "role": "label"},
@@ -135,7 +135,9 @@ TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
   REQUIRE(row->children.size() == 4);
   CHECK(std::holds_alternative<gisland::Icon>(row->children[0]->value));
   CHECK(std::holds_alternative<gisland::Spacer>(row->children[1]->value));
-  CHECK(std::holds_alternative<gisland::Progress>(row->children[2]->value));
+  const auto *progress = std::get_if<gisland::Progress>(&row->children[2]->value);
+  REQUIRE(progress != nullptr);
+  CHECK(progress->shape == gisland::ProgressShape::ring);
   CHECK(std::holds_alternative<gisland::Button>(row->children[3]->value));
 }
 

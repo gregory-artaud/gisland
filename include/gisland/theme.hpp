@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <expected>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -50,6 +51,14 @@ struct ButtonStyle {
   ThemeColor background;
   ThemeColor disabled_background;
   ThemeColor hover_overlay;
+};
+
+struct ProgressStyle {
+  double ring_diameter;
+  double ring_thickness;
+  double compact_height;
+  ThemeColor track;
+  std::optional<double> ring_track_opacity;
 };
 
 struct ShadowStyle {
@@ -117,6 +126,7 @@ public:
   [[nodiscard]] const PixelTokens &spacers() const noexcept { return spacers_; }
   [[nodiscard]] const ThemeViews &views() const noexcept { return views_; }
   [[nodiscard]] const ButtonStyle &buttons() const noexcept { return buttons_; }
+  [[nodiscard]] const ProgressStyle &progress() const noexcept { return progress_; }
   [[nodiscard]] const ShadowStyle &shadow() const noexcept { return shadow_; }
   [[nodiscard]] const AnimationStyle &animation() const noexcept { return animation_; }
   [[nodiscard]] const FontResources &fonts() const noexcept { return fonts_; }
@@ -125,8 +135,8 @@ public:
 
 private:
   Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-        ThemeViews views, ButtonStyle buttons, ShadowStyle shadow, AnimationStyle animation,
-        FontResources fonts, Icons icons, ImageRoles images);
+        ThemeViews views, ButtonStyle buttons, ProgressStyle progress, ShadowStyle shadow,
+        AnimationStyle animation, FontResources fonts, Icons icons, ImageRoles images);
 
   Palette palette_;
   Typography typography_;
@@ -134,6 +144,7 @@ private:
   PixelTokens spacers_;
   ThemeViews views_;
   ButtonStyle buttons_;
+  ProgressStyle progress_;
   ShadowStyle shadow_;
   AnimationStyle animation_;
   FontResources fonts_;

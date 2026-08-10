@@ -1,3 +1,4 @@
+#include "gisland/island.hpp"
 #include "gisland/theme.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -66,6 +67,13 @@ max_width = 960
 min_height = 180
 max_height = 720
 
+[progress]
+ring_diameter = 32
+ring_thickness = 4
+compact_height = 48
+track = "muted"
+ring_track_opacity = 0.25
+
 [shadow]
 offset_x = 0
 offset_y = 6
@@ -120,6 +128,12 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->views().compact.padding_vertical == 10.0);
   CHECK(result->views().compact.min_width == 120.0);
   CHECK(result->views().expanded.max_height == 720.0);
+  CHECK(result->progress().ring_diameter == 32.0);
+  CHECK(result->progress().ring_thickness == 4.0);
+  CHECK(result->progress().compact_height == 48.0);
+  REQUIRE(std::holds_alternative<std::string>(result->progress().track));
+  CHECK(std::get<std::string>(result->progress().track) == "muted");
+  CHECK(result->progress().ring_track_opacity == 0.25);
   CHECK(result->shadow().offset_x == 0.0);
   CHECK(result->shadow().offset_y == 6.0);
   CHECK(result->shadow().blur == 18.0);
@@ -133,6 +147,21 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
+}
+
+TEST_CASE("fixed native canvas covers theme maxima and shadow") {
+  const auto theme = gisland::parse_theme(valid_theme, "theme.toml");
+  REQUIRE(theme.has_value());
+
+  const auto canvas = gisland::fixed_canvas_for(*theme);
+  CHECK(canvas.width == 996.0F);
+  CHECK(canvas.height == 756.0F);
+  CHECK(canvas.surface_x == 18.0F);
+  CHECK(canvas.surface_y == 12.0F);
+  CHECK(canvas.surface_width == 960.0F);
+  CHECK(canvas.surface_height == 720.0F);
+  CHECK(gisland::place_at_top_center({360.0F, 96.0F, 24.0F}, canvas) ==
+        gisland::IslandPlacement{318.0F, 12.0F});
 }
 
 TEST_CASE("theme parses every image fit and shape") {
@@ -347,6 +376,13 @@ TEST_CASE("theme rejects malformed colors and invalid bounded numbers") {
       replace_once(std::string{valid_theme}, "size = 16", "size = 513"), "type.toml");
   REQUIRE_FALSE(oversized.has_value());
   CHECK(oversized.error().path == "typography.body.size");
+
+  const auto opaque_track =
+      gisland::parse_theme(replace_once(std::string{valid_theme}, "ring_track_opacity = 0.25",
+                                        "ring_track_opacity = 1.01"),
+                           "progress.toml");
+  REQUIRE_FALSE(opaque_track.has_value());
+  CHECK(opaque_track.error().path == "progress.ring_track_opacity");
 }
 
 TEST_CASE("theme rejects invalid shadow values with exact paths") {

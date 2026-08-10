@@ -171,6 +171,7 @@ public:
             auto value = resolve_value(primitive.value, context_, path + "/value");
             auto label = resolve_value(primitive.label, context_, path + "/label");
             auto state = resolve_value(primitive.state, context_, path + "/state");
+            auto shape = resolve_value(primitive.shape, context_, path + "/shape");
             if (!value) {
               return std::unexpected(value.error());
             }
@@ -180,7 +181,20 @@ public:
             if (!state) {
               return std::unexpected(state.error());
             }
-            return SceneNode{Progress{*value, std::move(*label), std::move(*state)}};
+            if (!shape) {
+              return std::unexpected(shape.error());
+            }
+            ProgressShape progress_shape{};
+            if (*shape == "linear") {
+              progress_shape = ProgressShape::linear;
+            } else if (*shape == "ring") {
+              progress_shape = ProgressShape::ring;
+            } else {
+              return std::unexpected(
+                  TemplateError{TemplateErrorCode::invalid_template, path + "/shape", {}});
+            }
+            return SceneNode{
+                Progress{*value, std::move(*label), std::move(*state), progress_shape}};
           } else if constexpr (std::is_same_v<Primitive, TemplateRow>) {
             auto children = instantiate_children(primitive.children, path);
             auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");

@@ -2,8 +2,7 @@
 
 ## Mission
 
-Implement the extensible gisland UI platform tracked by YouTrack issue
-[GIS-1](https://yt.gra.sh/issue/GIS-1).
+Implement the extensible gisland UI platform.
 
 gisland is a C++23 Linux/X11 overlay rendered with raylib. Its long-term product
 behavior is defined by external process modules using a versioned declarative
@@ -12,7 +11,8 @@ rendering, theming, focus, process supervision, hot reload, and IPC.
 
 ## Required Reading
 
-Read these local documents completely before editing code, in this order:
+Read these local documents completely before starting a substantial platform
+increment, in this order:
 
 1. `docs/superpowers/specs/2026-07-28-raylib-project-setup-design.md`
 2. `docs/superpowers/plans/2026-07-28-raylib-project-setup.md`
@@ -24,18 +24,24 @@ implemented. Do not repeat their tasks. The extensible platform spec is the
 authoritative product design. The core models and arbitration plan is the first
 actionable implementation plan.
 
+Focused bug fixes and small visual refinements do not require rereading all four
+documents when their relevant constraints are already established. Inspect the
+affected code, tests, and focused design material instead.
+
 ## Execution Order
 
 1. Execute `2026-07-28-core-models-and-arbitration.md` task by task using TDD.
-2. Verify the complete quality matrix before marking that increment complete.
-3. Update GIS-1 with results, decisions, and verification evidence.
-4. Create a focused spec and implementation plan for only the next delivery
-   increment from the platform design.
-5. Continue one independently testable increment at a time.
+2. Validate each increment using the proportional verification policy below.
+3. Create a focused spec and implementation plan for only the next substantial
+   delivery increment from the platform design.
+4. Continue one independently testable increment at a time.
 
 Do not implement the entire platform in one change. Keep protocol, process
 supervision, rendering, X11 behavior, IPC, hot reload, and the shipped module as
 separate reviewed increments.
+
+Small related visual refinements may be grouped into one coherent increment.
+They do not require an individual spec and plan for every micro-adjustment.
 
 ## Engineering Rules
 
@@ -65,7 +71,46 @@ separate reviewed increments.
 
 ## Verification
 
-Before completing an increment, run all applicable checks:
+Use proportional verification. Do not run the complete quality matrix after
+every small iteration.
+
+### Fast Iteration
+
+While developing a focused change:
+
+- Build only affected targets.
+- Run the smallest relevant unit or renderer tests.
+- For visual work, use an isolated Xvfb test or preview rather than the active
+  desktop session.
+- Do not reinstall locally until the candidate is ready for user evaluation.
+
+### Coherent Increment
+
+When the user accepts a grouped change or a coherent increment is ready:
+
+```bash
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
+
+cmake --build --preset dev --target format-check
+git diff --check
+```
+
+For graphical increments, also run:
+
+```bash
+cmake --build --preset graphical
+./scripts/run-visual-tests.sh build/graphical
+```
+
+Install locally and perform a focused live smoke test only after these checks
+pass.
+
+### Full Quality Matrix
+
+Run the complete matrix before a release, an integration milestone, a risky
+low-level change, or when the user explicitly requests it:
 
 ```bash
 cmake --preset dev
@@ -83,9 +128,9 @@ ctest --preset tidy
 cmake --build --preset dev --target format-check
 ```
 
-Also compile and test with Clang using a separate build directory. For graphical
-increments, run the documented X11 smoke test and any Xvfb or deterministic
-visual tests introduced by that increment.
+Also compile and test with Clang using a separate build directory during the full
+quality matrix. Sanitizers, clang-tidy, and separate Clang builds are not
+required for each cosmetic or theme-only iteration.
 
-Report exact commands and outcomes on GIS-1. Do not claim completion from code
-inspection alone.
+Do not update YouTrack unless the user explicitly requests it. Always report the
+checks actually run, and do not claim completion from code inspection alone.
