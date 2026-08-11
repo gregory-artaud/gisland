@@ -201,10 +201,12 @@ stdin and stdout; stderr is captured as tagged, bounded log events. Module insta
 `always`, `on-failure`, and `never` restart policies with bounded exponential backoff, failure
 lockout, and graceful shutdown escalation to process-group signals.
 
-Installed modules are discovered from `$XDG_DATA_HOME/gisland/modules/` (defaulting to
-`~/.local/share/gisland/modules/`) and the distributed `modules/` directory. Each module occupies
-`<module-id>/module.toml`; a user directory overrides a distributed directory with the same ID.
-Installing a manifest never enables it. Instances opt in by stable module ID:
+Editable personal modules are discovered from `$XDG_CONFIG_HOME/gisland/modules/` (defaulting to
+`~/.config/gisland/modules/`). Installed user modules are discovered from
+`$XDG_DATA_HOME/gisland/modules/` (defaulting to `~/.local/share/gisland/modules/`), followed by the
+distributed `modules/` directory. Each module occupies `<module-id>/module.toml`; the first directory
+in that precedence order claims an ID, including when its manifest is invalid. Installing a manifest
+never enables it. Instances opt in by stable module ID:
 
 ```toml
 [[modules]]
