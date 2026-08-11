@@ -89,6 +89,11 @@ struct Progress {
   ProgressShape shape{ProgressShape::linear};
 };
 
+struct Indicator {
+  std::string state;
+  std::string accessible_label;
+};
+
 struct Row {
   explicit Row(std::vector<SceneNode> nodes, std::string alignment = "center",
                std::string gap = "normal");
@@ -128,8 +133,8 @@ struct ActionRegion {
 };
 
 struct SceneNode {
-  using Value = std::variant<Text, Icon, Image, RichText, Row, Column, Spacer, Progress, Button,
-                             ActionRegion>;
+  using Value = std::variant<Text, Icon, Image, RichText, Row, Column, Spacer, Progress, Indicator,
+                             Button, ActionRegion>;
 
   Value value;
 };

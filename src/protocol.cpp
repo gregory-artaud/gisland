@@ -365,6 +365,19 @@ parse_emphasis(const Json &object, const std::string &path) {
   return SceneNode{Progress{*value, std::move(*label), std::move(*state), progress_shape}};
 }
 
+[[nodiscard]] std::expected<SceneNode, ProtocolError> parse_indicator(const Json &object,
+                                                                      const std::string &path) {
+  auto state = required_string(object, "state", path);
+  auto label = required_string(object, "accessible_label", path);
+  if (!state) {
+    return std::unexpected(state.error());
+  }
+  if (!label) {
+    return std::unexpected(label.error());
+  }
+  return SceneNode{Indicator{std::move(*state), std::move(*label)}};
+}
+
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_row(const Json &object,
                                                                 const std::string &path) {
   auto children = parse_children(object, path);
@@ -484,6 +497,9 @@ parse_emphasis(const Json &object, const std::string &path) {
   }
   if (*type == "progress") {
     return parse_progress(object, path);
+  }
+  if (*type == "indicator") {
+    return parse_indicator(object, path);
   }
   if (*type == "button") {
     return parse_button(object, path);

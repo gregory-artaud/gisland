@@ -625,6 +625,20 @@ TEST_CASE("progress emits a measured label and rounded track fill") {
   CHECK(std::holds_alternative<gisland::ProgressDrawCommand>(unlabeled->content.front()));
 }
 
+TEST_CASE("indicator has square intrinsic geometry and resolves its semantic state") {
+  const auto result =
+      gisland::layout_scene(gisland::SceneNode{gisland::Indicator{"success", "Available"}},
+                            make_theme(), gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->content.size() == 1);
+  const auto &indicator = command_at<gisland::IndicatorDrawCommand>(*result, 0);
+  CHECK(indicator.bounds == gisland::Rect{4, 6, 7, 7});
+  CHECK(indicator.clip == gisland::Rect{4, 6, 7, 7});
+  CHECK(indicator.color == gisland::Rgba{32, 192, 96, 255});
+  CHECK(indicator.accessible_label == "Available");
+}
+
 TEST_CASE("ring progress creates a 48 pixel intrinsic compact capsule") {
   const auto theme =
       make_theme_with("padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = "

@@ -121,6 +121,9 @@ bool equal_template(const SceneTemplate &left, const SceneTemplate &right) {
                  equal_template_value(left_value.label, right_value.label) &&
                  equal_template_value(left_value.state, right_value.state) &&
                  equal_template_value(left_value.shape, right_value.shape);
+        } else if constexpr (std::is_same_v<Value, TemplateIndicator>) {
+          return equal_template_value(left_value.state, right_value.state) &&
+                 equal_template_value(left_value.accessible_label, right_value.accessible_label);
         } else {
           return equal_template_pointer(left_value.content, right_value.content) &&
                  left_value.action_id == right_value.action_id &&

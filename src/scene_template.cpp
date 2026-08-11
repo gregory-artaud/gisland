@@ -195,6 +195,17 @@ public:
             }
             return SceneNode{
                 Progress{*value, std::move(*label), std::move(*state), progress_shape}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateIndicator>) {
+            auto state = resolve_value(primitive.state, context_, path + "/state");
+            auto label =
+                resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
+            if (!state) {
+              return std::unexpected(state.error());
+            }
+            if (!label) {
+              return std::unexpected(label.error());
+            }
+            return SceneNode{Indicator{std::move(*state), std::move(*label)}};
           } else if constexpr (std::is_same_v<Primitive, TemplateRow>) {
             auto children = instantiate_children(primitive.children, path);
             auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");

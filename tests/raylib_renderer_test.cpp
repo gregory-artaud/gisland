@@ -397,6 +397,24 @@ TEST_CASE_METHOD(HiddenWindow, "painter renders ring progress clockwise over its
   UnloadImage(rendered);
 }
 
+TEST_CASE_METHOD(HiddenWindow, "painter renders a clipped antialiased status indicator") {
+  auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  const gisland::Rgba success{32, 192, 96, 255};
+  const gisland::LayoutPlan plan{
+      {},
+      {gisland::IndicatorDrawCommand{{16, 16, 7, 7}, {18, 16, 5, 7}, success, "Available"}},
+      {}};
+
+  Image rendered = render_image([&] { REQUIRE(painter.draw_content(plan).has_value()); });
+
+  CHECK(same_color(GetImageColor(rendered, 19, 19), success));
+  CHECK(GetImageColor(rendered, 16, 19).a == 0);
+  CHECK(partially_covered_pixels(rendered, gisland::Rect{18, 16, 5, 7}) > 0);
+  UnloadImage(rendered);
+}
+
 TEST_CASE_METHOD(HiddenWindow, "image book center-crops and masks dynamic images") {
   const auto theme = make_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());

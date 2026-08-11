@@ -587,6 +587,22 @@ parse_scene_template(const toml::table &table, const std::string &path,
     return SceneTemplate{TemplateProgress{std::move(*value), std::move(*label), std::move(*state),
                                           std::move(*shape)}};
   }
+  if (*type == "indicator") {
+    auto keys = require_keys(table, {"type", "state", "accessible_label"}, path, source_name);
+    auto state = template_field<std::string>(table, "state", path + ".state", source_name);
+    auto label = template_field<std::string>(table, "accessible_label", path + ".accessible_label",
+                                             source_name);
+    if (!keys) {
+      return std::unexpected(keys.error());
+    }
+    if (!state) {
+      return std::unexpected(state.error());
+    }
+    if (!label) {
+      return std::unexpected(label.error());
+    }
+    return SceneTemplate{TemplateIndicator{std::move(*state), std::move(*label)}};
+  }
   if (*type == "row" || *type == "column") {
     auto keys = require_keys(table, {"type", "children", "alignment", "gap"}, path, source_name);
     auto children = parse_template_children(table, path, source_name);
@@ -742,7 +758,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     std::string module_id;
     std::optional<std::filesystem::path> manifest_path;
     ProtocolVersion minimum_protocol{1, 0};
-    ProtocolVersion maximum_protocol{1, 5};
+    ProtocolVersion maximum_protocol{1, 6};
     std::expected<std::vector<std::string>, ConfigError> command =
         has_command
             ? parse_command(*module_table, index, source_name)
@@ -773,13 +789,13 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
       }
       manifest = &found->second;
       if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
-          manifest->minimum_protocol.minor > 5 || manifest->maximum_protocol.minor < 0) {
+          manifest->minimum_protocol.minor > 6 || manifest->maximum_protocol.minor < 0) {
         return std::unexpected(error_at(source_name, base_path + ".module",
                                         "module protocol range is incompatible",
                                         module_table->get("module")));
       }
       minimum_protocol = {1, std::max(0, manifest->minimum_protocol.minor)};
-      maximum_protocol = {1, std::min(5, manifest->maximum_protocol.minor)};
+      maximum_protocol = {1, std::min(6, manifest->maximum_protocol.minor)};
       auto arguments = parse_arguments(*module_table, index, source_name);
       if (!arguments) {
         return std::unexpected(arguments.error());

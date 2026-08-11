@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -103,6 +104,16 @@ template <typename Message>
     return message != nullptr && message->instance_id == instance_id &&
            std::holds_alternative<Message>(message->message);
   });
+}
+
+[[nodiscard]] const gisland::ProtocolViolationEvent *last_violation(const EventLog &events,
+                                                                    std::string_view instance_id) {
+  const auto found =
+      std::ranges::find_if(events.rbegin(), events.rend(), [instance_id](const auto &event) {
+        const auto *violation = std::get_if<gisland::ProtocolViolationEvent>(&event);
+        return violation != nullptr && violation->instance_id == instance_id;
+      });
+  return found == events.rend() ? nullptr : std::get_if<gisland::ProtocolViolationEvent>(&*found);
 }
 
 void collect_until(gisland::ModuleSupervisor &supervisor, EventLog &events,
@@ -286,6 +297,49 @@ TEST_CASE("supervisor emits independent views only after protocol 1.4 capability
     });
     CHECK_FALSE(has_message<gisland::PublishMessage>(events, "unnegotiated-independent"));
     stop_and_wait(supervisor, events, "unnegotiated-independent");
+  }
+}
+
+TEST_CASE("supervisor gates status indicators on protocol 1.6 capability negotiation") {
+  SECTION("negotiated indicators are emitted") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("indicator", "indicator");
+    request.init.maximum = {.major = 1, .minor = 6};
+    request.init.capabilities.emplace_back("status-indicator");
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, "indicator");
+    });
+    stop_and_wait(supervisor, events, "indicator");
+  }
+
+  for (const auto &[instance, mode, maximum, error_path] :
+       std::vector<std::tuple<std::string, std::string, gisland::ProtocolVersion, std::string>>{
+           {"unnegotiated-indicator", "indicator-without-capability", {1, 6}, "/compact"},
+           {"legacy-indicator", "indicator-legacy", {1, 5}, "/compact"},
+           {"legacy-expanded-indicator", "indicator-expanded-legacy", {1, 5}, "/expanded"},
+           {"early-indicator-capability",
+            "indicator-capability-on-1.5",
+            {1, 6},
+            "/capabilities"}}) {
+    SECTION(instance) {
+      gisland::ModuleSupervisor supervisor;
+      EventLog events;
+      auto request = fake_request(instance, mode);
+      request.init.maximum = maximum;
+      request.init.capabilities.emplace_back("status-indicator");
+      REQUIRE(supervisor.start(std::move(request)).has_value());
+
+      collect_until(supervisor, events, [&instance](const auto &observed) {
+        return count_events<gisland::ProtocolViolationEvent>(observed, instance) > 0;
+      });
+      CHECK_FALSE(has_message<gisland::PublishMessage>(events, instance));
+      REQUIRE(last_violation(events, instance) != nullptr);
+      CHECK(last_violation(events, instance)->error.path == error_path);
+      stop_and_wait(supervisor, events, instance);
+    }
   }
 }
 

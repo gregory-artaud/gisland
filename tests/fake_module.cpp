@@ -512,6 +512,40 @@ void read_init() {
     }
     return EXIT_SUCCESS;
   }
+  if (mode == "indicator" || mode == "indicator-without-capability" || mode == "indicator-legacy" ||
+      mode == "indicator-expanded-legacy" || mode == "indicator-capability-on-1.5") {
+    read_init();
+    const bool legacy = mode == "indicator-legacy" || mode == "indicator-expanded-legacy" ||
+                        mode == "indicator-capability-on-1.5";
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", legacy ? 5 : 6}};
+    if (mode == "indicator" || mode == "indicator-capability-on-1.5") {
+      ready["capabilities"] = {"status-indicator"};
+    }
+    write_json(ready);
+    nlohmann::json publish{
+        {"type", "publish"},
+        {"context_id", "indicator"},
+        {"priority", 20},
+    };
+    const nlohmann::json indicator{
+        {"type", "indicator"}, {"state", "success"}, {"accessible_label", "Available"}};
+    if (mode == "indicator-expanded-legacy") {
+      publish["compact"] = {{"type", "text"}, {"value", "Legacy"}, {"role", "body"}};
+      publish["expanded"] = indicator;
+    } else {
+      publish["compact"] = indicator;
+    }
+    write_json(publish);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
   if (mode == "image" || mode == "image-without-capability") {
     read_init();
     nlohmann::json ready{

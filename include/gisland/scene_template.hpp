@@ -42,6 +42,11 @@ struct TemplateProgress {
   TemplateValue<std::string> shape{std::string{"linear"}};
 };
 
+struct TemplateIndicator {
+  TemplateValue<std::string> state;
+  TemplateValue<std::string> accessible_label;
+};
+
 struct SceneTemplate;
 using SceneTemplatePtr = std::shared_ptr<const SceneTemplate>;
 
@@ -74,7 +79,7 @@ struct TemplateButton {
 
 struct SceneTemplate {
   using Value = std::variant<TemplateText, TemplateIcon, TemplateRow, TemplateColumn,
-                             TemplateSpacer, TemplateProgress, TemplateButton>;
+                             TemplateSpacer, TemplateProgress, TemplateIndicator, TemplateButton>;
   Value value;
 };
 

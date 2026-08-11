@@ -96,6 +96,14 @@ public:
                         "small"}},
        gisland::SceneNode{gisland::Progress{0.68, "Progress", "success"}},
        gisland::SceneNode{
+           gisland::Row{{text("Indicators", "caption"),
+                         gisland::SceneNode{gisland::Indicator{"success", "Available"}},
+                         gisland::SceneNode{gisland::Indicator{"warning", "Delayed"}},
+                         gisland::SceneNode{gisland::Indicator{"error", "Failed"}},
+                         gisland::SceneNode{gisland::Indicator{"muted", "Inactive"}}},
+                        "center",
+                        "small"}},
+       gisland::SceneNode{
            gisland::Row{{gisland::SceneNode{gisland::Spacer{false, "small"}},
                          gisland::SceneNode{gisland::Button{icon("chevron-left", "Previous"),
                                                             "previous", true, "Previous item"}},

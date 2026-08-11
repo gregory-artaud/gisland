@@ -56,6 +56,34 @@ namespace {
       scene.value);
 }
 
+[[nodiscard]] bool scene_uses_indicator(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &primitive) {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, Indicator>) {
+          return true;
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          return std::ranges::any_of(
+              primitive.children, [](const auto &child) { return scene_uses_indicator(*child); });
+        } else if constexpr (std::is_same_v<Primitive, Button> ||
+                             std::is_same_v<Primitive, ActionRegion>) {
+          return scene_uses_indicator(*primitive.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
+[[nodiscard]] std::optional<std::string> indicator_path(const PublishMessage &publish) {
+  if (publish.compact && scene_uses_indicator(*publish.compact)) {
+    return publish.independent_views ? "/views/compact" : "/compact";
+  }
+  if (publish.expanded && scene_uses_indicator(*publish.expanded)) {
+    return publish.independent_views ? "/views/expanded" : "/expanded";
+  }
+  return std::nullopt;
+}
+
 using namespace std::chrono_literals;
 
 constexpr std::size_t command_capacity = 2048;
@@ -913,6 +941,20 @@ private:
                        now);
       return;
     }
+    if (const auto *publish = std::get_if<PublishMessage>(&*message); publish != nullptr) {
+      const auto path = indicator_path(*publish);
+      if (path &&
+          (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 6})) {
+        record_violation(instance, ProtocolError{*path, "indicator requires protocol version 1.6"},
+                         now);
+        return;
+      }
+      if (path && !instance.negotiated_capabilities.contains("status-indicator")) {
+        record_violation(
+            instance, ProtocolError{*path, "status-indicator capability was not negotiated"}, now);
+        return;
+      }
+    }
 
     instance.consecutive_violations = 0;
     emit(ModuleMessageEvent{instance.request.instance_id, *message, now});
@@ -958,6 +1000,12 @@ private:
         record_violation(
             instance, ProtocolError{"/capabilities", "ring-progress requires protocol version 1.5"},
             now);
+        return false;
+      }
+      if (capability == "status-indicator" && selected < ProtocolVersion{1, 6}) {
+        record_violation(
+            instance,
+            ProtocolError{"/capabilities", "status-indicator requires protocol version 1.6"}, now);
         return false;
       }
     }

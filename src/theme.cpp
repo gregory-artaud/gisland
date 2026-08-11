@@ -534,6 +534,28 @@ parse_progress(const toml::table &root, std::string_view source_name) {
                        ring_track_opacity};
 }
 
+[[nodiscard]] std::expected<IndicatorStyle, ThemeError>
+parse_indicator(const toml::table &root, std::string_view source_name) {
+  const auto *node = root.get("indicator");
+  if (node == nullptr) {
+    return IndicatorStyle{7.0};
+  }
+  const auto *table = node->as_table();
+  if (table == nullptr) {
+    return std::unexpected(error_at(source_name, "indicator", "expected a table", node));
+  }
+  auto keys = reject_unknown(*table, {"diameter"}, "indicator", source_name);
+  if (!keys) {
+    return std::unexpected(keys.error());
+  }
+  auto diameter =
+      number_value(table->get("diameter"), "indicator.diameter", source_name, 1.0, maximum_pixels);
+  if (!diameter) {
+    return std::unexpected(diameter.error());
+  }
+  return IndicatorStyle{*diameter};
+}
+
 [[nodiscard]] std::expected<ShadowStyle, ThemeError> parse_shadow(const toml::table &root,
                                                                   std::string_view source_name) {
   auto table = required_table(root, "shadow", "shadow", source_name);
@@ -887,20 +909,23 @@ validate_references(const Theme::Typography &typography, const Theme::Icons &ico
 } // namespace
 
 Theme::Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-             ThemeViews views, ButtonStyle buttons, ProgressStyle progress, ShadowStyle shadow,
-             AnimationStyle animation, FontResources fonts, Icons icons, ImageRoles images)
+             ThemeViews views, ButtonStyle buttons, ProgressStyle progress,
+             IndicatorStyle indicator, ShadowStyle shadow, AnimationStyle animation,
+             FontResources fonts, Icons icons, ImageRoles images)
     : palette_(std::move(palette)), typography_(std::move(typography)), gaps_(std::move(gaps)),
       spacers_(std::move(spacers)), views_(views), buttons_(std::move(buttons)),
-      progress_(std::move(progress)), shadow_(std::move(shadow)), animation_(animation),
-      fonts_(std::move(fonts)), icons_(std::move(icons)), images_(std::move(images)) {}
+      progress_(std::move(progress)), indicator_(indicator), shadow_(std::move(shadow)),
+      animation_(animation), fonts_(std::move(fonts)), icons_(std::move(icons)),
+      images_(std::move(images)) {}
 
 std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_view source_name) {
   try {
     const auto root = toml::parse(text, source_name);
-    auto keys = reject_unknown(root,
-                               {"palette", "typography", "gaps", "spacers", "view", "buttons",
-                                "progress", "shadow", "animation", "fonts", "icons", "images"},
-                               "", source_name);
+    auto keys =
+        reject_unknown(root,
+                       {"palette", "typography", "gaps", "spacers", "view", "buttons", "progress",
+                        "indicator", "shadow", "animation", "fonts", "icons", "images"},
+                       "", source_name);
     if (!keys) {
       return std::unexpected(keys.error());
     }
@@ -913,6 +938,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     auto views = parse_views(root, source_name);
     auto buttons = parse_buttons(root, source_name);
     auto progress = parse_progress(root, source_name);
+    auto indicator = parse_indicator(root, source_name);
     auto shadow = parse_shadow(root, source_name);
     auto animation = parse_animation(root, source_name);
     auto icons = parse_icons(root, source_name);
@@ -941,6 +967,9 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!progress) {
       return std::unexpected(progress.error());
     }
+    if (!indicator) {
+      return std::unexpected(indicator.error());
+    }
     if (!shadow) {
       return std::unexpected(shadow.error());
     }
@@ -965,6 +994,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
                  *views,
                  std::move(*buttons),
                  std::move(*progress),
+                 *indicator,
                  std::move(*shadow),
                  *animation,
                  std::move(*fonts),

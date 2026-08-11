@@ -134,6 +134,14 @@ private:
     return validate_identifier(progress.state, path + "/state");
   }
 
+  [[nodiscard]] static SceneValidation
+  validate_primitive(const Indicator &indicator, std::size_t /*depth*/, const std::string &path) {
+    if (auto result = validate_identifier(indicator.state, path + "/state"); !result) {
+      return result;
+    }
+    return validate_text(indicator.accessible_label, path + "/accessible_label");
+  }
+
   [[nodiscard]] SceneValidation validate_primitive(const Row &row, std::size_t depth,
                                                    const std::string &path) {
     if (auto result = validate_identifier(row.alignment, path + "/alignment"); !result) {

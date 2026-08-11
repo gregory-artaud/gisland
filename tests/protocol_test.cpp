@@ -113,6 +113,7 @@ TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
         {"type": "icon", "name": "clock", "accessible_label": "Clock"},
         {"type": "spacer", "flexible": false, "size_token": "small"},
         {"type": "progress", "value": 0.75, "label": "75%", "state": "success", "shape": "ring"},
+        {"type": "indicator", "state": "success", "accessible_label": "Available"},
         {
           "type": "button",
           "content": {"type": "text", "value": "Open", "role": "label"},
@@ -132,13 +133,29 @@ TEST_CASE("all v1 scene discriminators parse at the protocol boundary") {
   REQUIRE(publish->compact.has_value());
   const auto *row = std::get_if<gisland::Row>(&publish->compact->value);
   REQUIRE(row != nullptr);
-  REQUIRE(row->children.size() == 4);
+  REQUIRE(row->children.size() == 5);
   CHECK(std::holds_alternative<gisland::Icon>(row->children[0]->value));
   CHECK(std::holds_alternative<gisland::Spacer>(row->children[1]->value));
   const auto *progress = std::get_if<gisland::Progress>(&row->children[2]->value);
   REQUIRE(progress != nullptr);
   CHECK(progress->shape == gisland::ProgressShape::ring);
-  CHECK(std::holds_alternative<gisland::Button>(row->children[3]->value));
+  const auto *indicator = std::get_if<gisland::Indicator>(&row->children[3]->value);
+  REQUIRE(indicator != nullptr);
+  CHECK(indicator->state == "success");
+  CHECK(indicator->accessible_label == "Available");
+  CHECK(std::holds_alternative<gisland::Button>(row->children[4]->value));
+}
+
+TEST_CASE("indicator protocol fields are required") {
+  for (const auto &[node, path] : std::vector<std::pair<std::string, std::string>>{
+           {R"({"type":"indicator","accessible_label":"Available"})", "/compact/state"},
+           {R"({"type":"indicator","state":"success"})", "/compact/accessible_label"},
+       }) {
+    const auto result = gisland::parse_module_message(
+        "{\"type\":\"publish\",\"context_id\":\"x\",\"priority\":0,\"compact\":" + node + "}");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == path);
+  }
 }
 
 TEST_CASE("a publish line decodes context-owned RGBA8 image resources") {

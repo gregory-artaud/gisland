@@ -609,6 +609,27 @@ private:
     return result;
   }
 
+  [[nodiscard]] std::expected<MeasuredNode, LayoutError>
+  measure_primitive(const SceneNode &scene, const Indicator &indicator,
+                    const std::string &path) const {
+    const auto color = theme_.palette().find(indicator.state);
+    if (color == theme_.palette().end()) {
+      return std::unexpected(
+          error(LayoutErrorCode::unknown_role, path + "/state", "unknown indicator state role"));
+    }
+    auto diameter = rounded_pixel(theme_.indicator().diameter, path);
+    if (!diameter) {
+      return std::unexpected(diameter.error());
+    }
+    MeasuredNode result{&scene, path};
+    result.width = *diameter;
+    result.height = *diameter;
+    result.minimum_width = *diameter;
+    result.minimum_height = *diameter;
+    result.color = color->second;
+    return result;
+  }
+
   template <typename Container>
   [[nodiscard]] std::expected<MeasuredNode, LayoutError>
   measure_container(const SceneNode &scene, const Container &container, const std::string &path,
@@ -1154,6 +1175,28 @@ private:
     commands.emplace_back(ProgressDrawCommand{bounds, *clipped, track,
                                               Rect{track.x, track.y, *fill_width, track.height},
                                               theme_.palette().at("muted"), node.color});
+    return {};
+  }
+
+  [[nodiscard]] static std::expected<void, LayoutError>
+  place_primitive(const MeasuredNode &node, const Indicator &indicator, Rect assigned, Rect clip,
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> & /*interactions*/) {
+    if (assigned.width < node.width || assigned.height < node.height) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "indicator cannot fit the assigned bounds"));
+    }
+    auto y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    if (!y) {
+      return std::unexpected(y.error());
+    }
+    const Rect bounds{assigned.x, *y, node.width, node.height};
+    auto clipped = intersect(clip, bounds, node.path);
+    if (!clipped) {
+      return std::unexpected(clipped.error());
+    }
+    commands.emplace_back(
+        IndicatorDrawCommand{bounds, *clipped, node.color, indicator.accessible_label});
     return {};
   }
 

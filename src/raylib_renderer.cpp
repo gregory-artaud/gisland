@@ -111,6 +111,26 @@ void draw_antialiased_cap(Vector2 center, float radius, Color tint) {
   rlEnd();
 }
 
+void draw_antialiased_disc(Vector2 center, float radius, Color tint) {
+  constexpr float feather = 1.0F;
+  constexpr int segments = 24;
+  const float core_radius = std::max(0.0F, radius - feather);
+  const float step = 360.0F / static_cast<float>(segments);
+
+  DrawCircleV(center, core_radius, tint);
+  rlSetTexture(0);
+  rlBegin(RL_QUADS);
+  for (int segment = 0; segment < segments; ++segment) {
+    const float angle = static_cast<float>(segment) * step;
+    const float next_angle = angle + step;
+    ring_vertex(center, angle, radius, tint, 0);
+    ring_vertex(center, angle, core_radius, tint, 255);
+    ring_vertex(center, next_angle, core_radius, tint, 255);
+    ring_vertex(center, next_angle, radius, tint, 0);
+  }
+  rlEnd();
+}
+
 [[nodiscard]] std::expected<Rect, RendererError>
 checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height) {
   constexpr auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
@@ -938,6 +958,21 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
               draw_antialiased_cap(cap_center(end_angle), thickness / 2.0F,
                                    color(command.fill_color));
             }
+            EndBlendMode();
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
+                                              IndicatorDrawCommand>) {
+            const Scissor scissor{*rendered_clip};
+            const Vector2 center{static_cast<float>(rendered_bounds->x) +
+                                     (static_cast<float>(rendered_bounds->width) / 2.0F),
+                                 static_cast<float>(rendered_bounds->y) +
+                                     (static_cast<float>(rendered_bounds->height) / 2.0F)};
+            const float radius =
+                static_cast<float>(std::min(rendered_bounds->width, rendered_bounds->height)) /
+                2.0F;
+            rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE,
+                                      RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+            BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+            draw_antialiased_disc(center, radius, color(command.color));
             EndBlendMode();
           } else {
             const Scissor scissor{*rendered_clip};

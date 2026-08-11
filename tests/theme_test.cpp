@@ -134,6 +134,7 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   REQUIRE(std::holds_alternative<std::string>(result->progress().track));
   CHECK(std::get<std::string>(result->progress().track) == "muted");
   CHECK(result->progress().ring_track_opacity == 0.25);
+  CHECK(result->indicator().diameter == 7.0);
   CHECK(result->shadow().offset_x == 0.0);
   CHECK(result->shadow().offset_y == 6.0);
   CHECK(result->shadow().blur == 18.0);
@@ -147,6 +148,20 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
+}
+
+TEST_CASE("indicator theme diameter is optional and bounded") {
+  const auto custom = gisland::parse_theme(
+      std::string{valid_theme} + "\n[indicator]\ndiameter = 9.5\n", "indicator.toml");
+  REQUIRE(custom.has_value());
+  CHECK(custom->indicator().diameter == 9.5);
+
+  for (const auto value : {"0", "-1", "nan", "16385"}) {
+    const auto result = gisland::parse_theme(
+        std::string{valid_theme} + "\n[indicator]\ndiameter = " + value + "\n", "indicator.toml");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "indicator.diameter");
+  }
 }
 
 TEST_CASE("fixed native canvas covers theme maxima and shadow") {

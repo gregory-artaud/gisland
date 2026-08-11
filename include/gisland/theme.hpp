@@ -61,6 +61,10 @@ struct ProgressStyle {
   std::optional<double> ring_track_opacity;
 };
 
+struct IndicatorStyle {
+  double diameter;
+};
+
 struct ShadowStyle {
   double offset_x;
   double offset_y;
@@ -127,6 +131,7 @@ public:
   [[nodiscard]] const ThemeViews &views() const noexcept { return views_; }
   [[nodiscard]] const ButtonStyle &buttons() const noexcept { return buttons_; }
   [[nodiscard]] const ProgressStyle &progress() const noexcept { return progress_; }
+  [[nodiscard]] const IndicatorStyle &indicator() const noexcept { return indicator_; }
   [[nodiscard]] const ShadowStyle &shadow() const noexcept { return shadow_; }
   [[nodiscard]] const AnimationStyle &animation() const noexcept { return animation_; }
   [[nodiscard]] const FontResources &fonts() const noexcept { return fonts_; }
@@ -135,8 +140,9 @@ public:
 
 private:
   Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-        ThemeViews views, ButtonStyle buttons, ProgressStyle progress, ShadowStyle shadow,
-        AnimationStyle animation, FontResources fonts, Icons icons, ImageRoles images);
+        ThemeViews views, ButtonStyle buttons, ProgressStyle progress, IndicatorStyle indicator,
+        ShadowStyle shadow, AnimationStyle animation, FontResources fonts, Icons icons,
+        ImageRoles images);
 
   Palette palette_;
   Typography typography_;
@@ -145,6 +151,7 @@ private:
   ThemeViews views_;
   ButtonStyle buttons_;
   ProgressStyle progress_;
+  IndicatorStyle indicator_;
   ShadowStyle shadow_;
   AnimationStyle animation_;
   FontResources fonts_;

@@ -66,6 +66,9 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
   if (config.maximum_protocol >= ProtocolVersion{1, 5}) {
     capabilities.emplace_back("ring-progress");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 6}) {
+    capabilities.emplace_back("status-indicator");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =
