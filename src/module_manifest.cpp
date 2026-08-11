@@ -394,10 +394,12 @@ load_module_manifest(const std::filesystem::path &path, std::string_view directo
   return parse_module_manifest(contents, path, directory_id);
 }
 
-ModuleCatalog discover_module_catalog(const std::filesystem::path &user_modules,
+ModuleCatalog discover_module_catalog(const std::filesystem::path &config_modules,
+                                      const std::filesystem::path &user_modules,
                                       const std::filesystem::path &distributed_modules) {
   ModuleCatalog catalog;
   std::set<std::string, std::less<>> claimed;
+  discover_root(catalog, config_modules, claimed);
   discover_root(catalog, user_modules, claimed);
   discover_root(catalog, distributed_modules, claimed);
   return catalog;

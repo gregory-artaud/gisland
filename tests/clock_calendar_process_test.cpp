@@ -187,7 +187,7 @@ TEST_CASE("clock-calendar process negotiates and publishes a live snapshot") {
   CHECK(snapshot.at("weeks").front().size() == 7);
 
   const auto asset_root = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
-  const auto catalog = gisland::discover_module_catalog({}, asset_root / "modules");
+  const auto catalog = gisland::discover_module_catalog({}, {}, asset_root / "modules");
   const auto config = gisland::load_config(asset_root / "config.toml", catalog);
   REQUIRE(config.has_value());
   const auto &configured_view = config->modules.front().view;

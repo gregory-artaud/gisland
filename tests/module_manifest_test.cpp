@@ -142,11 +142,55 @@ TEST_CASE("module catalog gives invalid user overrides priority over distributed
              "id=\"weather\"\nname=\"Weather\"\ncommand=[\"weather\"]\n"
              "[protocol]\nmajor=1\nminimum_minor=0\nmaximum_minor=1\n");
 
-  const auto catalog = gisland::discover_module_catalog(user, distributed);
+  const auto catalog =
+      gisland::discover_module_catalog(temporary.path() / "config", user, distributed);
 
   CHECK_FALSE(catalog.manifests.contains("clock-calendar"));
   CHECK(catalog.errors.contains("clock-calendar"));
   CHECK(catalog.manifests.contains("weather"));
+}
+
+TEST_CASE("module catalog gives config modules priority over data and distributed modules") {
+  TemporaryDirectory temporary;
+  const auto config = temporary.path() / "config";
+  const auto data = temporary.path() / "data";
+  const auto distributed = temporary.path() / "distributed";
+  write_file(config / "clock-calendar/module.toml", manifest);
+
+  std::string data_manifest{manifest};
+  const auto data_name = data_manifest.find("Clock and Calendar");
+  REQUIRE(data_name != std::string::npos);
+  data_manifest.replace(data_name, std::string_view{"Clock and Calendar"}.size(), "Data Clock");
+  write_file(data / "clock-calendar/module.toml", data_manifest);
+
+  std::string distributed_manifest{manifest};
+  const auto distributed_name = distributed_manifest.find("Clock and Calendar");
+  REQUIRE(distributed_name != std::string::npos);
+  distributed_manifest.replace(distributed_name, std::string_view{"Clock and Calendar"}.size(),
+                               "Distributed Clock");
+  write_file(distributed / "clock-calendar/module.toml", distributed_manifest);
+
+  const auto catalog = gisland::discover_module_catalog(config, data, distributed);
+
+  REQUIRE(catalog.manifests.contains("clock-calendar"));
+  CHECK(catalog.manifests.at("clock-calendar").name == "Clock and Calendar");
+  CHECK(catalog.manifests.at("clock-calendar").path == config / "clock-calendar/module.toml");
+}
+
+TEST_CASE("invalid config module blocks lower precedence manifests with the same ID") {
+  TemporaryDirectory temporary;
+  const auto config = temporary.path() / "config";
+  const auto data = temporary.path() / "data";
+  const auto distributed = temporary.path() / "distributed";
+  write_file(config / "clock-calendar/module.toml", "id = [\n");
+  write_file(data / "clock-calendar/module.toml", manifest);
+  write_file(distributed / "clock-calendar/module.toml", manifest);
+
+  const auto catalog = gisland::discover_module_catalog(config, data, distributed);
+
+  CHECK_FALSE(catalog.manifests.contains("clock-calendar"));
+  REQUIRE(catalog.errors.contains("clock-calendar"));
+  CHECK(catalog.errors.at("clock-calendar").source == config / "clock-calendar/module.toml");
 }
 
 TEST_CASE("manifest-backed config resolves defaults arguments and protocol intersection") {

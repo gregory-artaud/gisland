@@ -94,7 +94,8 @@ std::expected<RuntimeBootstrap, BootstrapError> load_runtime_bootstrap(const Run
 
 std::expected<RuntimeBootstrap, BootstrapError>
 load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &config_path) {
-  const auto catalog = discover_module_catalog(roots.data_home / "gisland/modules",
+  const auto catalog = discover_module_catalog(roots.config_home / "gisland/modules",
+                                               roots.data_home / "gisland/modules",
                                                roots.distributed_data / "modules");
   auto config = load_config(config_path, catalog);
   if (!config) {

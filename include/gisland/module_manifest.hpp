@@ -52,7 +52,8 @@ parse_module_manifest(std::string_view text, const std::filesystem::path &source
 [[nodiscard]] std::expected<ModuleManifest, ModuleManifestError>
 load_module_manifest(const std::filesystem::path &path, std::string_view directory_id);
 [[nodiscard]] ModuleCatalog
-discover_module_catalog(const std::filesystem::path &user_modules,
+discover_module_catalog(const std::filesystem::path &config_modules,
+                        const std::filesystem::path &user_modules,
                         const std::filesystem::path &distributed_modules);
 [[nodiscard]] bool option_matches_schema(const ConfigValue &value,
                                          const ModuleOptionSchema &schema);

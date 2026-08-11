@@ -191,3 +191,33 @@ TEST_CASE("reload candidate accepts complete axis padding and rejects an incompl
   CHECK(rejected.error().stage == gisland::BootstrapStage::theme);
   CHECK(rejected.error().message.contains("view.compact.padding_vertical"));
 }
+
+TEST_CASE("reload candidate rediscovers config-root module manifests") {
+  TemporaryDirectory temporary;
+  const auto distributed = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
+  const auto config_home = temporary.path() / "config";
+  const auto manifest_path = config_home / "gisland/modules/personal/module.toml";
+  write_file(config_home / "gisland/config.toml", "monitor = \"primary\"\n"
+                                                  "theme = \"default\"\n"
+                                                  "default_module = \"personal\"\n"
+                                                  "[[modules]]\n"
+                                                  "id = \"personal\"\n"
+                                                  "module = \"personal\"\n");
+  const auto write_manifest = [&manifest_path](std::string_view command) {
+    write_file(manifest_path,
+               "id = \"personal\"\nname = \"Personal\"\ncommand = [\"" + std::string{command} +
+                   "\"]\n[protocol]\nmajor = 1\nminimum_minor = 5\nmaximum_minor = 5\n");
+  };
+  write_manifest("./first.py");
+  const auto current =
+      gisland::load_runtime_bootstrap({config_home, temporary.path() / "data", distributed});
+  REQUIRE(current.has_value());
+
+  write_manifest("./second.py");
+  const auto candidate = gisland::load_reload_candidate(*current);
+
+  REQUIRE(candidate.has_value());
+  CHECK(candidate->config.modules.front().command.front() ==
+        (manifest_path.parent_path() / "second.py").string());
+  CHECK(candidate->manifest_paths == std::vector<std::filesystem::path>{manifest_path});
+}

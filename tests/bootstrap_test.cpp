@@ -202,3 +202,30 @@ TEST_CASE("bootstrap reports a missing config without creating graphical state")
   CHECK(result.error().stage == gisland::BootstrapStage::configuration);
   CHECK(result.error().path == temporary.path() / "distributed/config.toml");
 }
+
+TEST_CASE("bootstrap resolves and tracks a config-root module manifest") {
+  TemporaryDirectory temporary;
+  const auto config_home = temporary.path() / "config";
+  const auto manifest_path = config_home / "gisland/modules/personal/module.toml";
+  write_file(config_home / "gisland/config.toml", "monitor = \"primary\"\n"
+                                                  "theme = \"default\"\n"
+                                                  "default_module = \"personal\"\n"
+                                                  "[[modules]]\n"
+                                                  "id = \"personal\"\n"
+                                                  "module = \"personal\"\n");
+  write_file(manifest_path, "id = \"personal\"\n"
+                            "name = \"Personal\"\n"
+                            "command = [\"./personal.py\"]\n"
+                            "[protocol]\n"
+                            "major = 1\n"
+                            "minimum_minor = 5\n"
+                            "maximum_minor = 5\n");
+
+  const auto bootstrap = gisland::load_runtime_bootstrap(
+      {config_home, temporary.path() / "data", GISLAND_TEST_ASSET_ROOT});
+
+  REQUIRE(bootstrap.has_value());
+  REQUIRE(bootstrap->config.modules.size() == 1);
+  CHECK(bootstrap->config.modules.front().manifest_path == manifest_path);
+  CHECK(bootstrap->manifest_paths == std::vector<std::filesystem::path>{manifest_path});
+}
