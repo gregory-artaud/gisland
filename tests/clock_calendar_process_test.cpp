@@ -185,6 +185,15 @@ TEST_CASE("clock-calendar process negotiates and publishes a live snapshot") {
   CHECK(snapshot.at("weekdays").size() == 7);
   CHECK(snapshot.at("weeks").size() == 6);
   CHECK(snapshot.at("weeks").front().size() == 7);
+  REQUIRE(snapshot.at("calendar_columns").size() == 7);
+  for (std::size_t index = 0; index < snapshot.at("calendar_columns").size(); ++index) {
+    const auto &column = snapshot.at("calendar_columns").at(index);
+    CHECK(column.at("weekday") == snapshot.at("weekdays").at(index));
+    REQUIRE(column.at("days").size() == 6);
+    for (std::size_t week = 0; week < column.at("days").size(); ++week) {
+      CHECK(column.at("days").at(week) == snapshot.at("weeks").at(week).at(index));
+    }
+  }
 
   const auto asset_root = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
   const auto catalog = gisland::discover_module_catalog({}, {}, asset_root / "modules");
@@ -196,7 +205,26 @@ TEST_CASE("clock-calendar process negotiates and publishes a live snapshot") {
   }
   const auto &view = *configured_view;
   gisland::ModuleViewState state{view.compact, view.expanded};
-  CHECK(state.apply(snapshot).has_value());
+  REQUIRE(state.apply(snapshot).has_value());
+  REQUIRE(state.views().has_value());
+  REQUIRE(state.views()->expanded.has_value());
+  const auto *calendar = std::get_if<gisland::Column>(&state.views()->expanded->value);
+  REQUIRE(calendar != nullptr);
+  REQUIRE(calendar->children.size() == 2);
+
+  const auto *header = std::get_if<gisland::Row>(&calendar->children.front()->value);
+  REQUIRE(header != nullptr);
+  CHECK(header->children.size() == 5);
+  CHECK(std::holds_alternative<gisland::Column>(header->children.at(2)->value));
+
+  const auto *grid = std::get_if<gisland::Row>(&calendar->children.back()->value);
+  REQUIRE(grid != nullptr);
+  REQUIRE(grid->children.size() == 7);
+  for (const auto &column_node : grid->children) {
+    const auto *column = std::get_if<gisland::Column>(&column_node->value);
+    REQUIRE(column != nullptr);
+    CHECK(column->children.size() == 7);
+  }
 
   process.send(
       gisland::serialize_core_message(gisland::ShutdownMessage{.reason = "test", .deadline = 1s}));

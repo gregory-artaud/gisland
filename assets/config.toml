@@ -33,17 +33,19 @@ children = [
   { type = "row", gap = "small", children = [
     { type = "button", action_id = "previous-month", accessible_label = "Previous month", content = { type = "icon", name = "chevron-left", accessible_label = "Previous month" } },
     { type = "spacer", flexible = true },
-    { type = "text", value = { bind = "month_label" }, role = "title" },
+    { type = "column", gap = "xsmall", children = [
+      { type = "text", value = { bind = "month_label" }, role = "title" },
+      { type = "button", action_id = "today", accessible_label = "Today", content = { type = "text", value = "Today", role = "button" } }
+    ] },
     { type = "spacer", flexible = true },
-    { type = "button", action_id = "today", accessible_label = "Today", content = { type = "text", value = "Today", role = "button" } },
     { type = "button", action_id = "next-month", accessible_label = "Next month", content = { type = "icon", name = "chevron-right", accessible_label = "Next month" } }
   ] },
   { type = "row", gap = "small", children = [
-    { repeat = "weekdays", as = "weekday", template = { type = "text", value = { bind = "weekday" }, role = "caption" } }
-  ] },
-  { repeat = "weeks", as = "week", template = { type = "row", gap = "small", children = [
-    { repeat = "week", as = "calendar_day", template = { type = "text", value = { bind = "calendar_day.label" }, role = { bind = "calendar_day.role" } } }
-  ] } }
+    { repeat = "calendar_columns", as = "calendar_column", template = { type = "column", gap = "small", children = [
+      { type = "text", value = { bind = "calendar_column.weekday" }, role = "caption" },
+      { repeat = "calendar_column.days", as = "calendar_day", template = { type = "text", value = { bind = "calendar_day.label" }, role = { bind = "calendar_day.role" } } }
+    ] } }
+  ] }
 ]
 
 [[modules]]

@@ -40,12 +40,22 @@ enum class PublishResult : std::uint8_t { published, skipped, output_failed };
     }
     weeks.push_back(std::move(days));
   }
+  Json calendar_columns = Json::array();
+  for (std::size_t day_index = 0; day_index < snapshot.weekdays.size(); ++day_index) {
+    Json days = Json::array();
+    for (const auto &week : snapshot.weeks) {
+      days.push_back({{"label", week[day_index].label}, {"role", week[day_index].role}});
+    }
+    calendar_columns.push_back(
+        {{"weekday", snapshot.weekdays[day_index]}, {"days", std::move(days)}});
+  }
   return {
       {"time", snapshot.time},
       {"date_short", snapshot.date_short},
       {"month_label", snapshot.month_label},
       {"weekdays", snapshot.weekdays},
       {"weeks", std::move(weeks)},
+      {"calendar_columns", std::move(calendar_columns)},
   };
 }
 
