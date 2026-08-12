@@ -322,6 +322,10 @@ if(BUILD_TESTING)
       -DDATADIR=${CMAKE_INSTALL_DATADIR}
       -P ${PROJECT_SOURCE_DIR}/tests/install_layout_test.cmake
   )
+  add_test(
+    NAME gislandctl_help
+    COMMAND bash ${PROJECT_SOURCE_DIR}/tests/gislandctl_help_test.sh $<TARGET_FILE:gislandctl>
+  )
   add_executable(fake_module tests/fake_module.cpp)
   target_compile_features(fake_module PRIVATE cxx_std_23)
   target_link_libraries(fake_module PRIVATE nlohmann_json::nlohmann_json)
