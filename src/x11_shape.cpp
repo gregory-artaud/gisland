@@ -8,7 +8,7 @@
 
 namespace gisland {
 
-RoundedWindowShape::RoundedWindowShape() : display_(XOpenDisplay(nullptr)), available_(false) {
+RoundedWindowShape::RoundedWindowShape(void *display) : display_(display), available_(false) {
   if (display_ != nullptr) {
     int event_base = 0;
     int error_base = 0;
@@ -17,13 +17,9 @@ RoundedWindowShape::RoundedWindowShape() : display_(XOpenDisplay(nullptr)), avai
   }
 }
 
-RoundedWindowShape::~RoundedWindowShape() {
-  if (display_ != nullptr) {
-    XCloseDisplay(static_cast<Display *>(display_));
-  }
-}
+bool RoundedWindowShape::available() const { return available_; }
 
-void RoundedWindowShape::apply(void *native_window_handle, const IslandGeometry &geometry,
+void RoundedWindowShape::apply(const void *native_window_handle, const IslandGeometry &geometry,
                                const IslandPlacement &placement) const {
   if (!available_ || native_window_handle == nullptr) {
     return;
@@ -46,7 +42,6 @@ void RoundedWindowShape::apply(void *native_window_handle, const IslandGeometry 
   XShapeCombineRectangles(display, window, ShapeInput, static_cast<int>(std::lround(placement.x)),
                           static_cast<int>(std::lround(placement.y)), rectangles.data(),
                           static_cast<int>(rectangles.size()), ShapeSet, Unsorted);
-  XFlush(display);
 }
 
 } // namespace gisland

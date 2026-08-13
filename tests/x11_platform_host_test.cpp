@@ -1,4 +1,4 @@
-#include "gisland/x11_window_host.hpp"
+#include "gisland/x11_platform_host.hpp"
 
 #include "gisland/island.hpp"
 
@@ -112,7 +112,7 @@ TEST_CASE("X11 host publishes stable overlay properties without accepting focus"
   }
   X11Windows windows;
   Window subject = windows.subject();
-  auto host = gisland::X11WindowHost::create(&subject);
+  auto host = gisland::create_x11_platform_host(&subject);
   REQUIRE(host.has_value());
 
   XClassHint class_hint{};
@@ -148,16 +148,18 @@ TEST_CASE("X11 host resolves output and offsets its shaped input region") {
   }
   X11Windows windows;
   Window subject = windows.subject();
-  auto host = gisland::X11WindowHost::create(&subject);
+  auto host = gisland::create_x11_platform_host(&subject);
   REQUIRE(host.has_value());
 
-  const auto selected = host->select_output("primary");
+  const auto selected = (*host)->select_output("primary");
   REQUIRE(selected.has_value());
-  CHECK(selected->monitor.width > 0);
-  CHECK(selected->monitor.height > 0);
+  CHECK(selected->output.width > 0);
+  CHECK(selected->output.height > 0);
 
-  REQUIRE(host->apply_shape(gisland::geometry_for(gisland::IslandMode::compact),
-                            gisland::IslandPlacement{40.0F, 10.0F})
+  REQUIRE((*host)
+              ->update_input_region(
+                  gisland::InputRegion{gisland::geometry_for(gisland::IslandMode::compact),
+                                       gisland::IslandPlacement{40.0F, 10.0F}})
               .has_value());
   XSync(windows.display(), False);
   int rectangle_count = 0;
@@ -169,4 +171,34 @@ TEST_CASE("X11 host resolves output and offsets its shaped input region") {
   CHECK(rectangles[rectangle_count / 2].x == 40);
   CHECK(rectangles[rectangle_count / 2].y >= 10);
   XFree(rectangles);
+}
+
+TEST_CASE("X11 host rejects a missing native window as a recoverable attachment error") {
+  const auto host = gisland::create_x11_platform_host(nullptr);
+
+  REQUIRE_FALSE(host.has_value());
+  CHECK(host.error().operation == gisland::PlatformOperation::attach_window);
+  CHECK(host.error().severity == gisland::PlatformErrorSeverity::recoverable);
+}
+
+TEST_CASE("X11 host reports input-region failure for a destroyed window") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  Window window = XCreateSimpleWindow(display, DefaultRootWindow(display), 0, 0, 100, 40, 0, 0, 0);
+  XSync(display, False);
+  auto host = gisland::create_x11_platform_host(&window);
+  REQUIRE(host.has_value());
+  XDestroyWindow(display, window);
+  XSync(display, False);
+
+  const auto updated = (*host)->update_input_region(gisland::InputRegion{
+      gisland::geometry_for(gisland::IslandMode::compact), gisland::IslandPlacement{0.0F, 0.0F}});
+
+  REQUIRE_FALSE(updated.has_value());
+  CHECK(updated.error().operation == gisland::PlatformOperation::update_input_region);
+  CHECK(updated.error().severity == gisland::PlatformErrorSeverity::recoverable);
+  XCloseDisplay(display);
 }

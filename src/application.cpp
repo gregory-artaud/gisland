@@ -1,16 +1,17 @@
 #include "gisland/application.hpp"
 #include "gisland/control_dispatcher.hpp"
+#include "gisland/display.hpp"
 #include "gisland/file_watcher.hpp"
 #include "gisland/interaction.hpp"
 #include "gisland/ipc_server.hpp"
 #include "gisland/island.hpp"
 #include "gisland/layout.hpp"
 #include "gisland/module_supervisor.hpp"
+#include "gisland/platform_host.hpp"
 #include "gisland/raylib_renderer.hpp"
 #include "gisland/reload.hpp"
 #include "gisland/runtime.hpp"
-#include "gisland/x11_monitor.hpp"
-#include "gisland/x11_window_host.hpp"
+#include "gisland/x11_platform_host.hpp"
 
 #include <raylib.h>
 #include <rlgl.h>
@@ -89,15 +90,15 @@ public:
   static void hide() { SetWindowState(FLAG_WINDOW_HIDDEN); }
 };
 
-[[nodiscard]] X11Monitor raylib_monitor_fallback() {
+[[nodiscard]] DisplayOutput raylib_output_fallback() {
   const int monitor = GetCurrentMonitor();
   const Vector2 origin = GetMonitorPosition(monitor);
-  return X11Monitor{GetMonitorName(monitor),
-                    static_cast<int>(std::lround(origin.x)),
-                    static_cast<int>(std::lround(origin.y)),
-                    GetMonitorWidth(monitor),
-                    GetMonitorHeight(monitor),
-                    true};
+  return DisplayOutput{GetMonitorName(monitor),
+                       static_cast<int>(std::lround(origin.x)),
+                       static_cast<int>(std::lround(origin.y)),
+                       GetMonitorWidth(monitor),
+                       GetMonitorHeight(monitor),
+                       true};
 }
 
 [[nodiscard]] std::vector<std::filesystem::path>
@@ -187,9 +188,9 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
                         static_cast<float>(view.bounds.height), static_cast<float>(view.radius)};
 }
 
-[[nodiscard]] X11CanvasGeometry native_geometry(const IslandCanvasSize &canvas) {
+[[nodiscard]] CanvasGeometry canvas_geometry(const IslandCanvasSize &canvas) {
   const float surface_width = canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
-  return X11CanvasGeometry{
+  return CanvasGeometry{
       std::max(1, static_cast<int>(std::lround(canvas.width))),
       std::max(1, static_cast<int>(std::lround(canvas.height))),
       static_cast<int>(std::lround(canvas.surface_x)),
@@ -522,10 +523,10 @@ int Application::run() {
     return EXIT_FAILURE;
   }
   const RaylibPainter painter{*fonts};
-  std::optional<X11WindowHost> host;
-  auto created_host = X11WindowHost::create(GetWindowHandle());
+  PlatformHostPtr host;
+  auto created_host = create_x11_platform_host(GetWindowHandle());
   if (created_host) {
-    host.emplace(std::move(*created_host));
+    host = std::move(*created_host);
   } else {
     std::cerr << created_host.error().message << '\n';
   }
@@ -556,7 +557,7 @@ int Application::run() {
   ContentCrossfade content_crossfade;
   IslandGeometry current = initial_geometry;
   IslandPlacement placement = place_at_top_center(current, canvas);
-  X11Monitor monitor = raylib_monitor_fallback();
+  DisplayOutput output = raylib_output_fallback();
   std::optional<RenderedContext> rendered;
   std::optional<RenderTexture2D> outgoing_content;
   std::optional<RoundedView> current_surface;
@@ -569,9 +570,9 @@ int Application::run() {
   bool actions_ready = false;
   bool compact_refresh_deferred = false;
 
-  const auto refresh_monitor = [&] {
+  const auto refresh_output = [&] {
     if (!host) {
-      monitor = raylib_monitor_fallback();
+      output = raylib_output_fallback();
       return;
     }
     auto selected = host->select_output(bootstrap_.config.monitor);
@@ -579,18 +580,18 @@ int Application::run() {
       std::cerr << selected.error().message << '\n';
       return;
     }
-    monitor = std::move(selected->monitor);
+    output = std::move(selected->output);
     if (selected->used_fallback) {
-      std::cerr << "X11 output '" << bootstrap_.config.monitor << "' is unavailable; using '"
-                << monitor.name << "'\n";
+      std::cerr << "display output '" << bootstrap_.config.monitor << "' is unavailable; using '"
+                << output.name << "'\n";
     }
   };
 
   int native_width = std::max(1, static_cast<int>(std::lround(canvas.width)));
   int native_height = std::max(1, static_cast<int>(std::lround(canvas.height)));
-  std::optional<X11WindowPlacement> native_position;
+  std::optional<AbsolutePlacement> native_position;
   const auto apply_native_canvas = [&] {
-    const X11CanvasGeometry geometry = native_geometry(canvas);
+    const CanvasGeometry geometry = canvas_geometry(canvas);
     const int next_width = geometry.width;
     const int next_height = geometry.height;
     if (next_width != native_width || next_height != native_height) {
@@ -598,7 +599,7 @@ int Application::run() {
       native_width = next_width;
       native_height = next_height;
     }
-    auto positioned = place_on_monitor(monitor, geometry, config_.top_margin);
+    auto positioned = place_canvas(output, geometry, config_.top_margin);
     if (!positioned) {
       std::cerr << positioned.error().message << '\n';
       return;
@@ -609,7 +610,7 @@ int Application::run() {
       native_position = *positioned;
     }
   };
-  refresh_monitor();
+  refresh_output();
   apply_native_canvas();
 
   const auto clear_outgoing = [&] {
@@ -768,13 +769,13 @@ int Application::run() {
       return std::unexpected(candidate_rich_text.error().message);
     }
 
-    X11Monitor candidate_monitor = monitor;
+    DisplayOutput candidate_output = output;
     if (host) {
       auto selected = host->select_output(candidate_bootstrap->config.monitor);
       if (!selected) {
         return std::unexpected(selected.error().message);
       }
-      candidate_monitor = std::move(selected->monitor);
+      candidate_output = std::move(selected->output);
     }
 
     const auto make_selection = [&](ViewSlot slot) {
@@ -800,8 +801,8 @@ int Application::run() {
       candidate_rendered.emplace(std::move(*candidate));
     }
     const auto candidate_canvas = fixed_canvas_for(candidate_bootstrap->theme);
-    if (auto positioned = place_on_monitor(candidate_monitor, native_geometry(candidate_canvas),
-                                           config_.top_margin);
+    if (auto positioned =
+            place_canvas(candidate_output, canvas_geometry(candidate_canvas), config_.top_margin);
         !positioned) {
       if (candidate_rendered) {
         unload(*candidate_rendered);
@@ -825,7 +826,7 @@ int Application::run() {
     *fonts = std::move(*candidate_fonts);
     *rich_text = std::move(*candidate_rich_text);
     bootstrap_ = std::move(*candidate_bootstrap);
-    monitor = std::move(candidate_monitor);
+    output = std::move(candidate_output);
     canvas = candidate_canvas;
     mode_controller.set_exit_tolerance(bootstrap_.config.interaction.hover_exit);
     if (mode_controller.mode() == IslandMode::expanded &&
@@ -1044,14 +1045,14 @@ int Application::run() {
         std::cerr << events.error().message << '\n';
       } else {
         for (const auto &event : *events) {
-          if (event.kind == X11WindowEventKind::topology_changed) {
+          if (event.kind == PlatformEventKind::output_topology_changed) {
             topology_changed = true;
           }
         }
       }
     }
     if (topology_changed) {
-      refresh_monitor();
+      refresh_output();
       apply_native_canvas();
     }
     std::optional<ButtonDecorationDrawCommand> button_hover;
@@ -1136,7 +1137,7 @@ int Application::run() {
       surface.bounds.x = static_cast<int>(std::lround(placement.x));
       surface.bounds.y = static_cast<int>(std::lround(placement.y));
       if (host) {
-        if (auto shaped = host->apply_shape(current, placement); !shaped) {
+        if (auto shaped = host->update_input_region(InputRegion{current, placement}); !shaped) {
           std::cerr << shaped.error().message << '\n';
         }
       }

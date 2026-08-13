@@ -16,6 +16,7 @@ include(cmake/ProjectOptions.cmake)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
+option(GISLAND_BUILD_WAYLAND_PROTOTYPE "Build the isolated Wayland/EGL/rlgl prototype" OFF)
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
@@ -57,7 +58,140 @@ if(BUILD_TESTING)
   )
 endif()
 
+if(GISLAND_BUILD_WAYLAND_PROTOTYPE)
+  enable_language(C)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+  pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl)
+  pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
+  find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
+  FetchContent_Declare(
+    wlr_protocols
+    GIT_REPOSITORY https://gitlab.freedesktop.org/wlroots/wlr-protocols.git
+    GIT_TAG bf4fc79abc359eea5a0edec0ac6d4a2b2955f82a
+    GIT_SHALLOW FALSE
+  )
+  FetchContent_MakeAvailable(wlr_protocols)
+
+  set(
+    GISLAND_LAYER_SHELL_XML
+    "${wlr_protocols_SOURCE_DIR}/unstable/wlr-layer-shell-unstable-v1.xml"
+  )
+  set(GISLAND_WAYLAND_GENERATED_DIR "${PROJECT_BINARY_DIR}/generated/wayland")
+  set(
+    GISLAND_LAYER_SHELL_HEADER
+    "${GISLAND_WAYLAND_GENERATED_DIR}/wlr-layer-shell-unstable-v1-client-protocol.h"
+  )
+  set(
+    GISLAND_LAYER_SHELL_RAW_HEADER
+    "${GISLAND_WAYLAND_GENERATED_DIR}/wlr-layer-shell-unstable-v1-client-protocol.raw.h"
+  )
+  set(
+    GISLAND_LAYER_SHELL_CODE
+    "${GISLAND_WAYLAND_GENERATED_DIR}/wlr-layer-shell-unstable-v1-protocol.c"
+  )
+  add_custom_command(
+    OUTPUT
+      "${GISLAND_LAYER_SHELL_HEADER}"
+      "${GISLAND_LAYER_SHELL_CODE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${GISLAND_WAYLAND_GENERATED_DIR}"
+    COMMAND
+      "${WAYLAND_SCANNER_EXECUTABLE}" client-header "${GISLAND_LAYER_SHELL_XML}"
+      "${GISLAND_LAYER_SHELL_RAW_HEADER}"
+    COMMAND
+      ${CMAKE_COMMAND} -DINPUT=${GISLAND_LAYER_SHELL_RAW_HEADER}
+      -DOUTPUT=${GISLAND_LAYER_SHELL_HEADER}
+      -P "${PROJECT_SOURCE_DIR}/cmake/SanitizeLayerShellHeader.cmake"
+    COMMAND
+      "${WAYLAND_SCANNER_EXECUTABLE}" private-code "${GISLAND_LAYER_SHELL_XML}"
+      "${GISLAND_LAYER_SHELL_CODE}"
+    DEPENDS
+      "${GISLAND_LAYER_SHELL_XML}"
+      "${PROJECT_SOURCE_DIR}/cmake/SanitizeLayerShellHeader.cmake"
+    BYPRODUCTS "${GISLAND_LAYER_SHELL_RAW_HEADER}"
+    VERBATIM
+  )
+
+  add_library(gisland_wayland_prototype_options STATIC prototype/wayland/options.cpp)
+  target_compile_features(gisland_wayland_prototype_options PUBLIC cxx_std_23)
+  target_include_directories(
+    gisland_wayland_prototype_options
+    PUBLIC ${PROJECT_SOURCE_DIR}/prototype/wayland
+  )
+  gisland_set_project_options(gisland_wayland_prototype_options)
+
+  add_library(gisland_wayland_protocol STATIC "${GISLAND_LAYER_SHELL_CODE}")
+  set_source_files_properties(
+    "${GISLAND_LAYER_SHELL_CODE}"
+    PROPERTIES LANGUAGE C
+  )
+
+  add_executable(
+    gisland_wayland_prototype
+    prototype/wayland/main.cpp
+    prototype/wayland/runtime.cpp
+    prototype/wayland/xdg_popup_interface.cpp
+    prototype/wayland/rlgl_impl.cpp
+    "${GISLAND_LAYER_SHELL_HEADER}"
+  )
+  target_compile_features(gisland_wayland_prototype PRIVATE cxx_std_23)
+  target_include_directories(
+    gisland_wayland_prototype
+    PRIVATE
+      ${PROJECT_SOURCE_DIR}/prototype/wayland
+      ${GISLAND_WAYLAND_GENERATED_DIR}
+  )
+  target_compile_definitions(gisland_wayland_prototype PRIVATE GRAPHICS_API_OPENGL_33)
+  set_source_files_properties(
+    prototype/wayland/rlgl_impl.cpp
+    PROPERTIES COMPILE_OPTIONS "-w"
+  )
+  target_link_libraries(
+    gisland_wayland_prototype
+    PRIVATE
+      gisland_wayland_prototype_options
+      PkgConfig::WAYLAND_CLIENT
+      PkgConfig::WAYLAND_EGL
+      PkgConfig::EGL
+      gisland_wayland_protocol
+  )
+  gisland_set_project_options(gisland_wayland_prototype)
+
+  if(BUILD_TESTING)
+    add_executable(
+      gisland_wayland_prototype_tests
+      tests/wayland_prototype_options_test.cpp
+    )
+    target_compile_features(gisland_wayland_prototype_tests PRIVATE cxx_std_23)
+    target_link_libraries(
+      gisland_wayland_prototype_tests
+      PRIVATE gisland_wayland_prototype_options Catch2::Catch2WithMain
+    )
+    gisland_set_project_options(gisland_wayland_prototype_tests)
+    add_test(NAME wayland_prototype_options COMMAND gisland_wayland_prototype_tests)
+    find_program(GISLAND_SWAY_EXECUTABLE NAMES sway)
+    if(GISLAND_SWAY_EXECUTABLE)
+      add_test(
+        NAME wayland_rlgl_prototype
+        COMMAND
+          bash ${PROJECT_SOURCE_DIR}/scripts/run-wayland-prototype-test.sh
+          "${GISLAND_SWAY_EXECUTABLE}"
+          $<TARGET_FILE:gisland_wayland_prototype>
+      )
+      set_tests_properties(wayland_rlgl_prototype PROPERTIES LABELS graphical RUN_SERIAL true)
+    else()
+      message(
+        STATUS
+        "Wayland prototype runtime test disabled: install sway for a headless layer-shell compositor"
+      )
+    endif()
+  endif()
+endif()
+
 FetchContent_MakeAvailable(raylib nlohmann_json tomlplusplus)
+if(GISLAND_BUILD_WAYLAND_PROTOTYPE)
+  target_include_directories(gisland_wayland_prototype PRIVATE ${raylib_SOURCE_DIR}/src)
+endif()
 if(BUILD_TESTING)
   FetchContent_MakeAvailable(Catch2)
 endif()
@@ -113,6 +247,7 @@ add_library(
   src/control_client.cpp
   src/control_dispatcher.cpp
   src/context.cpp
+  src/display.cpp
   src/file_watcher.cpp
   src/interaction.cpp
   src/ipc_server.cpp
@@ -132,8 +267,7 @@ add_library(
   src/scene_template.cpp
   src/theme.cpp
   src/write_queue.cpp
-  src/x11_monitor.cpp
-  src/x11_window_host.cpp
+  src/x11_platform_host.cpp
   src/x11_shape.cpp
 )
 add_library(gisland::app ALIAS gisland_app)
@@ -387,6 +521,7 @@ if(BUILD_TESTING)
     tests/control_client_test.cpp
     tests/control_dispatcher_test.cpp
     tests/control_test.cpp
+    tests/display_test.cpp
   tests/context_test.cpp
   tests/file_watcher_test.cpp
   tests/interaction_test.cpp
@@ -398,6 +533,7 @@ if(BUILD_TESTING)
     tests/module_manifest_test.cpp
     tests/module_supervisor_test.cpp
     tests/posix_process_backend_test.cpp
+    tests/platform_host_test.cpp
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/reload_test.cpp
@@ -407,7 +543,6 @@ if(BUILD_TESTING)
     tests/scene_template_test.cpp
     tests/theme_test.cpp
     tests/write_queue_test.cpp
-    tests/x11_monitor_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(
@@ -472,7 +607,7 @@ if(BUILD_TESTING)
       DISCOVERY_MODE PRE_TEST
     )
 
-    add_executable(gisland_x11_window_tests tests/x11_window_host_test.cpp)
+    add_executable(gisland_x11_window_tests tests/x11_platform_host_test.cpp)
     target_compile_features(gisland_x11_window_tests PRIVATE cxx_std_23)
     target_link_libraries(
       gisland_x11_window_tests
@@ -547,6 +682,7 @@ set(
   include/gisland/control_client.hpp
   include/gisland/control_dispatcher.hpp
   include/gisland/context.hpp
+  include/gisland/display.hpp
   include/gisland/file_watcher.hpp
   include/gisland/interaction.hpp
   include/gisland/ipc_server.hpp
@@ -556,6 +692,7 @@ set(
   include/gisland/module_lifecycle.hpp
   include/gisland/module_manifest.hpp
   include/gisland/module_supervisor.hpp
+  include/gisland/platform_host.hpp
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
@@ -566,9 +703,17 @@ set(
   include/gisland/scene_template.hpp
   include/gisland/theme.hpp
   include/gisland/write_queue.hpp
-  include/gisland/x11_monitor.hpp
-  include/gisland/x11_window_host.hpp
+  include/gisland/x11_platform_host.hpp
   include/gisland/x11_shape.hpp
+  prototype/wayland/layer_shell_protocol.hpp
+  prototype/wayland/main.cpp
+  prototype/wayland/options.cpp
+  prototype/wayland/rlgl_impl.cpp
+  prototype/wayland/rlgl_probe.hpp
+  prototype/wayland/runtime.cpp
+  prototype/wayland/wayland_prototype_options.hpp
+  prototype/wayland/wayland_prototype_runtime.hpp
+  prototype/wayland/xdg_popup_interface.cpp
   src/application.cpp
   src/bootstrap.cpp
   src/clock_calendar.cpp
@@ -579,6 +724,7 @@ set(
   src/control_main.cpp
   src/control_dispatcher.cpp
   src/context.cpp
+  src/display.cpp
   src/file_watcher.cpp
   src/interaction.cpp
   src/ipc_server.cpp
@@ -599,8 +745,7 @@ set(
   src/scene_template.cpp
   src/theme.cpp
   src/write_queue.cpp
-  src/x11_monitor.cpp
-  src/x11_window_host.cpp
+  src/x11_platform_host.cpp
   src/x11_shape.cpp
   tests/fake_module.cpp
   tests/application_x11_smoke_test.cpp
@@ -612,6 +757,7 @@ set(
   tests/control_client_test.cpp
   tests/control_dispatcher_test.cpp
   tests/control_test.cpp
+  tests/display_test.cpp
   tests/context_test.cpp
   tests/file_watcher_test.cpp
   tests/interaction_test.cpp
@@ -623,6 +769,7 @@ set(
   tests/module_manifest_test.cpp
   tests/module_supervisor_test.cpp
   tests/posix_process_backend_test.cpp
+  tests/platform_host_test.cpp
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/reload_test.cpp
@@ -633,9 +780,9 @@ set(
   tests/scene_template_test.cpp
   tests/theme_test.cpp
   tests/visual_regression_test.cpp
+  tests/wayland_prototype_options_test.cpp
   tests/write_queue_test.cpp
-  tests/x11_monitor_test.cpp
-  tests/x11_window_host_test.cpp
+   tests/x11_platform_host_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)
