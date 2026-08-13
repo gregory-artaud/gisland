@@ -32,6 +32,7 @@ struct RuntimeBootstrap {
   std::filesystem::path config_path;
   std::filesystem::path theme_path;
   std::vector<std::filesystem::path> manifest_paths;
+  std::vector<std::filesystem::path> module_dependency_paths;
   RuntimeRoots roots;
 };
 

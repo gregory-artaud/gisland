@@ -4,11 +4,14 @@
 #include "gisland/protocol.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace gisland {
@@ -16,9 +19,13 @@ namespace gisland {
 enum class ModuleOptionType { string, integer, number, boolean, array, table };
 
 struct ModuleOptionSchema {
+  using NumericBound = std::variant<std::int64_t, double>;
+
   ModuleOptionType type;
   bool required{false};
   std::vector<std::string> allowed;
+  std::optional<NumericBound> minimum;
+  std::optional<NumericBound> maximum;
 };
 
 struct ModuleManifest {
@@ -31,6 +38,11 @@ struct ModuleManifest {
   ConfigValue::Table defaults;
   std::map<std::string, ModuleOptionSchema, std::less<>> options_schema;
   std::filesystem::path path;
+  std::optional<std::filesystem::path> entry_path;
+  std::optional<std::filesystem::path> config_path;
+  std::optional<std::filesystem::path> view_path;
+  std::optional<ModuleViewConfig> view;
+  ModuleStaticDependencies dependencies{};
 };
 
 struct ModuleManifestError {

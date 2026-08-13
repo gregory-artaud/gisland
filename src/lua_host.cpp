@@ -11,6 +11,9 @@
 #include <charconv>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <string>
@@ -119,6 +122,35 @@ private:
   lua_State *state_;
   int top_;
 };
+
+[[nodiscard]] std::expected<void, LuaHostError>
+prepend_package_path(lua_State *state, const std::filesystem::path &entry_path) {
+  StackRestore restore{state};
+  lua_getglobal(state, "package");
+  if (!lua_istable(state, -1)) {
+    return std::unexpected(
+        error(LuaHostErrorCode::runtime_error, "Lua package library is unavailable"));
+  }
+  lua_getfield(state, -1, "path");
+  std::size_t inherited_size = 0;
+  const char *inherited = lua_tolstring(state, -1, &inherited_size);
+  if (inherited == nullptr) {
+    return std::unexpected(
+        error(LuaHostErrorCode::runtime_error, "Lua package.path is unavailable"));
+  }
+  const auto package_directory = entry_path.parent_path();
+  std::string path = (package_directory / "?.lua").string();
+  path.push_back(';');
+  path.append((package_directory / "?/init.lua").string());
+  if (inherited_size > 0) {
+    path.push_back(';');
+    path.append(inherited, inherited_size);
+  }
+  lua_pop(state, 1);
+  lua_pushlstring(state, path.data(), path.size());
+  lua_setfield(state, -2, "path");
+  return {};
+}
 
 } // namespace
 
@@ -901,6 +933,19 @@ private:
 };
 
 std::expected<std::unique_ptr<LuaHost>, LuaHostError> LuaHost::load(const std::string &entry_path) {
+  std::ifstream input{entry_path, std::ios::binary};
+  if (!input) {
+    return std::unexpected(error(LuaHostErrorCode::file_error, "cannot load Lua entry file"));
+  }
+  std::string source{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+  if (input.bad()) {
+    return std::unexpected(error(LuaHostErrorCode::file_error, "cannot read Lua entry file"));
+  }
+  return load(entry_path, std::move(source));
+}
+
+std::expected<std::unique_ptr<LuaHost>, LuaHostError> LuaHost::load(const std::string &entry_path,
+                                                                    std::string entry_source) {
   lua_State *state = luaL_newstate();
   if (state == nullptr) {
     return std::unexpected(
@@ -908,11 +953,15 @@ std::expected<std::unique_ptr<LuaHost>, LuaHostError> LuaHost::load(const std::s
   }
   auto impl = std::make_unique<Impl>(state);
   luaL_openlibs(state);
+  if (auto path = prepend_package_path(state, entry_path); !path) {
+    return std::unexpected(std::move(path.error()));
+  }
   if (auto registered = impl->register_api(); !registered) {
     return std::unexpected(error(LuaHostErrorCode::runtime_error, std::move(registered.error())));
   }
 
-  const int load_status = luaL_loadfile(state, entry_path.c_str());
+  const int load_status =
+      luaL_loadbuffer(state, entry_source.data(), entry_source.size(), entry_path.c_str());
   if (load_status != LUA_OK) {
     const auto code = load_status == LUA_ERRSYNTAX ? LuaHostErrorCode::syntax_error
                                                    : LuaHostErrorCode::file_error;

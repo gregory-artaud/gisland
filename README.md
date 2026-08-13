@@ -233,11 +233,52 @@ expanded = "clock"
 
 The legacy `default_module = "clock"` form remains supported and sets both fallbacks.
 
-The manifest declares human-readable metadata, a command vector, its supported protocol range,
-default options, and an option schema. Configured values are merged over defaults and validated
-before any process starts. A missing, malformed, or protocol-incompatible referenced manifest
-rejects startup or reload; malformed unreferenced manifests do not terminate gisland. Existing
-instances with an explicit `command` remain supported and bypass discovery.
+Each package requires `module.toml`. It may also contain package-local default options in
+`config.toml`, declarative scene templates in `view.toml`, and implementation files. The manifest
+declares human-readable metadata, a command vector, its supported protocol range, an option schema,
+and optional package file references:
+
+```toml
+id = "example-clock"
+name = "Example clock"
+description = "Publishes local time as template data"
+command = ["gisland-lua-host"]
+entry = "example.lua"
+config = "config.toml"
+view = "view.toml"
+
+[protocol]
+major = 1
+minimum_minor = 8
+maximum_minor = 8
+
+[options_schema.format]
+type = "string"
+```
+
+`entry`, `config`, and `view` are package-relative regular-file paths. Absolute paths, `..`, missing
+files, and symlink escapes outside the package are rejected. `entry` is required when the command's
+executable name is `gisland-lua-host`, is invalid for other commands, and is appended once as an
+absolute canonical argument by gisland. Other command arguments remain explicit array elements and
+are never interpreted by a shell.
+
+`config.toml`, when referenced, has exactly one `[defaults]` table. Every key must exist in
+`options_schema` and satisfy its type, allowed values, and optional inclusive numeric `minimum` and
+`maximum`. Legacy inline manifest `[defaults]` remains valid only when `config` is absent. Resolution
+applies package defaults first and global instance `[modules.options]` overrides second, then validates
+the result before sending it as `init.configuration`.
+
+`view.toml` may define `[compact]`, `[expanded]`, or both using the same declarative template grammar
+as `[modules.view.compact]` and `[modules.view.expanded]`. A global instance view replaces the complete
+matching package slot; trees are not deep-merged, and the other package slot remains unchanged.
+Templates bind data with values such as `{ bind = "time" }`. Packages use semantic roles such as
+`compact-primary`, `body`, and `warning`; concrete colors, fonts, geometry, spacing, and animation
+remain global-theme responsibilities.
+
+Configured values and views are validated before any process starts. A missing, malformed, or
+protocol-incompatible referenced manifest rejects startup or reload; malformed unreferenced manifests
+do not terminate gisland. Existing instances with an explicit `command` remain supported and bypass
+discovery.
 
 ## Lua Modules
 
@@ -247,13 +288,16 @@ module instance gets its own supervised host process, Lua state, timers, and fai
 blocking callback delays only that module instance, not rendering or other modules, but modules
 should still keep synchronous work bounded.
 
-This increment requires a manifest command containing the host and Lua entry as absolute paths:
+Lua packages name the host in `command` and the script separately in `entry`:
 
 ```toml
 id = "example-clock"
 name = "Example clock"
 description = "Publishes local time as template data"
-command = ["/usr/local/bin/gisland-lua-host", "/home/user/modules/example-clock.lua"]
+command = ["gisland-lua-host"]
+entry = "example.lua"
+config = "config.toml"
+view = "view.toml"
 
 [protocol]
 major = 1
@@ -261,11 +305,19 @@ minimum_minor = 8
 maximum_minor = 8
 ```
 
-The host accepts exactly one argument, the entry script path. Package-local `entry`, `config.toml`,
-and `view.toml` discovery arrive in Increment 3; do not use those manifest fields yet. Standard Lua
-`require` uses the inherited Lua 5.4 `package.path`. The host does not yet prepend the entry
-directory, and it leaves native `package.cpath` unchanged. Set standard Lua search paths in the
-launch environment when dependencies are outside the system paths.
+The host accepts exactly one final entry-script argument after gisland resolves the manifest. It
+prepends the entry directory's `?.lua` and `?/init.lua` patterns to inherited Lua 5.4 `package.path`,
+so package-local `require` works before standard locations. Native `package.cpath` remains unchanged.
+The self-contained distributed example under `assets/modules/lua-example` demonstrates package-local
+defaults, bound compact and expanded views, and a one-second `os.date` update. Installation discovers
+it but does not enable it. A global configuration enables it without duplicating its options or view:
+
+```toml
+[[modules]]
+id = "example"
+module = "lua-example"
+enabled = true
+```
 
 A script must return exactly one definition produced by `gisland.module`:
 
@@ -434,12 +486,20 @@ font, active layout, render-resource, monitor-placement, and supervisor-queue pr
 returns `reload_rejected` and leaves the running configuration, visible frame, and module processes
 unchanged.
 
-gisland also watches the active configuration, selected theme, and referenced module manifests.
-Exact-file events are debounced until a 100 ms quiet period has elapsed, then use the same
-transactional reload path. Parent directories are watched so atomic editor replacements are
-detected while unrelated temporary files are ignored. Invalid candidates are logged and retained
-files remain watched for a later correction. If filesystem watching becomes unavailable, automatic
-reload is disabled without terminating gisland; `gislandctl reload` remains available.
+gisland also watches the active configuration, selected theme, and each enabled package's resolved
+`module.toml`, `config.toml`, `view.toml`, and entry file. Transitively required Lua files are not
+watched. Exact-file events are debounced until a 100 ms quiet period has elapsed, then use the same
+reload path. Parent directories are watched so atomic editor replacements are detected while
+unrelated temporary files are ignored. If filesystem watching becomes unavailable, automatic reload
+is disabled without terminating gisland; `gislandctl reload` remains available.
+
+Static TOML parsing, path containment, schema validation, and view instantiation are transactional:
+an invalid candidate retains the running process and last valid view, and retained files stay watched
+for correction. Manifest, package configuration, and entry changes replace affected processes.
+View-only changes reuse the latest valid data snapshot without restart and independently retain a
+slot that cannot be instantiated. Lua syntax, package `require`, and `init` execute only in the
+replacement process; a runtime script failure therefore occurs after the old process stops and uses
+normal supervisor failure and restart backoff rather than transactional retention.
 
 Unchanged module processes retain their PID and runtime state. Compact or expanded template-only
 changes reuse the latest successful data snapshot without restarting the module. Changes to command,

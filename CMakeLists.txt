@@ -238,6 +238,11 @@ configure_file(
   "${PROJECT_BINARY_DIR}/install/audio.module.toml"
   @ONLY
 )
+configure_file(
+  packaging/lua-example.module.toml.in
+  "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
+  @ONLY
+)
 set(GISLAND_NOTIFICATION_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/notifications")
 configure_file(
   packaging/gisland-notifications.in
@@ -339,6 +344,18 @@ install(
   FILES "${PROJECT_BINARY_DIR}/install/audio.module.toml"
   RENAME module.toml
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/audio"
+)
+install(
+  FILES "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
+  RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/lua-example"
+)
+install(
+  FILES
+    assets/modules/lua-example/config.toml
+    assets/modules/lua-example/view.toml
+    assets/modules/lua-example/example.lua
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/lua-example"
 )
 install(
   PROGRAMS
@@ -462,10 +479,11 @@ if(BUILD_TESTING)
     gisland_tests
     PRIVATE
       GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+      GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
       GISLAND_CLOCK_CALENDAR_PATH="${PROJECT_BINARY_DIR}/gisland-clock-calendar"
       GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
   )
-  add_dependencies(gisland_tests fake_module gisland_clock_calendar gisland_assets)
+  add_dependencies(gisland_tests fake_module gisland-lua-host gisland_clock_calendar gisland_assets)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
@@ -629,6 +647,7 @@ set(
   include/gisland/application.hpp
   include/gisland/bootstrap.hpp
   include/gisland/clock_calendar.hpp
+  include/gisland/content_fingerprint.hpp
   include/gisland/config.hpp
   include/gisland/control.hpp
   include/gisland/control_client.hpp

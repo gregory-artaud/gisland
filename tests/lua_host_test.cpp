@@ -1,3 +1,4 @@
+#include "gisland/content_fingerprint.hpp"
 #include "gisland/lua_host.hpp"
 #include "gisland/lua_transport.hpp"
 
@@ -5,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -18,6 +20,7 @@
 #include <iterator>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,6 +64,33 @@ private:
   int read_{-1};
   int write_{-1};
 };
+
+class TemporaryDirectory {
+public:
+  TemporaryDirectory() {
+    const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+    path_ = std::filesystem::temp_directory_path() / ("gisland-lua-host-" + std::to_string(suffix));
+    std::filesystem::create_directories(path_);
+  }
+
+  TemporaryDirectory(const TemporaryDirectory &) = delete;
+  TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
+  ~TemporaryDirectory() { std::filesystem::remove_all(path_); }
+
+  [[nodiscard]] const std::filesystem::path &path() const { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
+
+void write_file(const std::filesystem::path &path, std::string_view content) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream stream{path};
+  if (!stream) {
+    throw std::runtime_error{"could not create Lua host fixture"};
+  }
+  stream << content;
+}
 
 void write_all(int descriptor, std::string_view value) {
   std::size_t offset = 0;
@@ -386,6 +416,50 @@ TEST_CASE("lua host script retains callbacks without stack debris", "[lua_host_s
   CHECK(definition.actions == std::vector<std::string>{"refresh", "set-value"});
   CHECK((*host)->retained_callback_count() == 6);
   CHECK((*host)->stack_size() == 0);
+}
+
+TEST_CASE("lua host prepends package require paths and preserves inherited cpath",
+          "[lua_host_script][lua_host_require]") {
+  TemporaryDirectory temporary;
+  const auto package = temporary.path() / "package";
+  const auto inherited_first = temporary.path() / "inherited-first";
+  const auto inherited_second = temporary.path() / "inherited-second";
+  const auto unrelated_cwd = temporary.path() / "cwd";
+  std::filesystem::create_directories(unrelated_cwd);
+  write_file(package / "choice.lua", "return 'package'\n");
+  write_file(package / "nested/init.lua", "return 'nested-package'\n");
+  write_file(inherited_first / "choice.lua", "return 'inherited-first'\n");
+  write_file(inherited_second / "choice.lua", "return 'inherited-second'\n");
+
+  const auto inherited_path =
+      (inherited_first / "?.lua").string() + ";" + (inherited_second / "?.lua").string();
+  const std::string inherited_cpath = "/native/first/?.so;/native/second/?.so";
+  const auto expected_path =
+      (package / "?.lua").string() + ";" + (package / "?/init.lua").string() + ";" + inherited_path;
+  const auto entry = package / "entry.lua";
+  write_file(entry, "assert(package.path == " + nlohmann::json(expected_path).dump() + ")\n" +
+                        "assert(package.cpath == " + nlohmann::json(inherited_cpath).dump() +
+                        ")\n"
+                        "assert(require('choice') == 'package')\n"
+                        "assert(require('nested') == 'nested-package')\n"
+                        "return gisland.module {}\n");
+
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    if (::chdir(unrelated_cwd.c_str()) != 0 ||
+        ::setenv("LUA_PATH", inherited_path.c_str(), 1) != 0 ||
+        ::setenv("LUA_CPATH", inherited_cpath.c_str(), 1) != 0) {
+      _exit(126);
+    }
+    const auto host = gisland::LuaHost::load(entry.string());
+    _exit(host.has_value() ? 0 : 1);
+  }
+
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
 }
 
 TEST_CASE("lua_host_lifecycle initializes before ready with protocol 1.8", "[lua_host_lifecycle]") {
@@ -787,7 +861,8 @@ TEST_CASE("lua_host_action process echoes correlation and remains ready after ca
   if (child == 0) {
     static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
     static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
-    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), "--module-option",
+            nullptr);
     _exit(127);
   }
 
@@ -830,6 +905,77 @@ TEST_CASE("lua_host_action process echoes correlation and remains ready after ca
   REQUIRE(::waitpid(child, &status, 0) == child);
   CHECK(WIFEXITED(status));
   CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("lua host process verifies discovered entry bytes before loading") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "entry.lua";
+  constexpr std::string_view source = "return gisland.module {}\n";
+  write_file(entry, source);
+  struct stat metadata{};
+  REQUIRE(::stat(entry.c_str(), &metadata) == 0);
+  const auto identity = std::to_string(static_cast<std::uint64_t>(metadata.st_dev)) + ':' +
+                        std::to_string(static_cast<std::uint64_t>(metadata.st_ino)) + ':' +
+                        std::to_string(static_cast<std::uint64_t>(metadata.st_size)) + ':' +
+                        std::to_string(metadata.st_mtim.tv_sec) + ':' +
+                        std::to_string(metadata.st_mtim.tv_nsec);
+  const auto fingerprint = gisland::content_fingerprint(source);
+  const auto fingerprint_argument = "--gisland-entry-fingerprint=" + fingerprint;
+
+  SECTION("valid entry starts ready") {
+    Pipe input;
+    Pipe output;
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+      static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+      static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+      static_cast<void>(::setenv("GISLAND_LUA_ENTRY_IDENTITY", identity.c_str(), 1));
+      ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(),
+              fingerprint_argument.c_str(), "--instance-argument", nullptr);
+      _exit(127);
+    }
+    write_all(input.write_fd(), init_record().dump() + "\n");
+    std::string text;
+    for (int attempt = 0; attempt < 100 && !text.contains('\n'); ++attempt) {
+      text += read_available(output.read_fd());
+      ::usleep(1000);
+    }
+    REQUIRE(text.contains('\n'));
+    CHECK(nlohmann::json::parse(text.substr(0, text.find('\n'))).at("type") == "ready");
+    write_all(
+        input.write_fd(),
+        nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+            "\n");
+    int status = 0;
+    REQUIRE(::waitpid(child, &status, 0) == child);
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+  }
+
+  SECTION("same identity with different bytes is rejected") {
+    std::string replacement{source};
+    replacement.back() = ' ';
+    write_file(entry, replacement);
+    const std::array times{metadata.st_atim, metadata.st_mtim};
+    REQUIRE(::utimensat(AT_FDCWD, entry.c_str(), times.data(), 0) == 0);
+
+    Pipe errors;
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+      static_cast<void>(::dup2(errors.write_fd(), STDERR_FILENO));
+      static_cast<void>(::setenv("GISLAND_LUA_ENTRY_IDENTITY", identity.c_str(), 1));
+      ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(),
+              fingerprint_argument.c_str(), nullptr);
+      _exit(127);
+    }
+    int status = 0;
+    REQUIRE(::waitpid(child, &status, 0) == child);
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) != 0);
+    CHECK(read_available(errors.read_fd()).contains("module entry content changed before launch"));
+  }
 }
 
 TEST_CASE("lua_host_timer parses bounded durations", "[lua_host_timer]") {

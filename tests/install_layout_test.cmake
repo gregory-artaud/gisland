@@ -1,4 +1,7 @@
 file(REMOVE_RECURSE "${STAGING_DIR}")
+set(personal_manifest "${STAGING_DIR}/personal/gisland/modules/existing/module.toml")
+file(MAKE_DIRECTORY "${STAGING_DIR}/personal/gisland/modules/existing")
+file(WRITE "${personal_manifest}" "personal module sentinel\n")
 execute_process(
   COMMAND
     "${CMAKE_COMMAND}" -E env "DESTDIR=${STAGING_DIR}" "${CMAKE_COMMAND}" --install "${BUILD_DIR}"
@@ -27,6 +30,10 @@ set(required_files
     "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/lua-example/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/lua-example/config.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/lua-example/view.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/lua-example/example.lua"
     "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
     "${root}/${DATADIR}/gisland/battery/gisland_battery/application.py"
     "${root}/${DATADIR}/gisland/audio/gisland_audio/application.py"
@@ -36,6 +43,29 @@ foreach(required_file IN LISTS required_files)
     message(FATAL_ERROR "missing installed file: ${required_file}")
   endif()
 endforeach()
+
+file(READ "${personal_manifest}" personal_manifest_contents)
+if(NOT personal_manifest_contents STREQUAL "personal module sentinel\n")
+  message(FATAL_ERROR "installation modified a personal module")
+endif()
+
+file(READ "${root}/${DATADIR}/gisland/distributed/config.toml" distributed_config)
+string(FIND "${distributed_config}" "module = \"lua-example\"" example_enabled_position)
+if(NOT example_enabled_position EQUAL -1)
+  message(FATAL_ERROR "the distributed Lua example must not be enabled by default")
+endif()
+
+file(READ "${root}/${DATADIR}/gisland/distributed/modules/lua-example/module.toml"
+     example_manifest)
+set(example_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-lua-host\"]")
+string(FIND "${example_manifest}" "${example_command}" example_command_position)
+string(FIND "${example_manifest}" "entry = \"example.lua\"" example_entry_position)
+string(FIND "${example_manifest}" "config = \"config.toml\"" example_config_position)
+string(FIND "${example_manifest}" "view = \"view.toml\"" example_view_position)
+if(example_command_position EQUAL -1 OR example_entry_position EQUAL -1 OR
+   example_config_position EQUAL -1 OR example_view_position EQUAL -1)
+  message(FATAL_ERROR "installed Lua example manifest is incomplete: ${example_manifest}")
+endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml" manifest)
 set(expected_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-clock-calendar\"]")

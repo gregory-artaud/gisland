@@ -119,10 +119,24 @@ load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &c
                                            theme.error().path + ": " + theme.error().message));
   }
   std::vector<std::filesystem::path> manifest_paths;
+  std::vector<std::filesystem::path> module_dependency_paths;
   for (const auto &module : config->modules) {
     if (module.manifest_path) {
       manifest_paths.push_back(*module.manifest_path);
     }
+    if (!module.enabled) {
+      continue;
+    }
+    const auto add_dependency =
+        [&module_dependency_paths](const std::optional<ModuleFileDependency> &dependency) {
+          if (dependency && !std::ranges::contains(module_dependency_paths, dependency->path)) {
+            module_dependency_paths.push_back(dependency->path);
+          }
+        };
+    add_dependency(module.dependencies.manifest);
+    add_dependency(module.dependencies.config);
+    add_dependency(module.dependencies.view);
+    add_dependency(module.dependencies.entry);
   }
   return RuntimeBootstrap{
       .config = std::move(*config),
@@ -131,6 +145,7 @@ load_runtime_bootstrap(const RuntimeRoots &roots, const std::filesystem::path &c
       .config_path = config_path,
       .theme_path = theme_path,
       .manifest_paths = std::move(manifest_paths),
+      .module_dependency_paths = std::move(module_dependency_paths),
       .roots = roots,
   };
 }

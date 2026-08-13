@@ -103,7 +103,8 @@ public:
 [[nodiscard]] std::vector<std::filesystem::path>
 reload_watch_paths(const RuntimeBootstrap &bootstrap) {
   std::vector<std::filesystem::path> paths{bootstrap.config_path, bootstrap.theme_path};
-  paths.insert(paths.end(), bootstrap.manifest_paths.begin(), bootstrap.manifest_paths.end());
+  paths.insert(paths.end(), bootstrap.module_dependency_paths.begin(),
+               bootstrap.module_dependency_paths.end());
   return paths;
 }
 

@@ -52,6 +52,8 @@ public:
 
   [[nodiscard]] static std::expected<std::unique_ptr<LuaHost>, LuaHostError>
   load(const std::string &entry_path);
+  [[nodiscard]] static std::expected<std::unique_ptr<LuaHost>, LuaHostError>
+  load(const std::string &entry_path, std::string entry_source);
   [[nodiscard]] static std::expected<std::chrono::milliseconds, LuaHostError>
   parse_duration(std::string_view value);
 
