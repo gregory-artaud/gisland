@@ -194,6 +194,11 @@ configure_file(
   "${PROJECT_BINARY_DIR}/install/battery.module.toml"
   @ONLY
 )
+configure_file(
+  packaging/audio.module.toml.in
+  "${PROJECT_BINARY_DIR}/install/audio.module.toml"
+  @ONLY
+)
 set(GISLAND_NOTIFICATION_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/notifications")
 configure_file(
   packaging/gisland-notifications.in
@@ -223,6 +228,17 @@ file(
   CHMOD "${PROJECT_BINARY_DIR}/gisland-battery"
   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
 )
+set(GISLAND_AUDIO_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/audio")
+configure_file(packaging/gisland-audio.in "${PROJECT_BINARY_DIR}/gisland-audio" @ONLY)
+configure_file(
+  packaging/gisland-audio-control.in
+  "${PROJECT_BINARY_DIR}/gisland-audio-control"
+  @ONLY
+)
+file(
+  CHMOD "${PROJECT_BINARY_DIR}/gisland-audio" "${PROJECT_BINARY_DIR}/gisland-audio-control"
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
 set(
   GISLAND_NOTIFICATION_PYTHON_ROOT
   "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
@@ -241,6 +257,17 @@ set(GISLAND_BATTERY_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/battery")
 configure_file(
   packaging/gisland-battery.in
   "${PROJECT_BINARY_DIR}/install/gisland-battery"
+  @ONLY
+)
+set(GISLAND_AUDIO_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/audio")
+configure_file(
+  packaging/gisland-audio.in
+  "${PROJECT_BINARY_DIR}/install/gisland-audio"
+  @ONLY
+)
+configure_file(
+  packaging/gisland-audio-control.in
+  "${PROJECT_BINARY_DIR}/install/gisland-audio-control"
   @ONLY
 )
 configure_file(
@@ -270,10 +297,17 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/battery"
 )
 install(
+  FILES "${PROJECT_BINARY_DIR}/install/audio.module.toml"
+  RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/audio"
+)
+install(
   PROGRAMS
     "${PROJECT_BINARY_DIR}/install/gisland-notifications"
     "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
     "${PROJECT_BINARY_DIR}/install/gisland-battery"
+    "${PROJECT_BINARY_DIR}/install/gisland-audio"
+    "${PROJECT_BINARY_DIR}/install/gisland-audio-control"
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(
@@ -284,6 +318,11 @@ install(
 install(
   DIRECTORY modules/battery/gisland_battery
   DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/battery"
+  PATTERN "__pycache__" EXCLUDE
+)
+install(
+  DIRECTORY modules/audio/gisland_audio
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/audio"
   PATTERN "__pycache__" EXCLUDE
 )
 install(
@@ -306,6 +345,13 @@ if(BUILD_TESTING)
       "GISLAND_BATTERY_PATH=${PROJECT_BINARY_DIR}/gisland-battery"
       "${Python3_EXECUTABLE}" -m unittest discover -s
       "${PROJECT_SOURCE_DIR}/tests/battery" -p "test_*.py" -v
+  )
+  add_test(
+    NAME audio_python
+    COMMAND
+      dbus-run-session -- env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/audio"
+      "${Python3_EXECUTABLE}" -m unittest discover -s
+      "${PROJECT_SOURCE_DIR}/tests/audio" -p "test_*.py" -v
   )
   add_test(
     NAME install_local_script

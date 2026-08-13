@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <optional>
+#include <poll.h>
 #include <string>
 #include <sys/file.h>
 #include <sys/socket.h>
@@ -26,6 +27,7 @@ constexpr std::size_t syscall_bytes = 4096;
 constexpr std::size_t frame_io_bytes = 64U * 1024U;
 constexpr int frame_accepts = 4;
 constexpr auto phase_timeout = std::chrono::seconds{2};
+constexpr auto pending_timeout = std::chrono::seconds{3};
 
 [[nodiscard]] IpcServerError system_error(std::string operation) {
   return IpcServerError{std::move(operation) + ": " + std::strerror(errno)};
@@ -49,6 +51,7 @@ public:
     MonotonicTime accepted_at;
     std::string input;
     std::optional<std::string> response;
+    std::optional<PendingControlToken> pending;
     std::size_t response_offset{};
     std::optional<MonotonicTime> response_deadline;
     bool close{false};
@@ -76,7 +79,8 @@ public:
     }
   }
 
-  void advance(MonotonicTime now, const ControlHandler &handler) {
+  void advance(MonotonicTime now, const ControlHandler &handler,
+               const PendingControlCancellation &on_cancel) {
     accept_clients(now);
     std::size_t remaining_io = frame_io_bytes;
     const std::size_t count = clients_.size();
@@ -93,14 +97,17 @@ public:
     }
     for (std::size_t visited = 0; visited < count; ++visited) {
       auto &client = clients_[(start + visited) % count];
-      if (service(client, now, handler, remaining_io)) {
+      if (service(client, now, handler, on_cancel, remaining_io)) {
         last_serviced_sequence_ = client.sequence;
       }
     }
 
-    std::erase_if(clients_, [](Client &client) {
+    std::erase_if(clients_, [&on_cancel](Client &client) {
       if (!client.close) {
         return false;
+      }
+      if (client.pending && on_cancel) {
+        on_cancel(*client.pending);
       }
       static_cast<void>(::close(client.descriptor));
       return true;
@@ -109,6 +116,21 @@ public:
 
   [[nodiscard]] const std::string &socket_path() const noexcept { return socket_path_; }
   [[nodiscard]] std::size_t client_count() const noexcept { return clients_.size(); }
+  [[nodiscard]] std::size_t pending_count() const noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(
+        clients_, [](const Client &client) { return client.pending.has_value(); }));
+  }
+
+  [[nodiscard]] bool complete(PendingControlToken token, const ControlResponse &response,
+                              MonotonicTime now) {
+    const auto client = std::ranges::find(clients_, token, &Client::pending);
+    if (client == clients_.end()) {
+      return false;
+    }
+    client->pending.reset();
+    prepare_response(*client, response, now);
+    return true;
+  }
 
 private:
   void accept_clients(MonotonicTime now) {
@@ -140,6 +162,7 @@ private:
                                 .accepted_at = now,
                                 .input = {},
                                 .response = std::nullopt,
+                                .pending = std::nullopt,
                                 .response_offset = 0,
                                 .response_deadline = std::nullopt,
                                 .close = false});
@@ -147,16 +170,28 @@ private:
   }
 
   [[nodiscard]] bool service(Client &client, MonotonicTime now, const ControlHandler &handler,
+                             const PendingControlCancellation &on_cancel,
                              std::size_t &remaining_io) {
-    if ((!client.response && now >= client.accepted_at + phase_timeout) ||
+    if ((!client.response &&
+         now >= client.accepted_at + (client.pending ? pending_timeout : phase_timeout)) ||
         (client.response_deadline && now >= *client.response_deadline)) {
       client.close = true;
       return true;
     }
 
+    if (client.pending) {
+      pollfd descriptor{.fd = client.descriptor, .events = 0, .revents = 0};
+      const int ready = ::poll(&descriptor, 1, 0);
+      if (ready > 0 && (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        client.close = true;
+      }
+      static_cast<void>(on_cancel);
+      return true;
+    }
+
     bool serviced = false;
     if (!client.response && remaining_io > 0) {
-      read(client, now, handler, remaining_io);
+      read(client, now, handler, on_cancel, remaining_io);
       serviced = true;
     }
     if (client.response && !client.close && remaining_io > 0) {
@@ -167,7 +202,7 @@ private:
   }
 
   void read(Client &client, MonotonicTime now, const ControlHandler &handler,
-            std::size_t &remaining_io) {
+            const PendingControlCancellation &on_cancel, std::size_t &remaining_io) {
     std::array<char, syscall_bytes> buffer{};
     const std::size_t capacity = std::min(buffer.size(), remaining_io);
     const ssize_t received = ::recv(client.descriptor, buffer.data(), capacity, 0);
@@ -185,7 +220,7 @@ private:
         client.close = true;
         return;
       }
-      prepare_request(client, now, handler);
+      prepare_request(client, now, handler, on_cancel);
       return;
     }
     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
@@ -193,7 +228,8 @@ private:
     }
   }
 
-  void prepare_request(Client &client, MonotonicTime now, const ControlHandler &handler) {
+  void prepare_request(Client &client, MonotonicTime now, const ControlHandler &handler,
+                       const PendingControlCancellation &on_cancel) {
     const auto newline = client.input.find('\n');
     if (newline == std::string::npos || newline + 1U != client.input.size() ||
         client.input.find('\n', newline + 1U) != std::string::npos ||
@@ -216,7 +252,35 @@ private:
       prepare_response(client, ControlResponse{command.error()}, now);
       return;
     }
-    prepare_response(client, handler(*command), now);
+    auto result = handler(*command);
+    if (auto *response = std::get_if<ControlResponse>(&result)) {
+      prepare_response(client, *response, now);
+      return;
+    }
+    if (pending_count() >= IpcServer::maximum_pending_clients) {
+      if (on_cancel) {
+        on_cancel(std::get<PendingControlToken>(result));
+      }
+      prepare_response(client,
+                       ControlResponse{ControlError{ControlErrorCode::internal_error,
+                                                    "too many pending control requests"}},
+                       now);
+      return;
+    }
+    const auto token = std::get<PendingControlToken>(result);
+    if (std::ranges::any_of(
+            clients_, [token](const Client &candidate) { return candidate.pending == token; })) {
+      if (on_cancel) {
+        on_cancel(token);
+      }
+      prepare_response(client,
+                       ControlResponse{ControlError{ControlErrorCode::internal_error,
+                                                    "pending control token is already owned"}},
+                       now);
+      return;
+    }
+    client.pending = token;
+    client.accepted_at = now;
   }
 
   static void prepare_response(Client &client, const ControlResponse &response, MonotonicTime now) {
@@ -355,8 +419,14 @@ IpcServer::IpcServer(IpcServer &&) noexcept = default;
 IpcServer &IpcServer::operator=(IpcServer &&) noexcept = default;
 IpcServer::~IpcServer() = default;
 
-void IpcServer::advance(MonotonicTime now, const ControlHandler &handler) {
-  implementation_->advance(now, handler);
+void IpcServer::advance(MonotonicTime now, const ControlHandler &handler,
+                        const PendingControlCancellation &on_cancel) {
+  implementation_->advance(now, handler, on_cancel);
+}
+
+bool IpcServer::complete(PendingControlToken token, const ControlResponse &response,
+                         MonotonicTime now) {
+  return implementation_->complete(token, response, now);
 }
 
 const std::string &IpcServer::socket_path() const noexcept {
@@ -364,5 +434,7 @@ const std::string &IpcServer::socket_path() const noexcept {
 }
 
 std::size_t IpcServer::client_count() const noexcept { return implementation_->client_count(); }
+
+std::size_t IpcServer::pending_count() const noexcept { return implementation_->pending_count(); }
 
 } // namespace gisland

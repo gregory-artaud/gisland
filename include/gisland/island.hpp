@@ -1,11 +1,13 @@
 #pragma once
 
 #include "gisland/context.hpp"
+#include "gisland/layout.hpp"
 #include "gisland/theme.hpp"
 
 #include <chrono>
 #include <expected>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace gisland {
@@ -96,6 +98,29 @@ private:
   float target_{0.0F};
 };
 
+class ProgressAnimator {
+public:
+  void retarget(const LayoutPlan &plan, std::chrono::milliseconds duration, Easing easing,
+                bool preserve_current);
+  void update(float delta_seconds);
+  [[nodiscard]] bool active() const;
+  [[nodiscard]] LayoutPlan apply(const LayoutPlan &plan) const;
+
+private:
+  struct Track {
+    std::string path;
+    double current;
+    double source;
+    double target;
+    float elapsed_seconds;
+    float duration_seconds;
+    Easing easing;
+    bool active;
+  };
+
+  std::vector<Track> tracks_;
+};
+
 struct ContentVisual {
   float opacity;
   float blur;
@@ -142,6 +167,12 @@ classify_context_transition(const std::optional<ContextKey> &current_compact,
                             const std::optional<ContextKey> &next_expanded);
 [[nodiscard]] float context_incoming_opacity(ContextTransitionKind kind,
                                              const ContextTransitionVisual &visual);
+[[nodiscard]] bool
+preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requested_mode,
+                                        const std::optional<ContextKey> &current_compact,
+                                        const std::optional<ContextKey> &current_expanded,
+                                        const std::optional<ContextKey> &next_compact,
+                                        const std::optional<ContextKey> &next_expanded);
 
 class ContextTransition {
 public:

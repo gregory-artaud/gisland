@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <expected>
@@ -86,6 +87,27 @@ optional_string(const Json &object, std::string_view key, std::string default_va
     return std::unexpected(error_at(field_path(parent_path, key), "expected a string"));
   }
   return iterator->get<std::string>();
+}
+
+[[nodiscard]] std::expected<std::optional<std::uint64_t>, ProtocolError>
+optional_invocation_id(const Json &object) {
+  const auto iterator = object.find("invocation_id");
+  if (iterator == object.end()) {
+    return std::nullopt;
+  }
+  if (!iterator->is_string()) {
+    return std::unexpected(error_at("/invocation_id", "expected a decimal string"));
+  }
+  const auto &text = iterator->get_ref<const std::string &>();
+  if (text.empty() || text.size() > 20) {
+    return std::unexpected(error_at("/invocation_id", "invalid invocation ID"));
+  }
+  std::uint64_t value{};
+  const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+  if (error != std::errc{} || end != text.data() + text.size()) {
+    return std::unexpected(error_at("/invocation_id", "invalid invocation ID"));
+  }
+  return std::optional{value};
 }
 
 template <typename Integer>
@@ -193,13 +215,17 @@ parse_children(const Json &object, const std::string &path) {
                                                                  const std::string &path) {
   auto name = required_string(object, "name", path);
   auto accessible_label = required_string(object, "accessible_label", path);
+  auto role = optional_string(object, "role", "body", path);
   if (!name.has_value()) {
     return std::unexpected(name.error());
   }
   if (!accessible_label.has_value()) {
     return std::unexpected(accessible_label.error());
   }
-  return SceneNode{Icon{std::move(*name), std::move(*accessible_label)}};
+  if (!role.has_value()) {
+    return std::unexpected(role.error());
+  }
+  return SceneNode{Icon{std::move(*name), std::move(*accessible_label), std::move(*role)}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_image(const Json &object,
@@ -342,6 +368,13 @@ parse_emphasis(const Json &object, const std::string &path) {
   auto label = optional_string(object, "label", "", path);
   auto state = optional_string(object, "state", "normal", path);
   auto shape = optional_string(object, "shape", "linear", path);
+  std::optional<double> transition_from;
+  if (const auto iterator = object.find("transition_from"); iterator != object.end()) {
+    if (!iterator->is_number()) {
+      return std::unexpected(error_at(path + "/transition_from", "expected a number"));
+    }
+    transition_from = iterator->get<double>();
+  }
   if (!value.has_value()) {
     return std::unexpected(value.error());
   }
@@ -362,7 +395,8 @@ parse_emphasis(const Json &object, const std::string &path) {
   } else {
     return std::unexpected(error_at(path + "/shape", "unsupported progress shape"));
   }
-  return SceneNode{Progress{*value, std::move(*label), std::move(*state), progress_shape}};
+  return SceneNode{
+      Progress{*value, std::move(*label), std::move(*state), progress_shape, transition_from}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_indicator(const Json &object,
@@ -885,24 +919,32 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
     if (!presentation_iterator->is_object()) {
       return std::unexpected(error_at("/presentation", "expected an object"));
     }
-    auto known_presentation =
-        reject_unknown_fields(*presentation_iterator,
-                              std::set<std::string_view>{"reveal", "duration_ms"}, "/presentation");
+    auto known_presentation = reject_unknown_fields(
+        *presentation_iterator,
+        std::set<std::string_view>{"reveal", "duration_ms", "compact_style"}, "/presentation");
     if (!known_presentation) {
       return std::unexpected(known_presentation.error());
     }
-    auto reveal = required_string(*presentation_iterator, "reveal", "/presentation");
-    if (!reveal) {
-      return std::unexpected(reveal.error());
-    }
-    if (*reveal != "expanded") {
-      return std::unexpected(error_at("/presentation/reveal", "unknown reveal value"));
-    }
-    if (!expanded) {
-      return std::unexpected(error_at("/presentation", "presentation requires an expanded view"));
-    }
+    std::optional<Reveal> reveal;
     std::optional<std::chrono::milliseconds> duration;
+    if (presentation_iterator->contains("reveal")) {
+      auto reveal_name = required_string(*presentation_iterator, "reveal", "/presentation");
+      if (!reveal_name) {
+        return std::unexpected(reveal_name.error());
+      }
+      if (*reveal_name != "expanded") {
+        return std::unexpected(error_at("/presentation/reveal", "unknown reveal value"));
+      }
+      if (!expanded) {
+        return std::unexpected(error_at("/presentation", "presentation requires an expanded view"));
+      }
+      reveal = Reveal::expanded;
+    }
     if (presentation_iterator->contains("duration_ms")) {
+      if (!reveal) {
+        return std::unexpected(
+            error_at("/presentation/duration_ms", "duration requires expanded reveal"));
+      }
       auto milliseconds =
           required_integer<std::int64_t>(*presentation_iterator, "duration_ms", "/presentation");
       if (!milliseconds) {
@@ -914,7 +956,18 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
       }
       duration = std::chrono::milliseconds{*milliseconds};
     }
-    presentation = PresentationIntent{Reveal::expanded, duration};
+    std::optional<std::string> compact_style;
+    if (presentation_iterator->contains("compact_style")) {
+      auto style = required_string(*presentation_iterator, "compact_style", "/presentation");
+      if (!style) {
+        return std::unexpected(style.error());
+      }
+      compact_style = std::move(*style);
+    }
+    if (!reveal && !compact_style) {
+      return std::unexpected(error_at("/presentation", "presentation must not be empty"));
+    }
+    presentation = PresentationIntent{reveal, duration, std::move(compact_style)};
   }
 
   std::set<std::string> resource_ids;
@@ -943,6 +996,7 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_action_result(const Json &object) {
   auto action_id = required_string(object, "action_id", "");
   auto accepted = required_bool(object, "accepted", "");
+  auto invocation_id = optional_invocation_id(object);
   if (!action_id.has_value()) {
     return std::unexpected(action_id.error());
   }
@@ -951,6 +1005,9 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
   }
   if (!accepted.has_value()) {
     return std::unexpected(accepted.error());
+  }
+  if (!invocation_id.has_value()) {
+    return std::unexpected(invocation_id.error());
   }
 
   std::optional<std::string> message;
@@ -961,7 +1018,8 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
     }
     message = iterator->get<std::string>();
   }
-  return ModuleMessage{ActionResultMessage{std::move(*action_id), *accepted, std::move(message)}};
+  return ModuleMessage{
+      ActionResultMessage{std::move(*action_id), *accepted, std::move(message), *invocation_id}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_log(const Json &object) {
@@ -1054,6 +1112,9 @@ std::string serialize_core_message(const CoreMessage &message) {
           Json action{{"type", "action"}, {"action_id", typed_message.action_id}};
           if (typed_message.value.has_value()) {
             action["value"] = *typed_message.value;
+          }
+          if (typed_message.invocation_id.has_value()) {
+            action["invocation_id"] = std::to_string(*typed_message.invocation_id);
           }
           return action;
         } else if constexpr (std::is_same_v<Message, VisibilityMessage>) {

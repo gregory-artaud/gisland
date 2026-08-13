@@ -106,6 +106,27 @@ template <typename Message>
   });
 }
 
+[[nodiscard]] const gisland::ActionDeliveryEvent *delivery(const EventLog &events,
+                                                           std::uint64_t invocation_id) {
+  const auto found = std::ranges::find_if(events, [invocation_id](const auto &event) {
+    const auto *typed = std::get_if<gisland::ActionDeliveryEvent>(&event);
+    return typed != nullptr && typed->invocation_id == invocation_id;
+  });
+  return found == events.end() ? nullptr : std::get_if<gisland::ActionDeliveryEvent>(&*found);
+}
+
+[[nodiscard]] std::uint64_t process_generation(const EventLog &events, std::string_view instance_id,
+                                               std::size_t ordinal = 0) {
+  std::size_t found_count = 0;
+  for (const auto &event : events) {
+    const auto *started = std::get_if<gisland::ProcessStartedEvent>(&event);
+    if (started != nullptr && started->instance_id == instance_id && found_count++ == ordinal) {
+      return started->generation;
+    }
+  }
+  return 0;
+}
+
 [[nodiscard]] const gisland::ProtocolViolationEvent *last_violation(const EventLog &events,
                                                                     std::string_view instance_id) {
   const auto found =
@@ -168,12 +189,15 @@ TEST_CASE("supervisor asynchronously handshakes publishes and gracefully stops")
 
   CHECK(has_state(events, "owner", gisland::ModuleState::starting));
   CHECK(count_events<gisland::ProcessStartedEvent>(events, "owner") == 1);
+  const auto generation = process_generation(events, "owner");
+  REQUIRE(generation != 0);
   const auto message_iterator = std::ranges::find_if(events, [](const auto &event) {
     const auto *message = std::get_if<gisland::ModuleMessageEvent>(&event);
     return message != nullptr && message->instance_id == "owner" &&
            std::holds_alternative<gisland::PublishMessage>(message->message);
   });
   REQUIRE(message_iterator != events.end());
+  CHECK(std::get<gisland::ModuleMessageEvent>(*message_iterator).generation == generation);
   const auto &publish = std::get<gisland::PublishMessage>(
       std::get<gisland::ModuleMessageEvent>(*message_iterator).message);
   CHECK(publish.context_id == "fake");
@@ -181,6 +205,15 @@ TEST_CASE("supervisor asynchronously handshakes publishes and gracefully stops")
   stop_and_wait(supervisor, events, "owner");
   CHECK(count_events<gisland::ContextsRemovedEvent>(events, "owner") >= 1);
   CHECK(count_events<gisland::ProcessExitedEvent>(events, "owner") == 1);
+  CHECK(std::ranges::all_of(events, [generation](const auto &event) {
+    if (const auto *removed = std::get_if<gisland::ContextsRemovedEvent>(&event)) {
+      return removed->instance_id != "owner" || removed->generation == generation;
+    }
+    if (const auto *exited = std::get_if<gisland::ProcessExitedEvent>(&event)) {
+      return exited->instance_id != "owner" || exited->generation == generation;
+    }
+    return true;
+  }));
 
   const auto removal = event_index(events, [](const auto &event) {
     const auto *typed = std::get_if<gisland::ContextsRemovedEvent>(&event);
@@ -343,6 +376,52 @@ TEST_CASE("supervisor gates status indicators on protocol 1.6 capability negotia
   }
 }
 
+TEST_CASE("supervisor gates audio HUD fields on protocol 1.7 capabilities") {
+  SECTION("negotiated HUD fields are emitted") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("audio-hud", "audio-hud");
+    request.init.maximum = {.major = 1, .minor = 7};
+    request.init.capabilities.insert(
+        request.init.capabilities.end(),
+        {"independent-views", "compact-view-styles", "icon-roles", "progress-transitions"});
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, "audio-hud");
+    });
+    stop_and_wait(supervisor, events, "audio-hud");
+  }
+
+  for (const auto &[instance, mode, capability, error_path] :
+       std::vector<std::tuple<std::string, std::string, std::string, std::string>>{
+           {"hud-style-missing", "hud-style-without-capability", "compact-view-styles",
+            "/presentation/compact_style"},
+           {"icon-role-missing", "icon-role-without-capability", "icon-roles", "/views/compact"},
+           {"progress-transition-missing", "progress-transition-without-capability",
+            "progress-transitions", "/views/compact"},
+           {"early-hud-capability", "hud-capability-on-1.6", "compact-view-styles",
+            "/capabilities"}}) {
+    SECTION(instance) {
+      gisland::ModuleSupervisor supervisor;
+      EventLog events;
+      auto request = fake_request(instance, mode);
+      request.init.maximum = {.major = 1, .minor = 7};
+      request.init.capabilities.emplace_back("independent-views");
+      request.init.capabilities.emplace_back(capability);
+      REQUIRE(supervisor.start(std::move(request)).has_value());
+
+      collect_until(supervisor, events, [&instance](const auto &observed) {
+        return count_events<gisland::ProtocolViolationEvent>(observed, instance) > 0;
+      });
+      CHECK_FALSE(has_message<gisland::PublishMessage>(events, instance));
+      REQUIRE(last_violation(events, instance) != nullptr);
+      CHECK(last_violation(events, instance)->error.path == error_path);
+      stop_and_wait(supervisor, events, instance);
+    }
+  }
+}
+
 TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
   gisland::ModuleSupervisor supervisor;
   EventLog events;
@@ -381,6 +460,211 @@ TEST_CASE("supervisor exchanges typed actions visibility and tagged stderr") {
   });
 
   stop_and_wait(supervisor, events, "interactive");
+}
+
+TEST_CASE("invocation-aware sends report target-generation queue admission exactly once") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("correlated", "ready")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "correlated", gisland::ModuleState::running);
+  });
+  const auto generation = process_generation(events, "correlated");
+  REQUIRE(generation != 0);
+
+  REQUIRE(supervisor
+              .send_action("correlated", generation,
+                           gisland::ActionMessage{
+                               .action_id = "calendar.today",
+                               .value = std::nullopt,
+                               .invocation_id = 101,
+                           })
+              .has_value());
+  collect_until(supervisor, events,
+                [](const auto &observed) { return delivery(observed, 101) != nullptr; });
+
+  REQUIRE(delivery(events, 101) != nullptr);
+  CHECK(delivery(events, 101)->instance_id == "correlated");
+  CHECK(delivery(events, 101)->generation == generation);
+  CHECK(delivery(events, 101)->succeeded);
+  CHECK_FALSE(delivery(events, 101)->error.has_value());
+  CHECK(count_events<gisland::ActionDeliveryEvent>(events, "correlated") == 1);
+  stop_and_wait(supervisor, events, "correlated");
+}
+
+TEST_CASE("invocation-aware sends reject unavailable targets and stale generations") {
+  SECTION("unknown") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor
+                .send_action("missing", 1,
+                             gisland::ActionMessage{
+                                 .action_id = "probe", .value = std::nullopt, .invocation_id = 201})
+                .has_value());
+    collect_until(supervisor, events,
+                  [](const auto &observed) { return delivery(observed, 201) != nullptr; });
+    CHECK(delivery(events, 201)->error == gisland::ActionDeliveryError::unknown_instance);
+  }
+
+  SECTION("starting") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor.start(fake_request("starting", "silent")).has_value());
+    REQUIRE(supervisor
+                .send_action("starting", 1,
+                             gisland::ActionMessage{
+                                 .action_id = "probe", .value = std::nullopt, .invocation_id = 202})
+                .has_value());
+    collect_until(supervisor, events,
+                  [](const auto &observed) { return delivery(observed, 202) != nullptr; });
+    CHECK(delivery(events, 202)->error == gisland::ActionDeliveryError::unavailable);
+    supervisor.shutdown();
+  }
+
+  SECTION("stopping") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor.start(fake_request("stopping", "ready")).has_value());
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_state(observed, "stopping", gisland::ModuleState::running);
+    });
+    const auto generation = process_generation(events, "stopping");
+    REQUIRE(supervisor.stop("stopping").has_value());
+    REQUIRE(supervisor
+                .send_action("stopping", generation,
+                             gisland::ActionMessage{
+                                 .action_id = "probe", .value = std::nullopt, .invocation_id = 203})
+                .has_value());
+    collect_until(supervisor, events,
+                  [](const auto &observed) { return delivery(observed, 203) != nullptr; });
+    CHECK(delivery(events, 203)->error == gisland::ActionDeliveryError::unavailable);
+    supervisor.shutdown();
+  }
+
+  SECTION("exited") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor.start(fake_request("exited", "exit-zero")).has_value());
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_state(observed, "exited", gisland::ModuleState::stopped);
+    });
+    const auto generation = process_generation(events, "exited");
+    REQUIRE(supervisor
+                .send_action("exited", generation,
+                             gisland::ActionMessage{
+                                 .action_id = "probe", .value = std::nullopt, .invocation_id = 204})
+                .has_value());
+    collect_until(supervisor, events,
+                  [](const auto &observed) { return delivery(observed, 204) != nullptr; });
+    CHECK(delivery(events, 204)->error == gisland::ActionDeliveryError::unavailable);
+  }
+
+  SECTION("replaced") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    REQUIRE(supervisor.start(fake_request("replaced", "ready")).has_value());
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_state(observed, "replaced", gisland::ModuleState::running);
+    });
+    const auto old_generation = process_generation(events, "replaced");
+    REQUIRE(supervisor
+                .reconfigure(gisland::SupervisorReconfiguration{
+                    .stop_instances = {},
+                    .start_or_replace = {fake_request("replaced", "ready")},
+                })
+                .has_value());
+    collect_until(supervisor, events, [](const auto &observed) {
+      return count_events<gisland::ProcessStartedEvent>(observed, "replaced") == 2 &&
+             has_state(observed, "replaced", gisland::ModuleState::running);
+    });
+    REQUIRE(supervisor
+                .send_action("replaced", old_generation,
+                             gisland::ActionMessage{
+                                 .action_id = "probe", .value = std::nullopt, .invocation_id = 205})
+                .has_value());
+    collect_until(supervisor, events,
+                  [](const auto &observed) { return delivery(observed, 205) != nullptr; });
+    CHECK(delivery(events, 205)->error == gisland::ActionDeliveryError::generation_mismatch);
+    stop_and_wait(supervisor, events, "replaced");
+  }
+}
+
+TEST_CASE("invocation-aware send reports write-queue rejection without false delivery") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("saturated", "ready-ignore-stdin")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "saturated", gisland::ModuleState::running);
+  });
+  const auto generation = process_generation(events, "saturated");
+  const nlohmann::json oversized_value = std::string((std::size_t{1024} * 1024U) + 1U, 'x');
+  REQUIRE(supervisor
+              .send_action("saturated", generation,
+                           gisland::ActionMessage{.action_id = "oversized",
+                                                  .value = oversized_value,
+                                                  .invocation_id = 301})
+              .has_value());
+  collect_until(supervisor, events,
+                [](const auto &observed) { return delivery(observed, 301) != nullptr; });
+  REQUIRE(delivery(events, 301) != nullptr);
+  CHECK_FALSE(delivery(events, 301)->succeeded);
+  CHECK(delivery(events, 301)->error == gisland::ActionDeliveryError::queue_saturated);
+  CHECK(count_events<gisland::ActionDeliveryEvent>(events, "saturated") == 1);
+  supervisor.shutdown();
+}
+
+TEST_CASE("queued old-generation message and exit remain bound across replacement") {
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(fake_request("queued-replacement", "publish")).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_message<gisland::PublishMessage>(observed, "queued-replacement");
+  });
+  const auto old_generation = process_generation(events, "queued-replacement");
+  REQUIRE(old_generation != 0);
+
+  REQUIRE(supervisor
+              .reconfigure(gisland::SupervisorReconfiguration{
+                  .stop_instances = {},
+                  .start_or_replace = {fake_request("queued-replacement", "ready")},
+              })
+              .has_value());
+  collect_until(supervisor, events, [old_generation](const auto &observed) {
+    return count_events<gisland::ProcessStartedEvent>(observed, "queued-replacement") == 2 &&
+           std::ranges::any_of(observed, [old_generation](const auto &event) {
+             const auto *message = std::get_if<gisland::ModuleMessageEvent>(&event);
+             return message != nullptr && message->instance_id == "queued-replacement" &&
+                    message->generation > old_generation;
+           });
+  });
+  const auto new_generation = process_generation(events, "queued-replacement", 1);
+  REQUIRE(new_generation > old_generation);
+
+  const auto old_message = std::ranges::find_if(events, [old_generation](const auto &event) {
+    const auto *message = std::get_if<gisland::ModuleMessageEvent>(&event);
+    return message != nullptr && message->instance_id == "queued-replacement" &&
+           message->generation == old_generation &&
+           std::holds_alternative<gisland::PublishMessage>(message->message);
+  });
+  const auto old_exit = std::ranges::find_if(events, [old_generation](const auto &event) {
+    const auto *exited = std::get_if<gisland::ProcessExitedEvent>(&event);
+    return exited != nullptr && exited->instance_id == "queued-replacement" &&
+           exited->generation == old_generation;
+  });
+  const auto new_message = std::ranges::find_if(events, [new_generation](const auto &event) {
+    const auto *message = std::get_if<gisland::ModuleMessageEvent>(&event);
+    return message != nullptr && message->instance_id == "queued-replacement" &&
+           message->generation == new_generation;
+  });
+  REQUIRE(old_message != events.end());
+  REQUIRE(old_exit != events.end());
+  REQUIRE(new_message != events.end());
+  CHECK(std::ranges::none_of(events, [new_generation](const auto &event) {
+    const auto *exited = std::get_if<gisland::ProcessExitedEvent>(&event);
+    return exited != nullptr && exited->instance_id == "queued-replacement" &&
+           exited->generation == new_generation;
+  }));
+  stop_and_wait(supervisor, events, "queued-replacement");
 }
 
 TEST_CASE("supervisor binds dismiss messages to the core-owned instance") {

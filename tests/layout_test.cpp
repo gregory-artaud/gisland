@@ -86,9 +86,16 @@ compact_to_expanded_ms = 350
 context_change_ms = 250
 easing = "ease-in-out"
 
+[animation.progress]
+duration_ms = 270
+easing = "ease-out"
+
 [animation.reduced_motion]
 compact_to_expanded_ms = 0
 context_change_ms = 0
+
+[animation.reduced_motion.progress]
+duration_ms = 0
 
 [icons.calendar]
 font = "symbols"
@@ -377,7 +384,7 @@ TEST_CASE("icon layout resolves the semantic glyph without raylib types") {
   CHECK(icon.codepoint == U'\uE001');
   CHECK(icon.font_resource == "/fonts/symbols.ttf");
   CHECK(icon.typography.size == 10.0);
-  CHECK(icon.bounds == gisland::Rect{4, 5, 10, 10});
+  CHECK(icon.bounds == gisland::Rect{15, 5, 10, 10});
   CHECK(icon.accessible_label == "Calendar");
 }
 
@@ -637,6 +644,102 @@ TEST_CASE("indicator has square intrinsic geometry and resolves its semantic sta
   CHECK(indicator.clip == gisland::Rect{4, 6, 7, 7});
   CHECK(indicator.color == gisland::Rgba{32, 192, 96, 255});
   CHECK(indicator.accessible_label == "Available");
+}
+
+TEST_CASE("named compact style selects exact HUD geometry") {
+  const auto theme = make_theme_with(
+      "padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = 100\nmin_height = "
+      "20\nmax_height = 50",
+      R"(padding_horizontal = 4
+padding_vertical = 4
+radius = 16
+border = 1
+min_width = 48
+max_width = 100
+min_height = 32
+max_height = 48
+
+[view.compact.styles.hud-symbol]
+padding_horizontal = 0
+padding_vertical = 0
+radius = 21
+border = 0
+min_width = 72
+max_width = 72
+min_height = 68
+max_height = 68)");
+
+  const auto result =
+      gisland::layout_scene(gisland::SceneNode{gisland::Icon{"calendar", "Sound"}}, theme,
+                            gisland::ViewMode::compact, TestGlyphMetrics{}, "hud-symbol");
+
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 72, 68});
+  CHECK(result->view.radius == 21);
+}
+
+TEST_CASE("unlabeled linear progress fills remaining row width") {
+  const auto theme = make_theme_with(
+      "padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = 100\nmin_height = "
+      "20\nmax_height = 50",
+      R"(padding_horizontal = 13
+padding_vertical = 0
+radius = 22
+border = 0
+min_width = 252
+max_width = 252
+min_height = 44
+max_height = 44
+
+[progress]
+ring_diameter = 32
+ring_thickness = 4
+linear_thickness = 5
+compact_height = 48
+track = "muted")");
+  const auto scene = gisland::SceneNode{
+      gisland::Row{{gisland::SceneNode{gisland::Icon{"calendar", "Volume"}},
+                    gisland::SceneNode{gisland::Progress{0.5, {}, "foreground"}}},
+                   "center",
+                   "small"}};
+
+  const auto result =
+      gisland::layout_scene(scene, theme, gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  const auto &progress = command_at<gisland::ProgressDrawCommand>(*result, 1);
+  CHECK(progress.track.width > 80);
+  CHECK(progress.track.height == 5);
+  CHECK(progress.track.x + progress.track.width == result->view.bounds.width - 13);
+}
+
+TEST_CASE("icon role controls semantic glyph size and color") {
+  const auto theme = make_theme_with(
+      "[typography.title]\nfont = \"ui\"\ncolor = \"muted\"\nsize = 20\nline_height = 1",
+      R"([typography.title]
+font = "ui"
+color = "muted"
+size = 20
+line_height = 1
+
+[typography.hud-icon]
+font = "ui"
+color = "accent"
+size = 36
+weight = 600
+line_height = 1)");
+
+  const auto result = gisland::layout_scene(
+      gisland::SceneNode{gisland::Icon{"calendar", "Sound enabled", "hud-icon"}}, theme,
+      gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->content.size() == 1);
+  const auto &icon = command_at<gisland::IconDrawCommand>(*result, 0);
+  CHECK(icon.bounds.width == 36);
+  CHECK(icon.bounds.height == 36);
+  CHECK(icon.typography.size == 36.0);
+  CHECK(icon.color == gisland::Rgba{128, 64, 255, 255});
 }
 
 TEST_CASE("ring progress creates a 48 pixel intrinsic compact capsule") {

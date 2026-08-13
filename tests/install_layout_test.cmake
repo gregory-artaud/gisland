@@ -18,13 +18,17 @@ set(required_files
     "${root}/${BINDIR}/gisland-notifications"
     "${root}/${BINDIR}/gisland-notification-history"
     "${root}/${BINDIR}/gisland-battery"
+    "${root}/${BINDIR}/gisland-audio"
+    "${root}/${BINDIR}/gisland-audio-control"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml"
     "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
     "${root}/${DATADIR}/gisland/battery/gisland_battery/application.py"
+    "${root}/${DATADIR}/gisland/audio/gisland_audio/application.py"
     "${root}/${DATADIR}/systemd/user/gisland.service")
 foreach(required_file IN LISTS required_files)
   if(NOT EXISTS "${required_file}")
@@ -37,6 +41,20 @@ set(expected_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-clock-cal
 string(FIND "${manifest}" "${expected_command}" command_position)
 if(command_position EQUAL -1)
   message(FATAL_ERROR "installed manifest has the wrong command: ${manifest}")
+endif()
+
+file(READ "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml" audio_manifest)
+set(audio_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-audio\"]")
+string(FIND "${audio_manifest}" "${audio_command}" audio_command_position)
+string(FIND "${audio_manifest}" "minimum_minor = 7" audio_minimum_position)
+string(FIND "${audio_manifest}" "maximum_minor = 7" audio_maximum_position)
+string(FIND "${audio_manifest}" "step_percent = 5" audio_step_position)
+string(FIND "${audio_manifest}" "maximum_percent = 150" audio_limit_position)
+string(FIND "${audio_manifest}" "hud_duration_ms = 1500" audio_duration_position)
+if(audio_command_position EQUAL -1 OR audio_minimum_position EQUAL -1 OR
+   audio_maximum_position EQUAL -1 OR audio_step_position EQUAL -1 OR
+   audio_limit_position EQUAL -1 OR audio_duration_position EQUAL -1)
+  message(FATAL_ERROR "installed audio manifest is incomplete: ${audio_manifest}")
 endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"

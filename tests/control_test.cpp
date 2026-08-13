@@ -24,6 +24,8 @@ TEST_CASE("control requests parse into exact typed commands") {
        gisland::ActivateControl{"clock", std::nullopt}},
       {R"({"version":1,"command":"activate","instance":"clock","duration_ms":5000})",
        gisland::ActivateControl{"clock", 5s}},
+      {R"({"version":1,"command":"activate-open","instance":"notifications"})",
+       gisland::ActivateOpenControl{"notifications"}},
       {R"({"version":1,"command":"dismiss","context_id":"notice"})",
        gisland::DismissControl{"notice"}},
   };
@@ -187,6 +189,11 @@ TEST_CASE("gislandctl grammar parses commands and bounded durations") {
   REQUIRE(reload.has_value());
   CHECK(std::holds_alternative<gisland::ReloadControl>(reload->command));
 
+  const auto activate_open = gisland::parse_control_arguments({"activate-open", "notifications"});
+  REQUIRE(activate_open.has_value());
+  CHECK(std::get<gisland::ActivateOpenControl>(activate_open->command).instance_id ==
+        "notifications");
+
   for (const auto &[value, duration] :
        std::vector<std::pair<std::string, std::chrono::milliseconds>>{
            {"1ms", 1ms}, {"5s", 5s}, {"2m", 2min}, {"24h", 24h}}) {
@@ -208,5 +215,57 @@ TEST_CASE("gislandctl grammar parses commands and bounded durations") {
        }) {
     CAPTURE(arguments);
     CHECK_FALSE(gisland::parse_control_arguments(arguments).has_value());
+  }
+}
+
+TEST_CASE("gislandctl action grammar preserves optional typed JSON values") {
+  const auto valueless = gisland::parse_control_arguments({"action", "audio", "volume-up"});
+  REQUIRE(valueless.has_value());
+  const auto &plain = std::get<gisland::ActionControl>(valueless->command);
+  CHECK(plain.instance_id == "audio");
+  CHECK(plain.action_id == "volume-up");
+  CHECK_FALSE(plain.value.has_value());
+
+  for (const auto &value :
+       {"null", "true", "42", "2.5", R"("quiet")", "[1,false]", R"({"level":3})"}) {
+    CAPTURE(value);
+    const auto parsed =
+        gisland::parse_control_arguments({"action", "audio", "set", "--value", value});
+    REQUIRE(parsed.has_value());
+    const auto &action = std::get<gisland::ActionControl>(parsed->command);
+    REQUIRE(action.value.has_value());
+    CHECK(*action.value == nlohmann::json::parse(value));
+  }
+}
+
+TEST_CASE("action grammar rejects empty identifiers malformed JSON and invalid option shape") {
+  const std::string oversized(64 * 1024, 'x');
+  for (const std::vector<std::string> &arguments : {
+           std::vector<std::string>{"action", "", "set"},
+           {"action", "audio", ""},
+           {"action", "audio"},
+           {"action", "audio", "set", "--value"},
+           {"action", "audio", "set", "--value", "{"},
+           {"action", "audio", "set", "--value", R"({"x":1,"x":2})"},
+           {"action", "audio", "set", "--value", "1", "--value", "2"},
+           {"action", "audio", "set", "--other", "1"},
+           {"action", "audio", "set", "--value", oversized},
+       }) {
+    CAPTURE(arguments);
+    CHECK_FALSE(gisland::parse_control_arguments(arguments).has_value());
+  }
+}
+
+TEST_CASE("action control requests round trip optional values including null") {
+  for (const gisland::ActionControl &action : {
+           gisland::ActionControl{"audio", "toggle-mute", std::nullopt},
+           gisland::ActionControl{"audio", "set", nlohmann::json(nullptr)},
+           gisland::ActionControl{"audio", "set", nlohmann::json{{"level", 3}}},
+       }) {
+    const gisland::ControlCommand command{action};
+    const auto serialized = gisland::serialize_control_request(command);
+    const auto parsed = gisland::parse_control_request(serialized);
+    REQUIRE(parsed.has_value());
+    CHECK(*parsed == command);
   }
 }

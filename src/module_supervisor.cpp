@@ -29,6 +29,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -84,6 +85,55 @@ namespace {
   return std::nullopt;
 }
 
+[[nodiscard]] bool scene_uses_icon_role(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &primitive) {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, Icon>) {
+          return primitive.role != "body";
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          return std::ranges::any_of(
+              primitive.children, [](const auto &child) { return scene_uses_icon_role(*child); });
+        } else if constexpr (std::is_same_v<Primitive, Button> ||
+                             std::is_same_v<Primitive, ActionRegion>) {
+          return scene_uses_icon_role(*primitive.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
+[[nodiscard]] bool scene_uses_progress_transition(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &primitive) {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, Progress>) {
+          return primitive.transition_from.has_value();
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          return std::ranges::any_of(primitive.children, [](const auto &child) {
+            return scene_uses_progress_transition(*child);
+          });
+        } else if constexpr (std::is_same_v<Primitive, Button> ||
+                             std::is_same_v<Primitive, ActionRegion>) {
+          return scene_uses_progress_transition(*primitive.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
+template <typename Predicate>
+[[nodiscard]] std::optional<std::string> scene_feature_path(const PublishMessage &publish,
+                                                            Predicate predicate) {
+  if (publish.compact && predicate(*publish.compact)) {
+    return publish.independent_views ? "/views/compact" : "/compact";
+  }
+  if (publish.expanded && predicate(*publish.expanded)) {
+    return publish.independent_views ? "/views/expanded" : "/expanded";
+  }
+  return std::nullopt;
+}
+
 using namespace std::chrono_literals;
 
 constexpr std::size_t command_capacity = 2048;
@@ -112,6 +162,12 @@ struct SendCommand {
   CoreMessage message;
 };
 
+struct SendActionCommand {
+  std::string instance_id;
+  std::uint64_t generation;
+  ActionMessage message;
+};
+
 struct ReconfigureCommand {
   SupervisorReconfiguration reconfiguration;
 };
@@ -119,7 +175,7 @@ struct ReconfigureCommand {
 struct ShutdownCommand {};
 
 using Command = std::variant<StartCommand, StopCommand, RestartCommand, SendCommand,
-                             ReconfigureCommand, ShutdownCommand>;
+                             SendActionCommand, ReconfigureCommand, ShutdownCommand>;
 
 [[nodiscard]] StopCause stop_cause(const ExitStatus &status) {
   if (status.kind == ExitKind::signaled) {
@@ -167,6 +223,7 @@ struct Instance {
   std::optional<MonotonicTime> stdout_eof_at;
   std::optional<ProtocolVersion> negotiated_version;
   std::set<std::string> negotiated_capabilities;
+  std::uint64_t generation{0};
 };
 
 } // namespace
@@ -317,6 +374,8 @@ private:
               handle_restart(typed_command.instance_id, typed_command.generation, now);
             } else if constexpr (std::is_same_v<Type, SendCommand>) {
               handle_send(typed_command.instance_id, typed_command.message, now);
+            } else if constexpr (std::is_same_v<Type, SendActionCommand>) {
+              handle_send_action(typed_command, now);
             } else if constexpr (std::is_same_v<Type, ReconfigureCommand>) {
               handle_reconfigure(std::move(typed_command.reconfiguration), now);
             } else {
@@ -454,6 +513,43 @@ private:
     }
   }
 
+  void handle_send_action(const SendActionCommand &command, MonotonicTime now) {
+    const auto invocation_id = *command.message.invocation_id;
+    const auto fail = [this, &command, invocation_id, now](ActionDeliveryError error) {
+      emit(ActionDeliveryEvent{command.instance_id, command.generation, invocation_id, false, error,
+                               now});
+    };
+    const auto iterator = instances_.find(command.instance_id);
+    if (iterator == instances_.end()) {
+      fail(ActionDeliveryError::unknown_instance);
+      return;
+    }
+    auto &instance = *iterator->second;
+    if (instance.generation != command.generation) {
+      fail(ActionDeliveryError::generation_mismatch);
+      return;
+    }
+    if (instance.lifecycle.state() != ModuleState::running || !instance.process.has_value()) {
+      fail(ActionDeliveryError::unavailable);
+      return;
+    }
+
+    try {
+      auto record = serialize_core_message(CoreMessage{command.message});
+      const auto queued = instance.writes.push(std::move(record));
+      if (!queued.has_value()) {
+        fail(ActionDeliveryError::queue_saturated);
+        begin_failure(instance, StopCause::unresponsive, now);
+        return;
+      }
+    } catch (const std::exception &) {
+      fail(ActionDeliveryError::serialization_failed);
+      return;
+    }
+    emit(ActionDeliveryEvent{command.instance_id, command.generation, invocation_id, true,
+                             std::nullopt, now});
+  }
+
   void cancel_restart(Instance &instance, MonotonicTime now) {
     instance.restart_after_stop = false;
     complete_restart(instance, false, instance.lifecycle.state(), now);
@@ -573,6 +669,7 @@ private:
     instance.stdout_eof_at.reset();
     instance.negotiated_version.reset();
     instance.negotiated_capabilities.clear();
+    instance.generation = ++next_process_generation_;
 
     auto process = backend_.spawn(instance.request.process);
     if (!process.has_value()) {
@@ -585,7 +682,7 @@ private:
 
     instance.process.emplace(std::move(*process));
     emit(ProcessStartedEvent{instance.request.instance_id, instance.process->pid(),
-                             instance.process->process_group(), now});
+                             instance.process->process_group(), now, instance.generation});
 
     auto init = instance.request.init;
     init.instance_id = instance.request.instance_id;
@@ -858,8 +955,8 @@ private:
       const auto transitions = instance.lifecycle.exited(stop_cause(exit_status), now);
       const auto effective_cause =
           transitions.empty() ? stop_cause(exit_status) : transitions.front().cause;
-      emit(
-          ProcessExitedEvent{instance.request.instance_id, pid, exit_status, effective_cause, now});
+      emit(ProcessExitedEvent{instance.request.instance_id, pid, exit_status, effective_cause, now,
+                              instance.generation});
       emit_transitions(instance, transitions);
       instance.process.reset();
       handle_reaped_instance(instance, replacements, now);
@@ -898,7 +995,7 @@ private:
         return;
       }
       emit_transition(instance, *transition);
-      emit(ModuleMessageEvent{instance.request.instance_id, *message, now});
+      emit(ModuleMessageEvent{instance.request.instance_id, *message, now, instance.generation});
       return;
     }
 
@@ -954,10 +1051,50 @@ private:
             instance, ProtocolError{*path, "status-indicator capability was not negotiated"}, now);
         return;
       }
+      if (publish->presentation && publish->presentation->compact_style) {
+        if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 7}) {
+          record_violation(instance,
+                           ProtocolError{"/presentation/compact_style",
+                                         "compact style requires protocol version 1.7"},
+                           now);
+          return;
+        }
+        if (!instance.negotiated_capabilities.contains("compact-view-styles")) {
+          record_violation(instance,
+                           ProtocolError{"/presentation/compact_style",
+                                         "compact-view-styles capability was not negotiated"},
+                           now);
+          return;
+        }
+      }
+      for (const auto &[feature_path, capability, feature_name] :
+           std::array{std::tuple{scene_feature_path(*publish, scene_uses_icon_role),
+                                 std::string_view{"icon-roles"}, std::string_view{"icon role"}},
+                      std::tuple{scene_feature_path(*publish, scene_uses_progress_transition),
+                                 std::string_view{"progress-transitions"},
+                                 std::string_view{"progress transition"}}}) {
+        if (!feature_path) {
+          continue;
+        }
+        if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 7}) {
+          record_violation(instance,
+                           ProtocolError{*feature_path, std::string{feature_name} +
+                                                            " requires protocol version 1.7"},
+                           now);
+          return;
+        }
+        if (!instance.negotiated_capabilities.contains(std::string{capability})) {
+          record_violation(instance,
+                           ProtocolError{*feature_path, std::string{capability} +
+                                                            " capability was not negotiated"},
+                           now);
+          return;
+        }
+      }
     }
 
     instance.consecutive_violations = 0;
-    emit(ModuleMessageEvent{instance.request.instance_id, *message, now});
+    emit(ModuleMessageEvent{instance.request.instance_id, *message, now, instance.generation});
   }
 
   [[nodiscard]] bool accept_ready(Instance &instance, const ReadyMessage &ready,
@@ -1008,6 +1145,14 @@ private:
             ProtocolError{"/capabilities", "status-indicator requires protocol version 1.6"}, now);
         return false;
       }
+      if ((capability == "compact-view-styles" || capability == "icon-roles" ||
+           capability == "progress-transitions") &&
+          selected < ProtocolVersion{1, 7}) {
+        record_violation(
+            instance, ProtocolError{"/capabilities", capability + " requires protocol version 1.7"},
+            now);
+        return false;
+      }
     }
     instance.negotiated_version = selected;
     instance.negotiated_capabilities =
@@ -1055,7 +1200,7 @@ private:
       return;
     }
     instance.contexts_removed = true;
-    emit(ContextsRemovedEvent{instance.request.instance_id, now});
+    emit(ContextsRemovedEvent{instance.request.instance_id, now, instance.generation});
   }
 
   void emit_transition(Instance &instance, const StateTransition &transition) {
@@ -1206,6 +1351,7 @@ private:
   int wake_descriptor_{-1};
   std::jthread thread_;
   bool global_shutdown_{false};
+  std::uint64_t next_process_generation_{0};
 
   std::mutex command_mutex_;
   std::deque<Command> commands_;
@@ -1251,6 +1397,17 @@ std::expected<void, SupervisorCommandError> ModuleSupervisor::send(std::string i
     return std::unexpected(SupervisorCommandError::invalid_request);
   }
   return implementation_->enqueue(SendCommand{std::move(instance_id), std::move(message)});
+}
+
+std::expected<void, SupervisorCommandError> ModuleSupervisor::send_action(std::string instance_id,
+                                                                          std::uint64_t generation,
+                                                                          ActionMessage message) {
+  if (instance_id.empty() || generation == 0 || message.action_id.empty() ||
+      !message.invocation_id.has_value()) {
+    return std::unexpected(SupervisorCommandError::invalid_request);
+  }
+  return implementation_->enqueue(
+      SendActionCommand{std::move(instance_id), generation, std::move(message)});
 }
 
 std::expected<void, SupervisorCommandError>

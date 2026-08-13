@@ -205,8 +205,19 @@ struct RenderedContext {
   std::uint64_t expanded_revision;
   LayoutPlan compact;
   std::optional<LayoutPlan> expanded;
+  std::optional<RaylibImageBook> compact_images;
+  std::optional<RaylibImageBook> expanded_images;
+  std::optional<RaylibRichTextBook> compact_rich_text;
+  std::optional<RaylibRichTextBook> expanded_rich_text;
   RenderTexture2D compact_content;
   std::optional<RenderTexture2D> expanded_content;
+};
+
+struct RenderedSlot {
+  LayoutPlan plan;
+  RaylibImageBook images;
+  RaylibRichTextBook rich_text;
+  RenderTexture2D content;
 };
 
 struct RenderContextError {
@@ -284,6 +295,30 @@ render_content(const LayoutPlan &plan, const RaylibPainter &painter) {
   return texture;
 }
 
+[[nodiscard]] std::expected<void, std::string>
+redraw_content(const LayoutPlan &plan, const RaylibPainter &painter, RenderTexture2D texture) {
+  BeginTextureMode(texture);
+  ClearBackground(BLANK);
+  auto drawn = painter.draw_content(plan);
+  EndTextureMode();
+  if (!drawn) {
+    return std::unexpected(drawn.error().message);
+  }
+  return {};
+}
+
+[[nodiscard]] bool has_progress_transition(const LayoutPlan &plan) {
+  return std::ranges::any_of(plan.content, [](const ContentDrawCommand &command) {
+    if (const auto *progress = std::get_if<ProgressDrawCommand>(&command)) {
+      return progress->transition_from.has_value();
+    }
+    if (const auto *ring = std::get_if<RingProgressDrawCommand>(&command)) {
+      return ring->transition_from.has_value();
+    }
+    return false;
+  });
+}
+
 [[nodiscard]] std::expected<RenderedContext, RenderContextError>
 render_context(const RuntimeSelection &compact_selection,
                const RuntimeSelection &expanded_selection, const Theme &theme,
@@ -294,10 +329,14 @@ render_context(const RuntimeSelection &compact_selection,
         RenderContextError{ViewSlot::compact, "no view contribution is available"});
   }
 
-  const auto render_slot =
-      [&](const RuntimeSelection &selection,
-          ViewMode mode) -> std::expected<std::pair<LayoutPlan, RenderTexture2D>, std::string> {
-    auto plan = layout_scene(*selection.scene, theme, mode, fonts, rich_text);
+  const auto render_slot = [&](const RuntimeSelection &selection,
+                               ViewMode mode) -> std::expected<RenderedSlot, std::string> {
+    std::string_view compact_style;
+    if (mode == ViewMode::compact && selection.context->presentation &&
+        selection.context->presentation->compact_style) {
+      compact_style = *selection.context->presentation->compact_style;
+    }
+    auto plan = layout_scene(*selection.scene, theme, mode, fonts, rich_text, compact_style);
     if (!plan) {
       return std::unexpected(plan.error().path + ": " + plan.error().message);
     }
@@ -320,10 +359,10 @@ render_context(const RuntimeSelection &compact_selection,
     if (!content) {
       return std::unexpected(content.error());
     }
-    return std::pair<LayoutPlan, RenderTexture2D>{std::move(*plan), *content};
+    return RenderedSlot{std::move(*plan), std::move(*images), std::move(*rich_textures), *content};
   };
 
-  std::optional<std::pair<LayoutPlan, RenderTexture2D>> compact;
+  std::optional<RenderedSlot> compact;
   if (compact_selection.context != nullptr && compact_selection.scene != nullptr) {
     auto candidate = render_slot(compact_selection, ViewMode::compact);
     if (!candidate) {
@@ -331,12 +370,12 @@ render_context(const RuntimeSelection &compact_selection,
     }
     compact = std::move(*candidate);
   }
-  std::optional<std::pair<LayoutPlan, RenderTexture2D>> expanded;
+  std::optional<RenderedSlot> expanded;
   if (expanded_selection.context != nullptr && expanded_selection.scene != nullptr) {
     auto candidate = render_slot(expanded_selection, ViewMode::expanded);
     if (!candidate) {
       if (compact) {
-        UnloadRenderTexture(compact->second);
+        UnloadRenderTexture(compact->content);
       }
       return std::unexpected(RenderContextError{ViewSlot::expanded, candidate.error()});
     }
@@ -344,11 +383,15 @@ render_context(const RuntimeSelection &compact_selection,
   }
 
   std::optional<LayoutPlan> expanded_plan;
+  std::optional<RaylibImageBook> expanded_images;
+  std::optional<RaylibRichTextBook> expanded_rich_text;
   std::optional<RenderTexture2D> expanded_content;
   std::optional<ContextKey> expanded_key;
   if (expanded) {
-    expanded_plan = std::move(expanded->first);
-    expanded_content = expanded->second;
+    expanded_plan = std::move(expanded->plan);
+    expanded_images.emplace(std::move(expanded->images));
+    expanded_rich_text.emplace(std::move(expanded->rich_text));
+    expanded_content = expanded->content;
     expanded_key = expanded_selection.context->key;
   }
   if (!compact) {
@@ -363,7 +406,16 @@ render_context(const RuntimeSelection &compact_selection,
     ClearBackground(BLANK);
     EndTextureMode();
     SetTextureFilter(blank.texture, TEXTURE_FILTER_BILINEAR);
-    compact = std::pair<LayoutPlan, RenderTexture2D>{*expanded_plan, blank};
+    auto empty_images = RaylibImageBook::load({});
+    auto empty_rich_text = RaylibRichTextBook::load(rich_text, {});
+    if (!empty_images || !empty_rich_text) {
+      UnloadRenderTexture(blank);
+      UnloadRenderTexture(*expanded_content);
+      return std::unexpected(
+          RenderContextError{ViewSlot::expanded, "could not prepare an empty compact slot"});
+    }
+    compact.emplace(
+        RenderedSlot{*expanded_plan, std::move(*empty_images), std::move(*empty_rich_text), blank});
   }
   return RenderedContext{
       .compact_key = compact_selection.context == nullptr
@@ -372,9 +424,13 @@ render_context(const RuntimeSelection &compact_selection,
       .expanded_key = std::move(expanded_key),
       .compact_revision = compact_selection.revision,
       .expanded_revision = expanded_selection.revision,
-      .compact = std::move(compact->first),
+      .compact = std::move(compact->plan),
       .expanded = std::move(expanded_plan),
-      .compact_content = compact->second,
+      .compact_images = std::move(compact->images),
+      .expanded_images = std::move(expanded_images),
+      .compact_rich_text = std::move(compact->rich_text),
+      .expanded_rich_text = std::move(expanded_rich_text),
+      .compact_content = compact->content,
       .expanded_content = expanded_content,
   };
 }
@@ -495,6 +551,8 @@ int Application::run() {
   InteractionController controls;
   IslandMode mode = mode_controller.mode();
   SpringProgress spring;
+  ProgressAnimator compact_progress;
+  ProgressAnimator expanded_progress;
   ContentCrossfade content_crossfade;
   IslandGeometry current = initial_geometry;
   IslandPlacement placement = place_at_top_center(current, canvas);
@@ -509,6 +567,7 @@ int Application::run() {
   ContentAlignment context_content_alignment = ContentAlignment::centered;
   bool visible = false;
   bool actions_ready = false;
+  bool compact_refresh_deferred = false;
 
   const auto refresh_monitor = [&] {
     if (!host) {
@@ -560,62 +619,107 @@ int Application::run() {
     }
   };
 
-  const auto replace_rendered = [&](RenderedContext candidate, bool preserve_expanded,
-                                    const AnimationStyle &animation,
-                                    ContextTransitionKind transition_kind) {
-    std::optional<RenderTexture2D> snapshot;
-    if (rendered && current_surface && animation.context_change_ms.count() > 0) {
-      const auto transition_visual = context_transition.visual();
-      auto captured =
-          snapshot_content(outgoing_content, transition_visual.outgoing_opacity, *rendered,
-                           context_incoming_opacity(context_transition_kind, transition_visual),
-                           content_crossfade, current, blur_shader, texture_size_location,
-                           blur_radius_location, context_content_alignment);
-      if (captured) {
-        snapshot = *captured;
-      } else {
-        std::cerr << captured.error() << '\n';
-      }
-    }
+  const auto replace_rendered =
+      [&](RenderedContext candidate, bool preserve_expanded, const AnimationStyle &animation,
+          ContextTransitionKind transition_kind, bool preserve_compact_content = false) {
+        if (preserve_compact_content && rendered) {
+          std::swap(candidate.compact, rendered->compact);
+          std::swap(candidate.compact_images, rendered->compact_images);
+          std::swap(candidate.compact_rich_text, rendered->compact_rich_text);
+          std::swap(candidate.compact_content, rendered->compact_content);
+        }
+        compact_refresh_deferred = preserve_compact_content;
+        const bool preserve_compact_progress =
+            rendered && rendered->compact_key == candidate.compact_key;
+        const bool preserve_expanded_progress =
+            rendered && rendered->expanded_key == candidate.expanded_key;
+        compact_progress.retarget(candidate.compact, animation.progress.duration,
+                                  animation.progress.easing, preserve_compact_progress);
+        if (candidate.expanded) {
+          expanded_progress.retarget(*candidate.expanded, animation.progress.duration,
+                                     animation.progress.easing, preserve_expanded_progress);
+        } else {
+          expanded_progress.retarget(LayoutPlan{}, animation.progress.duration,
+                                     animation.progress.easing, false);
+        }
+        const bool suppress_context_crossfade =
+            transition_kind == ContextTransitionKind::aligned_content_crossfade &&
+            (has_progress_transition(candidate.compact) ||
+             (candidate.expanded && has_progress_transition(*candidate.expanded)));
 
-    clear_outgoing();
-    if (rendered) {
-      unload(*rendered);
-    }
-    rendered.emplace(std::move(candidate));
-    actions_ready = false;
-    if (!preserve_expanded) {
-      mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
-      mode = IslandMode::compact;
-      spring = SpringProgress{};
-      content_crossfade = ContentCrossfade{};
-    }
+        std::optional<RenderTexture2D> snapshot;
+        if (!preserve_compact_content && rendered && current_surface &&
+            animation.context_change_ms.count() > 0 && !suppress_context_crossfade) {
+          const auto transition_visual = context_transition.visual();
+          auto captured =
+              snapshot_content(outgoing_content, transition_visual.outgoing_opacity, *rendered,
+                               context_incoming_opacity(context_transition_kind, transition_visual),
+                               content_crossfade, current, blur_shader, texture_size_location,
+                               blur_radius_location, context_content_alignment);
+          if (captured) {
+            snapshot = *captured;
+          } else {
+            std::cerr << captured.error() << '\n';
+          }
+        }
 
-    const RoundedView target = visible_surface(*rendered, spring.value());
-    if (snapshot && current_surface) {
-      outgoing_content = *snapshot;
-      transition_source_surface = *current_surface;
-      transition_target_surface = target;
-      context_transition_kind = transition_kind;
-      context_content_alignment =
-          transition_kind == ContextTransitionKind::aligned_content_crossfade
-              ? ContentAlignment::top_centered
-              : ContentAlignment::centered;
-      context_transition.start(current, geometry(target), animation.context_change_ms,
-                               animation.easing);
-    } else {
-      transition_source_surface.reset();
-      transition_target_surface.reset();
-      context_transition.start(geometry(target), geometry(target), std::chrono::milliseconds{0},
-                               animation.easing);
-      current_surface = target;
-      current = geometry(target);
-      context_transition_kind = ContextTransitionKind::full_crossfade;
-      context_content_alignment = ContentAlignment::centered;
-    }
-    placement = place_at_top_center(current, canvas);
-    apply_native_canvas();
-  };
+        clear_outgoing();
+        if (rendered) {
+          unload(*rendered);
+        }
+        rendered.emplace(std::move(candidate));
+        if (compact_progress.active()) {
+          const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
+                                           *rendered->compact_rich_text};
+          if (auto redrawn = redraw_content(compact_progress.apply(rendered->compact), slot_painter,
+                                            rendered->compact_content);
+              !redrawn) {
+            std::cerr << redrawn.error() << '\n';
+          }
+        }
+        if (expanded_progress.active() && rendered->expanded && rendered->expanded_content &&
+            rendered->expanded_images && rendered->expanded_rich_text) {
+          const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
+                                           *rendered->expanded_rich_text};
+          if (auto redrawn = redraw_content(expanded_progress.apply(*rendered->expanded),
+                                            slot_painter, *rendered->expanded_content);
+              !redrawn) {
+            std::cerr << redrawn.error() << '\n';
+          }
+        }
+        actions_ready = false;
+        if (!preserve_expanded) {
+          mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+          mode = IslandMode::compact;
+          spring = SpringProgress{};
+          content_crossfade = ContentCrossfade{};
+        }
+
+        const RoundedView target = visible_surface(*rendered, spring.value());
+        if (snapshot && current_surface) {
+          outgoing_content = *snapshot;
+          transition_source_surface = *current_surface;
+          transition_target_surface = target;
+          context_transition_kind = transition_kind;
+          context_content_alignment =
+              transition_kind == ContextTransitionKind::aligned_content_crossfade
+                  ? ContentAlignment::top_centered
+                  : ContentAlignment::centered;
+          context_transition.start(current, geometry(target), animation.context_change_ms,
+                                   animation.easing);
+        } else {
+          transition_source_surface.reset();
+          transition_target_surface.reset();
+          context_transition.start(geometry(target), geometry(target), std::chrono::milliseconds{0},
+                                   animation.easing);
+          current_surface = target;
+          current = geometry(target);
+          context_transition_kind = ContextTransitionKind::full_crossfade;
+          context_content_alignment = ContentAlignment::centered;
+        }
+        placement = place_at_top_center(current, canvas);
+        apply_native_canvas();
+      };
 
   std::optional<FileWatcher> watcher;
   if (auto created = FileWatcher::create(reload_watch_paths(bootstrap_)); created) {
@@ -624,6 +728,7 @@ int Application::run() {
     std::cerr << "automatic reload disabled: " << created.error() << '\n';
   }
   ReloadDebouncer reload_debouncer{std::chrono::milliseconds{100}};
+  ControlDispatcher *active_dispatcher = nullptr;
 
   const auto reload_application = [&](MonotonicTime now) -> std::expected<void, std::string> {
     auto candidate_bootstrap = load_reload_candidate(bootstrap_);
@@ -638,6 +743,19 @@ int Application::run() {
     auto prepared_runtime = runtime.prepare_reload(*plan);
     if (!prepared_runtime) {
       return std::unexpected(prepared_runtime.error().message);
+    }
+    std::vector<std::pair<std::string, std::uint64_t>> replaced_generations;
+    const auto remember_generation = [&](std::string_view instance_id) {
+      const auto target = runtime.action_target(instance_id);
+      if (target) {
+        replaced_generations.emplace_back(instance_id, target->generation);
+      }
+    };
+    for (const auto &instance_id : plan->supervisor.stop_instances) {
+      remember_generation(instance_id);
+    }
+    for (const auto &replacement : plan->supervisor.start_or_replace) {
+      remember_generation(replacement.instance_id);
     }
     auto candidate_fonts =
         RaylibFontBook::load(candidate_bootstrap->theme, candidate_bootstrap->asset_root);
@@ -697,6 +815,11 @@ int Application::run() {
       }
       return std::unexpected("module reconfiguration could not be queued");
     }
+    if (active_dispatcher != nullptr) {
+      for (const auto &[instance_id, generation] : replaced_generations) {
+        active_dispatcher->cancel_generation(instance_id, generation);
+      }
+    }
 
     runtime.commit_reload(std::move(*prepared_runtime));
     *fonts = std::move(*candidate_fonts);
@@ -720,6 +843,8 @@ int Application::run() {
         unload(*rendered);
         rendered.reset();
       }
+      compact_progress = ProgressAnimator{};
+      expanded_progress = ProgressAnimator{};
       current_surface.reset();
       transition_source_surface.reset();
       transition_target_surface.reset();
@@ -741,18 +866,24 @@ int Application::run() {
     return {};
   };
 
-  ControlDispatcher dispatcher{runtime, mode_controller,
-                               [&supervisor](std::string instance_id, std::uint64_t generation) {
-                                 return supervisor.restart(std::move(instance_id), generation);
-                               },
-                               ipc->socket_path(),
-                               [&](MonotonicTime now) {
-                                 auto reloaded = reload_application(now);
-                                 if (reloaded) {
-                                   reload_debouncer.clear();
-                                 }
-                                 return reloaded;
-                               }};
+  ControlDispatcher dispatcher{
+      runtime,
+      mode_controller,
+      [&supervisor](std::string instance_id, std::uint64_t generation) {
+        return supervisor.restart(std::move(instance_id), generation);
+      },
+      ipc->socket_path(),
+      [&](MonotonicTime now) {
+        auto reloaded = reload_application(now);
+        if (reloaded) {
+          reload_debouncer.clear();
+        }
+        return reloaded;
+      },
+      [&supervisor](std::string instance_id, std::uint64_t generation, ActionMessage message) {
+        return supervisor.send_action(std::move(instance_id), generation, std::move(message));
+      }};
+  active_dispatcher = &dispatcher;
 
   while (!WindowShouldClose()) {
     const float delta_seconds = GetFrameTime();
@@ -774,13 +905,32 @@ int Application::run() {
     }
     for (const auto &event : supervisor.drain_events()) {
       log_supervisor_event(event);
-      if (const auto *completed = std::get_if<RestartCompletedEvent>(&event)) {
-        dispatcher.consume(*completed);
-      }
+      std::visit(
+          [&dispatcher](const auto &typed_event) {
+            using Event = std::decay_t<decltype(typed_event)>;
+            if constexpr (std::is_same_v<Event, RestartCompletedEvent> ||
+                          std::is_same_v<Event, ActionDeliveryEvent> ||
+                          std::is_same_v<Event, ProcessStartedEvent> ||
+                          std::is_same_v<Event, ProcessExitedEvent> ||
+                          std::is_same_v<Event, ContextsRemovedEvent>) {
+              dispatcher.consume(typed_event);
+            } else if constexpr (std::is_same_v<Event, ModuleMessageEvent>) {
+              if (dispatcher.consume(typed_event) == ActionEventResult::protocol_error) {
+                std::cerr << '[' << typed_event.instance_id
+                          << "] protocol /invocation_id: correlated action_result is missing its "
+                             "invocation identifier\n";
+              }
+            }
+          },
+          event);
       if (auto consumed = runtime.consume(event); !consumed) {
         std::cerr << '[' << consumed.error().instance_id << "] " << consumed.error().message
                   << '\n';
       }
+    }
+    dispatcher.expire(now);
+    for (auto &completed : dispatcher.take_completed()) {
+      static_cast<void>(ipc->complete(completed.token, completed.response, now));
     }
 
     const Vector2 pointer = GetMousePosition();
@@ -790,9 +940,12 @@ int Application::run() {
     runtime.set_activation_held(hovered && mode_controller.mode() == IslandMode::expanded &&
                                 rendered && rendered->expanded.has_value());
     static_cast<void>(runtime.active(now));
-    ipc->advance(now, [&dispatcher, now](const ControlCommand &command) {
-      return dispatcher.dispatch(command, now);
-    });
+    ipc->advance(
+        now,
+        [&dispatcher, now](const ControlCommand &command) {
+          return dispatcher.dispatch_deferred(command, now);
+        },
+        [&dispatcher](PendingControlToken token) { static_cast<void>(dispatcher.cancel(token)); });
     auto selection = runtime.selections(now);
     const bool expanded_changed =
         selection.expanded.context != nullptr
@@ -810,7 +963,8 @@ int Application::run() {
     const bool changed =
         (selection.compact.context != nullptr || selection.expanded.context != nullptr) &&
         (!rendered || rendered->compact_key != compact_key ||
-         rendered->compact_revision != selection.compact.revision || expanded_changed);
+         rendered->compact_revision != selection.compact.revision || expanded_changed ||
+         (compact_refresh_deferred && mode == IslandMode::compact));
     if (changed) {
       const bool preserve_expanded =
           mode_controller.mode() == IslandMode::expanded && selection.expanded.context != nullptr;
@@ -832,11 +986,16 @@ int Application::run() {
         const auto transition_kind = classify_context_transition(
             rendered ? rendered->compact_key : std::nullopt,
             rendered ? rendered->expanded_key : std::nullopt, compact_key, expanded_key);
+        const bool preserve_compact_content =
+            rendered && preserve_compact_during_expanded_switch(
+                            mode, mode_controller.mode(), rendered->compact_key,
+                            rendered->expanded_key, compact_key, expanded_key);
         replace_rendered(std::move(*candidate), preserve_expanded, bootstrap_.theme.animation(),
-                         transition_kind);
+                         transition_kind, preserve_compact_content);
         if (expanded_changed) {
           if (selection.expanded.context != nullptr &&
-              selection.expanded.context->presentation.has_value()) {
+              selection.expanded.context->presentation.has_value() &&
+              selection.expanded.context->presentation->reveal.has_value()) {
             mode_controller.set_reveal(true, selection.expanded.context->presentation->duration);
           } else {
             mode_controller.set_reveal(false);
@@ -848,6 +1007,8 @@ int Application::run() {
       clear_outgoing();
       unload(*rendered);
       rendered.reset();
+      compact_progress = ProgressAnimator{};
+      expanded_progress = ProgressAnimator{};
       current_surface.reset();
       transition_source_surface.reset();
       transition_target_surface.reset();
@@ -921,6 +1082,29 @@ int Application::run() {
 
     const float animation_delta =
         delta_seconds * static_cast<float>(bootstrap_.config.interaction.animation_speed);
+    const bool compact_progress_was_active = compact_progress.active();
+    const bool expanded_progress_was_active = expanded_progress.active();
+    compact_progress.update(animation_delta);
+    expanded_progress.update(animation_delta);
+    if (rendered && compact_progress_was_active) {
+      const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
+                                       *rendered->compact_rich_text};
+      if (auto redrawn = redraw_content(compact_progress.apply(rendered->compact), slot_painter,
+                                        rendered->compact_content);
+          !redrawn) {
+        std::cerr << redrawn.error() << '\n';
+      }
+    }
+    if (rendered && rendered->expanded && rendered->expanded_content && rendered->expanded_images &&
+        rendered->expanded_rich_text && expanded_progress_was_active) {
+      const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
+                                       *rendered->expanded_rich_text};
+      if (auto redrawn = redraw_content(expanded_progress.apply(*rendered->expanded), slot_painter,
+                                        *rendered->expanded_content);
+          !redrawn) {
+        std::cerr << redrawn.error() << '\n';
+      }
+    }
     const bool context_was_active = context_transition.active();
     context_transition.update(animation_delta);
     if (!context_transition.active()) {
@@ -1006,6 +1190,18 @@ int Application::run() {
     }
   }
 
+  dispatcher.cancel_all();
+  const MonotonicTime shutdown_at = std::chrono::steady_clock::now();
+  for (auto &completed : dispatcher.take_completed()) {
+    static_cast<void>(ipc->complete(completed.token, completed.response, shutdown_at));
+  }
+  ipc->advance(
+      shutdown_at,
+      [](const ControlCommand &) -> ControlDispatchResult {
+        return ControlResponse{
+            ControlError{ControlErrorCode::action_cancelled, "the application is shutting down"}};
+      },
+      [&dispatcher](PendingControlToken token) { static_cast<void>(dispatcher.cancel(token)); });
   supervisor.shutdown();
   clear_outgoing();
   if (rendered) {

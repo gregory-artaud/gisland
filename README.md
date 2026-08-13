@@ -10,6 +10,7 @@ A C++23 raylib application for Linux/X11.
 - Git
 - clang-format and clang-tidy for optional quality checks
 - Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
+- `pactl` for default output mute and volume controls
 - tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
@@ -19,7 +20,7 @@ A C++23 raylib application for Linux/X11.
 sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
-  libpango1.0-dev libfontconfig1-dev python3 python3-gi gir1.2-gtk-3.0
+  libpango1.0-dev libfontconfig1-dev python3 python3-gi gir1.2-gtk-3.0 pulseaudio-utils
 ```
 
 ### Fedora
@@ -28,7 +29,7 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel python3 python3-gobject gtk3
+  fontconfig-devel python3 python3-gobject gtk3 pulseaudio-utils
 ```
 
 ### Arch Linux
@@ -36,7 +37,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  python-gobject gtk3
+  python-gobject gtk3 libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -103,6 +104,10 @@ exec --no-startup-id systemctl --user import-environment DISPLAY XAUTHORITY
 exec --no-startup-id systemctl --user start gisland.service
 bindsym $mod+grave exec --no-startup-id gislandctl toggle
 bindsym $mod+Shift+grave exec --no-startup-id gislandctl close
+bindsym $mod+m exec --no-startup-id gisland-audio-control mute
+bindsym XF86AudioMute exec --no-startup-id gisland-audio-control mute
+bindsym XF86AudioRaiseVolume exec --no-startup-id gisland-audio-control up
+bindsym XF86AudioLowerVolume exec --no-startup-id gisland-audio-control down
 ```
 
 Equivalent sxhkd bindings are ordinary commands:
@@ -319,7 +324,15 @@ memory only; history is non-interactive and storage failures remain logs-only.
 ./build/dev/gislandctl activate clock
 ./build/dev/gislandctl activate clock --duration 5s
 ./build/dev/gislandctl dismiss configured
+./build/dev/gislandctl action audio volume-up
+./build/dev/gislandctl action audio set-volume --value 42
 ```
+
+`gislandctl action <instance> <action> [--value <json>]` routes a semantic action to one running
+module instance and waits for its accepted or rejected result. The optional value is parsed as JSON,
+so it preserves null, booleans, numbers, strings, arrays, and objects. This uses the same module
+`action` message as buttons, links, and other rendered interaction targets; modules do not need a
+separate control service. Confirmed external actions require a module negotiating protocol 1.8.
 
 Durations accept positive integer `ms`, `s`, `m`, or `h` units up to 24 hours. Scripts should use
 `status --json`; its result has `format_version: 2` with separate `compact` and `expanded` owners.

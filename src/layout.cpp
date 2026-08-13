@@ -471,7 +471,7 @@ private:
       return std::unexpected(
           error(LayoutErrorCode::unknown_icon, path + "/name", "unknown semantic icon"));
     }
-    auto role = typography("body", path + "/name");
+    auto role = typography(icon.role, path + "/role");
     if (!role) {
       return std::unexpected(role.error());
     }
@@ -501,7 +501,7 @@ private:
     result.typography = *role;
     result.icon = &icon_iterator->second;
     result.font_resource = std::move(*font);
-    result.color = theme_.palette().at("foreground");
+    result.color = theme_.palette().at((*role)->color);
     return result;
   }
 
@@ -587,7 +587,11 @@ private:
       return std::unexpected(track_width.error());
     }
     result.track_width = *track_width;
-    result.track_height = *unit;
+    auto track_height = rounded_pixel(theme_.progress().linear_thickness, path);
+    if (!track_height) {
+      return std::unexpected(track_height.error());
+    }
+    result.track_height = *track_height;
     result.label_width = label_width;
     result.label_height = label_height;
     result.gap = progress.label.empty() ? 0 : *gap;
@@ -603,6 +607,7 @@ private:
     result.height = *height;
     result.minimum_width = result.width;
     result.minimum_height = result.height;
+    result.expands_width = progress.label.empty();
     result.typography = *role;
     result.font_resource = std::move(*font);
     result.color = color->second;
@@ -1082,7 +1087,11 @@ private:
       return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
                                    "icon cannot fit the assigned bounds"));
     }
+    auto x = checked_add(assigned.x, (assigned.width - node.width) / 2, node.path);
     auto y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    if (!x) {
+      return std::unexpected(x.error());
+    }
     if (!y) {
       return std::unexpected(y.error());
     }
@@ -1090,7 +1099,7 @@ private:
     if (!clipped) {
       return std::unexpected(clipped.error());
     }
-    commands.emplace_back(IconDrawCommand{Rect{assigned.x, *y, node.width, node.height}, *clipped,
+    commands.emplace_back(IconDrawCommand{Rect{*x, *y, node.width, node.height}, *clipped,
                                           node.font_resource, *node.typography,
                                           node.icon->codepoint, node.color, icon.accessible_label});
     return {};
@@ -1137,7 +1146,10 @@ private:
     if (!y) {
       return std::unexpected(y.error());
     }
-    const Rect bounds{assigned.x, *y, node.width, node.height};
+    const int progress_width = progress.shape == ProgressShape::linear && progress.label.empty()
+                                   ? assigned.width
+                                   : node.width;
+    const Rect bounds{assigned.x, *y, progress_width, node.height};
     auto clipped = intersect(clip, bounds, node.path);
     if (!clipped) {
       return std::unexpected(clipped.error());
@@ -1150,7 +1162,8 @@ private:
             std::lround(static_cast<double>(track_color.alpha) * *opacity));
       }
       commands.emplace_back(RingProgressDrawCommand{bounds, *clipped, progress.value,
-                                                    node.track_height, track_color, node.color});
+                                                    node.track_height, track_color, node.color,
+                                                    node.path, progress.transition_from});
       return {};
     }
     if (!progress.label.empty()) {
@@ -1166,15 +1179,16 @@ private:
     if (!track_y) {
       return std::unexpected(track_y.error());
     }
-    const Rect track{assigned.x, *track_y, node.track_width, node.track_height};
-    auto fill_width =
-        rounded_pixel(static_cast<double>(node.track_width) * progress.value, node.path);
+    const int track_width = progress.label.empty() ? assigned.width : node.track_width;
+    const Rect track{assigned.x, *track_y, track_width, node.track_height};
+    auto fill_width = rounded_pixel(static_cast<double>(track_width) * progress.value, node.path);
     if (!fill_width) {
       return std::unexpected(fill_width.error());
     }
     commands.emplace_back(ProgressDrawCommand{bounds, *clipped, track,
                                               Rect{track.x, track.y, *fill_width, track.height},
-                                              theme_.palette().at("muted"), node.color});
+                                              theme_.palette().at("muted"), node.color, node.path,
+                                              progress.value, progress.transition_from});
     return {};
   }
 
@@ -1421,8 +1435,20 @@ private:
   bool root_leading_cap_;
 };
 
-[[nodiscard]] const ViewGeometry &geometry_for(const Theme &theme, ViewMode mode) {
-  return mode == ViewMode::compact ? theme.views().compact : theme.views().expanded;
+[[nodiscard]] std::expected<const ViewGeometry *, LayoutError>
+geometry_for(const Theme &theme, ViewMode mode, std::string_view compact_style) {
+  if (mode == ViewMode::expanded) {
+    return &theme.views().expanded;
+  }
+  if (compact_style.empty()) {
+    return &theme.views().compact;
+  }
+  const auto style = theme.views().compact_styles.find(compact_style);
+  if (style == theme.views().compact_styles.end()) {
+    return std::unexpected(LayoutError{LayoutErrorCode::unknown_compact_style,
+                                       "/presentation/compact_style", "unknown compact style"});
+  }
+  return &style->second;
 }
 
 [[nodiscard]] const ImageRole *root_leading_cap_role(const SceneNode &scene, const Theme &theme) {
@@ -1458,7 +1484,8 @@ RectInsets shadow_insets(const RoundedView &view) {
 
 [[nodiscard]] static std::expected<LayoutPlan, LayoutError>
 layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
-                  const GlyphMetrics &glyph_metrics, const RichTextMetrics *rich_text_metrics) {
+                  const GlyphMetrics &glyph_metrics, const RichTextMetrics *rich_text_metrics,
+                  std::string_view compact_style) {
   const auto validation = validate_scene(scene);
   if (!validation) {
     return std::unexpected(error(LayoutErrorCode::impossible_constraints, validation.error().path,
@@ -1473,15 +1500,18 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
     return std::unexpected(measured.error());
   }
 
-  const auto &geometry = geometry_for(theme, mode);
-  auto horizontal_padding = rounded_pixel(geometry.padding_horizontal, "");
-  auto vertical_padding = rounded_pixel(geometry.padding_vertical, "");
-  auto minimum_width = rounded_pixel(geometry.min_width, "");
-  auto maximum_width = rounded_pixel(geometry.max_width, "");
-  auto minimum_height = rounded_pixel(geometry.min_height, "");
-  auto maximum_height = rounded_pixel(geometry.max_height, "");
-  auto radius = rounded_pixel(geometry.radius, "");
-  auto border = rounded_pixel(geometry.border, "");
+  const auto geometry = geometry_for(theme, mode, compact_style);
+  if (!geometry) {
+    return std::unexpected(geometry.error());
+  }
+  auto horizontal_padding = rounded_pixel((*geometry)->padding_horizontal, "");
+  auto vertical_padding = rounded_pixel((*geometry)->padding_vertical, "");
+  auto minimum_width = rounded_pixel((*geometry)->min_width, "");
+  auto maximum_width = rounded_pixel((*geometry)->max_width, "");
+  auto minimum_height = rounded_pixel((*geometry)->min_height, "");
+  auto maximum_height = rounded_pixel((*geometry)->max_height, "");
+  auto radius = rounded_pixel((*geometry)->radius, "");
+  auto border = rounded_pixel((*geometry)->border, "");
   auto shadow_offset_x = rounded_signed_pixel(theme.shadow().offset_x, "shadow.offset_x");
   auto shadow_offset_y = rounded_signed_pixel(theme.shadow().offset_y, "shadow.offset_y");
   auto shadow_blur = rounded_pixel(theme.shadow().blur, "shadow.blur");
@@ -1494,7 +1524,7 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
     }
   }
 
-  if (mode == ViewMode::compact && contains_ring_progress(scene)) {
+  if (mode == ViewMode::compact && compact_style.empty() && contains_ring_progress(scene)) {
     auto compact_height = rounded_pixel(theme.progress().compact_height, "progress.compact_height");
     if (!compact_height) {
       return std::unexpected(compact_height.error());
@@ -1606,15 +1636,17 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
 
 std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, const Theme &theme,
                                                     ViewMode mode,
-                                                    const GlyphMetrics &glyph_metrics) {
-  return layout_scene_impl(scene, theme, mode, glyph_metrics, nullptr);
+                                                    const GlyphMetrics &glyph_metrics,
+                                                    std::string_view compact_style) {
+  return layout_scene_impl(scene, theme, mode, glyph_metrics, nullptr, compact_style);
 }
 
 std::expected<LayoutPlan, LayoutError> layout_scene(const SceneNode &scene, const Theme &theme,
                                                     ViewMode mode,
                                                     const GlyphMetrics &glyph_metrics,
-                                                    const RichTextMetrics &rich_text_metrics) {
-  return layout_scene_impl(scene, theme, mode, glyph_metrics, &rich_text_metrics);
+                                                    const RichTextMetrics &rich_text_metrics,
+                                                    std::string_view compact_style) {
+  return layout_scene_impl(scene, theme, mode, glyph_metrics, &rich_text_metrics, compact_style);
 }
 
 } // namespace gisland

@@ -69,6 +69,11 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
   if (config.maximum_protocol >= ProtocolVersion{1, 6}) {
     capabilities.emplace_back("status-indicator");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 7}) {
+    capabilities.emplace_back("compact-view-styles");
+    capabilities.emplace_back("icon-roles");
+    capabilities.emplace_back("progress-transitions");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =
@@ -113,15 +118,30 @@ std::expected<void, RuntimeError> RuntimeCoordinator::consume(const SupervisorEv
       [this](const auto &typed_event) -> std::expected<void, RuntimeError> {
         using Event = std::decay_t<decltype(typed_event)>;
         if constexpr (std::is_same_v<Event, ModuleMessageEvent>) {
+          const auto generation = process_generations_.find(typed_event.instance_id);
+          if (generation != process_generations_.end() &&
+              generation->second != typed_event.generation) {
+            return {};
+          }
           return consume_message(typed_event);
+        } else if constexpr (std::is_same_v<Event, ProcessStartedEvent>) {
+          process_generations_.insert_or_assign(typed_event.instance_id, typed_event.generation);
+          negotiated_protocols_.erase(typed_event.instance_id);
         } else if constexpr (std::is_same_v<Event, StateChangedEvent>) {
           module_states_.insert_or_assign(typed_event.instance_id, typed_event.transition.to);
         } else if constexpr (std::is_same_v<Event, ContextsRemovedEvent>) {
+          const auto generation = process_generations_.find(typed_event.instance_id);
+          if (generation != process_generations_.end() &&
+              generation->second != typed_event.generation) {
+            return {};
+          }
           arbiter_.dismiss_instance(typed_event.instance_id);
           std::erase_if(pending_replacements_, [&typed_event](const auto &entry) {
             return entry.first.instance_id == typed_event.instance_id;
           });
           ready_instances_.erase(typed_event.instance_id);
+          process_generations_.erase(typed_event.instance_id);
+          negotiated_protocols_.erase(typed_event.instance_id);
           visibility_.erase(typed_event.instance_id);
           ++revision_;
         }
@@ -137,6 +157,9 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
         using Message = std::decay_t<decltype(message)>;
         if constexpr (std::is_same_v<Message, ReadyMessage>) {
           ready_instances_.insert(event.instance_id);
+          process_generations_.insert_or_assign(event.instance_id, event.generation);
+          negotiated_protocols_.insert_or_assign(
+              event.instance_id, ProtocolVersion{message.protocol_major, message.protocol_minor});
         } else if constexpr (std::is_same_v<Message, PublishMessage>) {
           const ContextKey key{event.instance_id, message.context_id};
           remember_replacement(key, event.at);
@@ -280,6 +303,29 @@ std::vector<RuntimeModuleStatus> RuntimeCoordinator::module_statuses(MonotonicTi
                       .available = enabled && arbiter_.available(instance_id, now)});
   }
   return result;
+}
+
+std::expected<RuntimeActionTarget, RuntimeError>
+RuntimeCoordinator::action_target(std::string_view instance_id) const {
+  const auto configured = std::ranges::find_if(
+      configured_instances_, [instance_id](const auto &item) { return item.first == instance_id; });
+  if (configured == configured_instances_.end()) {
+    return std::unexpected(runtime_error(RuntimeErrorCode::unknown_instance,
+                                         std::string{instance_id},
+                                         "module instance does not exist"));
+  }
+  if (!configured->second) {
+    return std::unexpected(runtime_error(RuntimeErrorCode::disabled_instance,
+                                         std::string{instance_id}, "module instance is disabled"));
+  }
+  const auto generation = process_generations_.find(std::string{instance_id});
+  const auto protocol = negotiated_protocols_.find(std::string{instance_id});
+  if (!ready_instances_.contains(std::string{instance_id}) ||
+      generation == process_generations_.end() || protocol == negotiated_protocols_.end()) {
+    return std::unexpected(runtime_error(RuntimeErrorCode::unavailable_instance,
+                                         std::string{instance_id}, "module instance is not ready"));
+  }
+  return RuntimeActionTarget{generation->second, protocol->second};
 }
 
 std::expected<PreparedRuntimeReload, RuntimeError>

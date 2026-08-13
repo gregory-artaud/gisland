@@ -58,6 +58,94 @@ TEST_CASE("shadow-aware canvas placement preserves its surface anchor") {
         gisland::IslandPlacement{26.0F, 14.0F});
 }
 
+TEST_CASE("fixed canvas contains every named compact style") {
+  constexpr std::string_view theme_text = R"(
+[palette]
+surface = "#000000"
+foreground = "#FFFFFF"
+muted = "#808080"
+accent = "#7C5CFC"
+success = "#30D158"
+warning = "#FFD60A"
+error = "#FF453A"
+[fonts]
+ui = "/tmp/ui.ttf"
+[typography.body]
+font = "ui"
+color = "foreground"
+size = 16
+weight = 400
+line_height = 1
+[images.test]
+width = 16
+height = 16
+fit = "contain"
+shape = "rectangle"
+[gaps]
+normal = 8
+[spacers]
+normal = 8
+[view.compact]
+padding = 4
+radius = 16
+border = 0
+min_width = 32
+max_width = 100
+min_height = 32
+max_height = 32
+[view.compact.styles.wide-hud]
+padding = 4
+radius = 20
+border = 0
+min_width = 1000
+max_width = 1000
+min_height = 68
+max_height = 68
+[view.expanded]
+padding = 8
+radius = 24
+border = 0
+min_width = 200
+max_width = 400
+min_height = 100
+max_height = 300
+[progress]
+ring_diameter = 32
+ring_thickness = 4
+compact_height = 48
+track = "muted"
+[shadow]
+offset_x = 0
+offset_y = 0
+blur = 0
+spread = 0
+color = "#00000000"
+[animation]
+compact_to_expanded_ms = 0
+context_change_ms = 0
+easing = "linear"
+[animation.progress]
+duration_ms = 270
+easing = "ease-out"
+[animation.reduced_motion]
+compact_to_expanded_ms = 0
+context_change_ms = 0
+[animation.reduced_motion.progress]
+duration_ms = 0
+[icons.calendar]
+font = "ui"
+codepoint = 0x41
+)";
+  const auto theme = gisland::parse_theme(theme_text, "canvas-theme.toml");
+  INFO((theme.has_value() ? std::string{} : theme.error().path + ": " + theme.error().message));
+  REQUIRE(theme.has_value());
+
+  const auto canvas = gisland::fixed_canvas_for(*theme);
+
+  CHECK(canvas.surface_width == Approx(1000.0F));
+  CHECK(canvas.surface_height == Approx(300.0F));
+}
+
 TEST_CASE("spring motion has subtle overshoot and preserves reversal velocity") {
   gisland::SpringProgress spring;
   spring.set_target(1.0F);
@@ -81,6 +169,69 @@ TEST_CASE("spring motion has subtle overshoot and preserves reversal velocity") 
   interrupted.set_target(0.0F);
   interrupted.update(0.001F);
   CHECK(interrupted.value() > progress_before_reversal);
+}
+
+TEST_CASE("progress animation eases and retargets from its rendered value") {
+  const auto plan = [](double value, std::optional<double> transition_from) {
+    return gisland::LayoutPlan{
+        {},
+        {gisland::ProgressDrawCommand{{0, 0, 100, 5},
+                                      {0, 0, 100, 5},
+                                      {0, 0, 100, 5},
+                                      {0, 0, static_cast<int>(value * 100.0), 5},
+                                      {},
+                                      {},
+                                      "/children/1",
+                                      value,
+                                      transition_from}},
+        {}};
+  };
+
+  gisland::ProgressAnimator animator;
+  const auto target = plan(0.8, 0.2);
+  animator.retarget(target, 270ms, gisland::Easing::ease_out, false);
+  CHECK(animator.active());
+  CHECK(std::get<gisland::ProgressDrawCommand>(animator.apply(target).content[0]).fill.width == 20);
+
+  animator.update(0.1F);
+  const auto midway = animator.apply(target);
+  const auto midway_width = std::get<gisland::ProgressDrawCommand>(midway.content[0]).fill.width;
+  CHECK(midway_width > 20);
+  CHECK(midway_width < 80);
+
+  const auto replacement = plan(0.4, 0.8);
+  animator.retarget(replacement, 270ms, gisland::Easing::ease_out, true);
+  CHECK(std::get<gisland::ProgressDrawCommand>(animator.apply(replacement).content[0]).fill.width ==
+        midway_width);
+  animator.update(0.27F);
+  CHECK_FALSE(animator.active());
+  CHECK(std::get<gisland::ProgressDrawCommand>(animator.apply(replacement).content[0]).fill.width ==
+        40);
+}
+
+TEST_CASE("progress animation snaps without a source or with reduced motion") {
+  const gisland::LayoutPlan plan{{},
+                                 {gisland::ProgressDrawCommand{{0, 0, 100, 5},
+                                                               {0, 0, 100, 5},
+                                                               {0, 0, 100, 5},
+                                                               {0, 0, 70, 5},
+                                                               {},
+                                                               {},
+                                                               "/progress",
+                                                               0.7,
+                                                               std::nullopt}},
+                                 {}};
+  gisland::ProgressAnimator animator;
+  animator.retarget(plan, 270ms, gisland::Easing::ease_out, false);
+  CHECK_FALSE(animator.active());
+  CHECK(std::get<gisland::ProgressDrawCommand>(animator.apply(plan).content[0]).fill.width == 70);
+
+  auto sourced = plan;
+  std::get<gisland::ProgressDrawCommand>(sourced.content[0]).transition_from = 0.1;
+  animator.retarget(sourced, 0ms, gisland::Easing::ease_out, false);
+  CHECK_FALSE(animator.active());
+  CHECK(std::get<gisland::ProgressDrawCommand>(animator.apply(sourced).content[0]).fill.width ==
+        70);
 }
 
 TEST_CASE("hover expands immediately and collapses after its exit tolerance") {
@@ -454,6 +605,22 @@ TEST_CASE("aligned content transition keeps incoming content fully opaque") {
                                           visual) == Approx(1.0F));
   CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::full_crossfade, visual) ==
         Approx(0.5F));
+}
+
+TEST_CASE("expanded owner switch preserves outgoing compact content") {
+  const std::optional<gisland::ContextKey> battery{gisland::ContextKey{"battery", "configured"}};
+  const std::optional<gisland::ContextKey> clock{gisland::ContextKey{"clock", "configured"}};
+  const std::optional<gisland::ContextKey> history{gisland::ContextKey{"notifications", "history"}};
+
+  CHECK(gisland::preserve_compact_during_expanded_switch(gisland::IslandMode::compact,
+                                                         gisland::IslandMode::expanded, battery,
+                                                         battery, clock, history));
+  CHECK_FALSE(gisland::preserve_compact_during_expanded_switch(gisland::IslandMode::compact,
+                                                               gisland::IslandMode::compact,
+                                                               battery, battery, clock, history));
+  CHECK_FALSE(gisland::preserve_compact_during_expanded_switch(gisland::IslandMode::expanded,
+                                                               gisland::IslandMode::expanded,
+                                                               battery, battery, clock, history));
 }
 
 TEST_CASE("rounded mask covers the middle and insets its edges") {

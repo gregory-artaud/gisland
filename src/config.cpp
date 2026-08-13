@@ -758,7 +758,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     std::string module_id;
     std::optional<std::filesystem::path> manifest_path;
     ProtocolVersion minimum_protocol{1, 0};
-    ProtocolVersion maximum_protocol{1, 6};
+    ProtocolVersion maximum_protocol{1, 8};
     std::expected<std::vector<std::string>, ConfigError> command =
         has_command
             ? parse_command(*module_table, index, source_name)
@@ -789,13 +789,13 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
       }
       manifest = &found->second;
       if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
-          manifest->minimum_protocol.minor > 6 || manifest->maximum_protocol.minor < 0) {
+          manifest->minimum_protocol.minor > 8 || manifest->maximum_protocol.minor < 0) {
         return std::unexpected(error_at(source_name, base_path + ".module",
                                         "module protocol range is incompatible",
                                         module_table->get("module")));
       }
       minimum_protocol = {1, std::max(0, manifest->minimum_protocol.minor)};
-      maximum_protocol = {1, std::min(6, manifest->maximum_protocol.minor)};
+      maximum_protocol = {1, std::min(8, manifest->maximum_protocol.minor)};
       auto arguments = parse_arguments(*module_table, index, source_name);
       if (!arguments) {
         return std::unexpected(arguments.error());

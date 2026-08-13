@@ -70,6 +70,7 @@ max_height = 720
 [progress]
 ring_diameter = 32
 ring_thickness = 4
+linear_thickness = 5
 compact_height = 48
 track = "muted"
 ring_track_opacity = 0.25
@@ -86,9 +87,16 @@ compact_to_expanded_ms = 350
 context_change_ms = 250
 easing = "ease-in-out"
 
+[animation.progress]
+duration_ms = 270
+easing = "ease-out"
+
 [animation.reduced_motion]
 compact_to_expanded_ms = 0
 context_change_ms = 0
+
+[animation.reduced_motion.progress]
+duration_ms = 0
 
 [icons.calendar]
 font = "symbols"
@@ -130,6 +138,7 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->views().expanded.max_height == 720.0);
   CHECK(result->progress().ring_diameter == 32.0);
   CHECK(result->progress().ring_thickness == 4.0);
+  CHECK(result->progress().linear_thickness == 5.0);
   CHECK(result->progress().compact_height == 48.0);
   REQUIRE(std::holds_alternative<std::string>(result->progress().track));
   CHECK(std::get<std::string>(result->progress().track) == "muted");
@@ -144,10 +153,41 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().compact_to_expanded_ms == std::chrono::milliseconds{350});
   CHECK(result->animation().context_change_ms == std::chrono::milliseconds{250});
   CHECK(result->animation().easing == gisland::Easing::ease_in_out);
+  CHECK(result->animation().progress.duration == std::chrono::milliseconds{270});
+  CHECK(result->animation().progress.easing == gisland::Easing::ease_out);
   CHECK(result->animation().reduced_motion.compact_to_expanded_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
+  CHECK(result->animation().reduced_motion.progress_duration == std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
+}
+
+TEST_CASE("theme parses named compact view styles") {
+  const auto themed = replace_once(std::string{valid_theme}, "max_height = 160\n\n[view.expanded]",
+                                   R"(max_height = 160
+
+[view.compact.styles.hud-symbol]
+padding_horizontal = 0
+padding_vertical = 0
+radius = 21
+border = 0
+min_width = 72
+max_width = 72
+min_height = 68
+max_height = 68
+
+[view.expanded])");
+
+  const auto result = gisland::parse_theme(themed, "hud-theme.toml");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->views().compact_styles.contains("hud-symbol"));
+  const auto &style = result->views().compact_styles.at("hud-symbol");
+  CHECK(style.min_width == 72.0);
+  CHECK(style.max_width == 72.0);
+  CHECK(style.min_height == 68.0);
+  CHECK(style.max_height == 68.0);
+  CHECK(style.radius == 21.0);
 }
 
 TEST_CASE("indicator theme diameter is optional and bounded") {
@@ -330,6 +370,20 @@ TEST_CASE("theme accepts each supported easing") {
   check_easing("ease-in-out", gisland::Easing::ease_in_out);
 }
 
+TEST_CASE("legacy themes receive default progress animation policy") {
+  auto legacy =
+      replace_once(std::string{valid_theme},
+                   "[animation.progress]\nduration_ms = 270\neasing = \"ease-out\"\n\n", "");
+  legacy = replace_once(legacy, "[animation.reduced_motion.progress]\nduration_ms = 0\n\n", "");
+
+  const auto result = gisland::parse_theme(legacy, "legacy-theme.toml");
+
+  REQUIRE(result.has_value());
+  CHECK(result->animation().progress.duration == std::chrono::milliseconds{270});
+  CHECK(result->animation().progress.easing == gisland::Easing::ease_out);
+  CHECK(result->animation().reduced_motion.progress_duration == std::chrono::milliseconds{0});
+}
+
 TEST_CASE("theme errors retain source position and a semantic path") {
   const auto result = gisland::parse_theme("[palette\nsurface = \"#000000\"", "broken.toml");
 
@@ -366,9 +420,17 @@ TEST_CASE("theme rejects unknown keys at every fixed and dynamic table") {
   check_unknown(replace_once(std::string{valid_theme}, "easing = \"ease-in-out\"",
                              "easing = \"ease-in-out\"\ndelay_ms = 20"),
                 "animation.delay_ms");
-  check_unknown(replace_once(std::string{valid_theme}, "context_change_ms = 0\n\n[icons.calendar]",
-                             "context_change_ms = 0\nextra = 1\n\n[icons.calendar]"),
+  check_unknown(replace_once(std::string{valid_theme}, "easing = \"ease-out\"",
+                             "easing = \"ease-out\"\ndelay_ms = 20"),
+                "animation.progress.delay_ms");
+  check_unknown(replace_once(std::string{valid_theme},
+                             "context_change_ms = 0\n\n[animation.reduced_motion.progress]",
+                             "context_change_ms = 0\nextra = 1\n\n"
+                             "[animation.reduced_motion.progress]"),
                 "animation.reduced_motion.extra");
+  check_unknown(
+      replace_once(std::string{valid_theme}, "duration_ms = 0", "duration_ms = 0\nextra = 1"),
+      "animation.reduced_motion.progress.extra");
 }
 
 TEST_CASE("theme rejects malformed colors and invalid bounded numbers") {
@@ -444,14 +506,19 @@ TEST_CASE("theme rejects invalid animation values with exact paths") {
   check_invalid(
       replace_once(std::string{valid_theme}, "easing = \"ease-in-out\"", "easing = \"ease\""),
       "animation.easing");
+  check_invalid(replace_once(std::string{valid_theme}, "duration_ms = 270", "duration_ms = -1"),
+                "animation.progress.duration_ms");
   check_invalid(
-      replace_once(std::string{valid_theme},
-                   "compact_to_expanded_ms = 0\ncontext_change_ms = 0\n\n[icons.calendar]",
-                   "compact_to_expanded_ms = 60001\ncontext_change_ms = 0\n\n[icons.calendar]"),
-      "animation.reduced_motion.compact_to_expanded_ms");
-  check_invalid(replace_once(std::string{valid_theme}, "context_change_ms = 0\n\n[icons.calendar]",
-                             "context_change_ms = -1\n\n[icons.calendar]"),
-                "animation.reduced_motion.context_change_ms");
+      replace_once(std::string{valid_theme}, "easing = \"ease-out\"", "easing = \"ease\""),
+      "animation.progress.easing");
+  check_invalid(replace_once(std::string{valid_theme}, "compact_to_expanded_ms = 0",
+                             "compact_to_expanded_ms = 60001"),
+                "animation.reduced_motion.compact_to_expanded_ms");
+  check_invalid(
+      replace_once(std::string{valid_theme}, "context_change_ms = 0", "context_change_ms = -1"),
+      "animation.reduced_motion.context_change_ms");
+  check_invalid(replace_once(std::string{valid_theme}, "duration_ms = 0", "duration_ms = 60001"),
+                "animation.reduced_motion.progress.duration_ms");
 }
 
 TEST_CASE("theme rejects empty or duplicate semantic keys") {
@@ -579,8 +646,11 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
   const auto animation = gisland::parse_theme(
       replace_once(std::string{valid_theme},
                    "[animation]\ncompact_to_expanded_ms = 350\ncontext_change_ms = 250\n"
-                   "easing = \"ease-in-out\"\n\n[animation.reduced_motion]\n"
-                   "compact_to_expanded_ms = 0\ncontext_change_ms = 0\n\n",
+                   "easing = \"ease-in-out\"\n\n[animation.progress]\n"
+                   "duration_ms = 270\neasing = \"ease-out\"\n\n"
+                   "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"
+                   "context_change_ms = 0\n\n[animation.reduced_motion.progress]\n"
+                   "duration_ms = 0\n\n",
                    ""),
       "animation.toml");
   REQUIRE_FALSE(animation.has_value());
@@ -589,7 +659,9 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
   const auto reduced_motion =
       gisland::parse_theme(replace_once(std::string{valid_theme},
                                         "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"
-                                        "context_change_ms = 0\n\n",
+                                        "context_change_ms = 0\n\n"
+                                        "[animation.reduced_motion.progress]\n"
+                                        "duration_ms = 0\n\n",
                                         ""),
                            "reduced-motion.toml");
   REQUIRE_FALSE(reduced_motion.has_value());

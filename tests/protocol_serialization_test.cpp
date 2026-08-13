@@ -62,6 +62,21 @@ TEST_CASE("action messages preserve an optional typed value") {
         nlohmann::json{{"type", "action"}, {"action_id", "calendar.today"}});
 }
 
+TEST_CASE("action messages serialize an optional invocation identifier") {
+  const gisland::ActionMessage correlated{
+      .action_id = "audio.volume-up",
+      .value = std::nullopt,
+      .invocation_id = 18446744073709551615ULL,
+  };
+
+  CHECK(parse_record(gisland::serialize_core_message(gisland::CoreMessage{correlated})) ==
+        nlohmann::json{
+            {"type", "action"},
+            {"action_id", "audio.volume-up"},
+            {"invocation_id", "18446744073709551615"},
+        });
+}
+
 TEST_CASE("visibility states have stable wire names") {
   const auto hidden = gisland::serialize_core_message(
       gisland::CoreMessage{gisland::VisibilityMessage{gisland::Visibility::hidden}});

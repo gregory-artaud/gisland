@@ -21,6 +21,7 @@ using OrderedJson = nlohmann::ordered_json;
 using namespace std::chrono_literals;
 
 constexpr std::chrono::milliseconds maximum_duration = 24h;
+constexpr std::size_t maximum_control_record_bytes = 64U * 1024U;
 
 [[nodiscard]] std::unexpected<ControlError> fail(ControlErrorCode code, std::string message) {
   return std::unexpected(ControlError{code, std::move(message)});
@@ -146,12 +147,15 @@ parse_active_context(const Json &value) {
 }
 
 [[nodiscard]] std::optional<ControlErrorCode> parse_error_code(std::string_view name) {
-  for (const auto code : {ControlErrorCode::invalid_request, ControlErrorCode::unsupported_version,
-                          ControlErrorCode::unknown_command, ControlErrorCode::unknown_instance,
-                          ControlErrorCode::unavailable_instance,
-                          ControlErrorCode::unavailable_context, ControlErrorCode::unknown_context,
-                          ControlErrorCode::invalid_duration, ControlErrorCode::restart_rejected,
-                          ControlErrorCode::reload_rejected, ControlErrorCode::internal_error}) {
+  for (const auto code :
+       {ControlErrorCode::invalid_request, ControlErrorCode::unsupported_version,
+        ControlErrorCode::unknown_command, ControlErrorCode::unknown_instance,
+        ControlErrorCode::unavailable_instance, ControlErrorCode::unavailable_context,
+        ControlErrorCode::unknown_context, ControlErrorCode::invalid_duration,
+        ControlErrorCode::restart_rejected, ControlErrorCode::reload_rejected,
+        ControlErrorCode::unsupported_module_protocol, ControlErrorCode::action_rejected,
+        ControlErrorCode::action_delivery_failed, ControlErrorCode::action_timeout,
+        ControlErrorCode::action_cancelled, ControlErrorCode::internal_error}) {
     if (control_error_code_name(code) == name) {
       return code;
     }
@@ -284,7 +288,8 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
     return ControlCommand{ModulesControl{}};
   }
 
-  if (command != "module-restart" && command != "activate" && command != "dismiss") {
+  if (command != "module-restart" && command != "activate" && command != "activate-open" &&
+      command != "dismiss" && command != "action") {
     return fail(ControlErrorCode::unknown_command, "control command is unknown");
   }
   if (command == "module-restart") {
@@ -306,6 +311,37 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
       return std::unexpected(context_id.error());
     }
     return ControlCommand{DismissControl{std::move(*context_id)}};
+  }
+  if (command == "activate-open") {
+    if (!has_exact_fields(*parsed, {"command", "instance", "version"})) {
+      return fail(ControlErrorCode::invalid_request, "request has an unexpected property");
+    }
+    auto instance = required_nonempty_string(*parsed, "instance");
+    if (!instance) {
+      return std::unexpected(instance.error());
+    }
+    return ControlCommand{ActivateOpenControl{std::move(*instance)}};
+  }
+  if (command == "action") {
+    const bool has_value = parsed->contains("value");
+    if (!has_exact_fields(
+            *parsed, has_value ? std::set<std::string, std::less<>>{"action_id", "command",
+                                                                    "instance", "value", "version"}
+                               : std::set<std::string, std::less<>>{"action_id", "command",
+                                                                    "instance", "version"})) {
+      return fail(ControlErrorCode::invalid_request, "request has an unexpected property");
+    }
+    auto instance = required_nonempty_string(*parsed, "instance");
+    auto action_id = required_nonempty_string(*parsed, "action_id");
+    if (!instance) {
+      return std::unexpected(instance.error());
+    }
+    if (!action_id) {
+      return std::unexpected(action_id.error());
+    }
+    return ControlCommand{
+        ActionControl{std::move(*instance), std::move(*action_id),
+                      has_value ? std::optional{parsed->at("value")} : std::nullopt}};
   }
 
   const bool has_duration = parsed->contains("duration_ms");
@@ -358,9 +394,19 @@ std::string serialize_control_request(const ControlCommand &command) {
           if (typed.duration) {
             result["duration_ms"] = typed.duration->count();
           }
+        } else if constexpr (std::is_same_v<Type, ActivateOpenControl>) {
+          result["command"] = "activate-open";
+          result["instance"] = typed.instance_id;
         } else if constexpr (std::is_same_v<Type, DismissControl>) {
           result["command"] = "dismiss";
           result["context_id"] = typed.context_id;
+        } else if constexpr (std::is_same_v<Type, ActionControl>) {
+          result["command"] = "action";
+          result["instance"] = typed.instance_id;
+          result["action_id"] = typed.action_id;
+          if (typed.value) {
+            result["value"] = *typed.value;
+          }
         }
       },
       command);
@@ -531,6 +577,9 @@ parse_control_arguments(const std::vector<std::string> &arguments) {
   if (arguments.size() == 2 && arguments[0] == "activate" && !arguments[1].empty()) {
     return ControlInvocation{ActivateControl{arguments[1], std::nullopt}};
   }
+  if (arguments.size() == 2 && arguments[0] == "activate-open" && !arguments[1].empty()) {
+    return ControlInvocation{ActivateOpenControl{arguments[1]}};
+  }
   if (arguments.size() == 4 && arguments[0] == "activate" && !arguments[1].empty() &&
       arguments[2] == "--duration") {
     auto duration = parse_duration(arguments[3]);
@@ -541,6 +590,26 @@ parse_control_arguments(const std::vector<std::string> &arguments) {
   }
   if (arguments.size() == 2 && arguments[0] == "dismiss" && !arguments[1].empty()) {
     return ControlInvocation{DismissControl{arguments[1]}};
+  }
+  if ((arguments.size() == 3 || arguments.size() == 5) && arguments[0] == "action" &&
+      !arguments[1].empty() && !arguments[2].empty()) {
+    std::optional<Json> value;
+    if (arguments.size() == 5) {
+      if (arguments[3] != "--value" || arguments[4].size() > maximum_control_record_bytes) {
+        return std::unexpected("invalid gislandctl action value");
+      }
+      auto parsed = parse_json(arguments[4]);
+      if (!parsed) {
+        return std::unexpected("action value is not valid JSON");
+      }
+      value = std::move(*parsed);
+    }
+    ActionControl action{arguments[1], arguments[2], std::move(value)};
+    if (serialize_control_request(ControlCommand{action}).size() >
+        maximum_control_record_bytes + 1U) {
+      return std::unexpected("action request exceeds 64 KiB");
+    }
+    return ControlInvocation{std::move(action)};
   }
   return std::unexpected("invalid gislandctl arguments");
 }
@@ -567,6 +636,16 @@ std::string_view control_error_code_name(ControlErrorCode code) {
     return "restart_rejected";
   case ControlErrorCode::reload_rejected:
     return "reload_rejected";
+  case ControlErrorCode::unsupported_module_protocol:
+    return "unsupported_module_protocol";
+  case ControlErrorCode::action_rejected:
+    return "action_rejected";
+  case ControlErrorCode::action_delivery_failed:
+    return "action_delivery_failed";
+  case ControlErrorCode::action_timeout:
+    return "action_timeout";
+  case ControlErrorCode::action_cancelled:
+    return "action_cancelled";
   case ControlErrorCode::internal_error:
     return "internal_error";
   }

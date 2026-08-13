@@ -106,3 +106,16 @@ children = [
     { type = "text", value = { bind = "power_text" }, role = "body" }
   ] }
 ]
+
+[[modules]]
+id = "audio"
+module = "audio"
+enabled = true
+restart = "on-failure"
+protocol_min = "1.7"
+protocol_max = "1.7"
+
+[modules.options]
+step_percent = 5
+maximum_percent = 150
+hud_duration_ms = 1500

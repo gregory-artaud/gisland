@@ -80,3 +80,9 @@ TEST_CASE("control client formats stable JSON status results") {
   CHECK(output.at("mode") == "expanded");
   CHECK(output.at("modules").at(0).at("id") == "clock");
 }
+
+TEST_CASE("control client gives only action responses an extended read deadline") {
+  CHECK(gisland::control_read_timeout(gisland::OpenControl{}) == 2s);
+  CHECK(gisland::control_read_timeout(gisland::ActionControl{"audio", "volume-up", std::nullopt}) ==
+        3s);
+}

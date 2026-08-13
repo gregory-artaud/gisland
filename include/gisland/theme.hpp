@@ -43,6 +43,7 @@ struct ViewGeometry {
 struct ThemeViews {
   ViewGeometry compact;
   ViewGeometry expanded;
+  std::map<std::string, ViewGeometry, std::less<>> compact_styles;
 };
 
 using ThemeColor = std::variant<std::string, Rgba>;
@@ -56,6 +57,7 @@ struct ButtonStyle {
 struct ProgressStyle {
   double ring_diameter;
   double ring_thickness;
+  double linear_thickness;
   double compact_height;
   ThemeColor track;
   std::optional<double> ring_track_opacity;
@@ -78,12 +80,19 @@ enum class Easing { linear, ease_in, ease_out, ease_in_out };
 struct ReducedMotionStyle {
   std::chrono::milliseconds compact_to_expanded_ms;
   std::chrono::milliseconds context_change_ms;
+  std::chrono::milliseconds progress_duration;
+};
+
+struct ProgressAnimationStyle {
+  std::chrono::milliseconds duration;
+  Easing easing;
 };
 
 struct AnimationStyle {
   std::chrono::milliseconds compact_to_expanded_ms;
   std::chrono::milliseconds context_change_ms;
   Easing easing;
+  ProgressAnimationStyle progress;
   ReducedMotionStyle reduced_motion;
 };
 

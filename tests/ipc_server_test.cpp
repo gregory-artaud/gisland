@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -276,4 +277,126 @@ TEST_CASE("IPC server enforces accept budgets and request deadlines") {
     CHECK(::recv(client, nullptr, 0, 0) == 0);
     REQUIRE(::close(client) == 0);
   }
+}
+
+TEST_CASE("IPC server holds deferred requests while serving later clients") {
+  TemporaryDirectory directory;
+  auto server = gisland::IpcServer::create(directory.path());
+  REQUIRE(server.has_value());
+  const int pending_client = connect_client(server->socket_path());
+  const int immediate_client = connect_client(server->socket_path());
+  send_all(pending_client, R"({"version":1,"command":"open"})"
+                           "\n");
+  send_all(immediate_client, R"({"version":1,"command":"close"})"
+                             "\n");
+  REQUIRE(::shutdown(pending_client, SHUT_WR) == 0);
+  REQUIRE(::shutdown(immediate_client, SHUT_WR) == 0);
+
+  const gisland::PendingControlToken token{41};
+  const auto handler =
+      [token](const gisland::ControlCommand &command) -> gisland::ControlDispatchResult {
+    if (std::holds_alternative<gisland::OpenControl>(command)) {
+      return token;
+    }
+    return gisland::ControlResponse{};
+  };
+  server->advance(gisland::MonotonicTime{}, handler);
+  server->advance(gisland::MonotonicTime{}, handler);
+
+  CHECK(nlohmann::json::parse(receive_record(immediate_client)).at("ok") == true);
+  CHECK(server->pending_count() == 1);
+  CHECK(server->complete(token, gisland::ControlResponse{}, gisland::MonotonicTime{}));
+  CHECK_FALSE(server->complete(token, gisland::ControlResponse{}, gisland::MonotonicTime{}));
+  server->advance(gisland::MonotonicTime{}, handler);
+  CHECK(nlohmann::json::parse(receive_record(pending_client)).at("ok") == true);
+  REQUIRE(::close(immediate_client) == 0);
+  REQUIRE(::close(pending_client) == 0);
+}
+
+TEST_CASE("IPC server reports deferred ownership cancellation on disconnect and deadline") {
+  TemporaryDirectory directory;
+  auto server = gisland::IpcServer::create(directory.path());
+  REQUIRE(server.has_value());
+  std::vector<gisland::PendingControlToken> cancelled;
+  const auto handler = [](const gisland::ControlCommand &) -> gisland::ControlDispatchResult {
+    return gisland::PendingControlToken{73};
+  };
+  const auto on_cancel = [&cancelled](gisland::PendingControlToken token) {
+    cancelled.push_back(token);
+  };
+
+  const int disconnected = connect_client(server->socket_path());
+  send_all(disconnected, R"({"version":1,"command":"open"})"
+                         "\n");
+  REQUIRE(::shutdown(disconnected, SHUT_WR) == 0);
+  server->advance(gisland::MonotonicTime{}, handler, on_cancel);
+  server->advance(gisland::MonotonicTime{}, handler, on_cancel);
+  REQUIRE(::close(disconnected) == 0);
+  server->advance(gisland::MonotonicTime{}, handler, on_cancel);
+  REQUIRE(cancelled == std::vector{gisland::PendingControlToken{73}});
+
+  const int timed_out = connect_client(server->socket_path());
+  send_all(timed_out, R"({"version":1,"command":"open"})"
+                      "\n");
+  REQUIRE(::shutdown(timed_out, SHUT_WR) == 0);
+  server->advance(gisland::MonotonicTime{}, handler, on_cancel);
+  server->advance(gisland::MonotonicTime{}, handler, on_cancel);
+  server->advance(gisland::MonotonicTime{} + 3s, handler, on_cancel);
+  CHECK(cancelled ==
+        std::vector{gisland::PendingControlToken{73}, gisland::PendingControlToken{73}});
+  REQUIRE(::close(timed_out) == 0);
+}
+
+TEST_CASE("IPC server bounds deferred clients") {
+  TemporaryDirectory directory;
+  auto server = gisland::IpcServer::create(directory.path());
+  REQUIRE(server.has_value());
+  std::vector<int> clients;
+  for (std::size_t index = 0; index < gisland::IpcServer::maximum_pending_clients + 1U; ++index) {
+    clients.push_back(connect_client(server->socket_path()));
+    send_all(clients.back(), R"({"version":1,"command":"open"})"
+                             "\n");
+    REQUIRE(::shutdown(clients.back(), SHUT_WR) == 0);
+  }
+  std::uint64_t next_token = 1;
+  std::vector<gisland::PendingControlToken> cancelled;
+  const auto handler =
+      [&next_token](const gisland::ControlCommand &) -> gisland::ControlDispatchResult {
+    return gisland::PendingControlToken{next_token++};
+  };
+  for (int frame = 0; frame < 8; ++frame) {
+    server->advance(
+        gisland::MonotonicTime{}, handler,
+        [&cancelled](gisland::PendingControlToken token) { cancelled.push_back(token); });
+  }
+  CHECK(server->pending_count() == gisland::IpcServer::maximum_pending_clients);
+  REQUIRE(cancelled.size() == 1);
+  CHECK(cancelled.front().value == gisland::IpcServer::maximum_pending_clients + 1U);
+  for (const int client : clients) {
+    static_cast<void>(::close(client));
+  }
+}
+
+TEST_CASE("IPC server bounds deferred responses and expires blocked writes") {
+  TemporaryDirectory directory;
+  auto server = gisland::IpcServer::create(directory.path());
+  REQUIRE(server.has_value());
+  const int client = connect_client(server->socket_path());
+  send_all(client, R"({"version":1,"command":"open"})"
+                   "\n");
+  REQUIRE(::shutdown(client, SHUT_WR) == 0);
+  const gisland::PendingControlToken token{91};
+  const auto handler = [token](const gisland::ControlCommand &) -> gisland::ControlDispatchResult {
+    return token;
+  };
+  server->advance(gisland::MonotonicTime{}, handler);
+  server->advance(gisland::MonotonicTime{}, handler);
+  REQUIRE(server->complete(
+      token,
+      gisland::ControlResponse{gisland::ControlError{gisland::ControlErrorCode::internal_error,
+                                                     std::string(70U * 1024U, 'x')}},
+      gisland::MonotonicTime{}));
+  server->advance(gisland::MonotonicTime{} + 2s, handler);
+  CHECK(server->client_count() == 0);
+  REQUIRE(::close(client) == 0);
 }

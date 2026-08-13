@@ -472,6 +472,12 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
     return read_text(config.application_log()).find("[clock] action 'first' accepted") !=
            std::string::npos;
   }));
+  const auto action =
+      gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                    gisland::ActionControl{"clock", "cli", std::nullopt});
+  REQUIRE(action.has_value());
+  CHECK(std::holds_alternative<gisland::EmptyControlResult>(action->value()));
+  REQUIRE(wait_until([&] { return read_text(config.action_log()) == "first\ncli\n"; }));
   std::this_thread::sleep_for(std::chrono::milliseconds{20});
 
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);

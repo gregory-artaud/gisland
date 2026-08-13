@@ -92,9 +92,16 @@ compact_to_expanded_ms = 350
 context_change_ms = 250
 easing = "ease-in-out"
 
+[animation.progress]
+duration_ms = 270
+easing = "ease-out"
+
 [animation.reduced_motion]
 compact_to_expanded_ms = 0
 context_change_ms = 0
+
+[animation.reduced_motion.progress]
+duration_ms = 0
 
 [icons.calendar]
 font = "symbols"
@@ -302,8 +309,8 @@ TEST_CASE_METHOD(HiddenWindow, "painter keeps surface and ordered content operat
                                 gisland::Rgba{240, 160, 32, 255}, "Calendar"},
        gisland::ProgressDrawCommand{gisland::Rect{4, 36, 40, 8}, gisland::Rect{14, 36, 30, 8},
                                     gisland::Rect{4, 36, 40, 8}, gisland::Rect{4, 36, 20, 8},
-                                    gisland::Rgba{64, 80, 96, 255},
-                                    gisland::Rgba{224, 48, 48, 255}},
+                                    gisland::Rgba{64, 80, 96, 255}, gisland::Rgba{224, 48, 48, 255},
+                                    "/progress", 0.5, std::nullopt},
        gisland::ButtonDecorationDrawCommand{gisland::Rect{50, 32, 30, 16},
                                             gisland::Rect{50, 32, 30, 16},
                                             gisland::Rgba{224, 48, 48, 255}, true},
@@ -377,15 +384,16 @@ TEST_CASE_METHOD(HiddenWindow, "painter renders ring progress clockwise over its
   auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
   REQUIRE(fonts.has_value());
   const gisland::RaylibPainter painter{*fonts};
-  const gisland::LayoutPlan plan{
-      {},
-      {gisland::RingProgressDrawCommand{{16, 16, 32, 32},
-                                        {16, 16, 32, 32},
-                                        0.25,
-                                        4,
-                                        gisland::Rgba{64, 80, 96, 255},
-                                        gisland::Rgba{32, 192, 96, 255}}},
-      {}};
+  const gisland::LayoutPlan plan{{},
+                                 {gisland::RingProgressDrawCommand{{16, 16, 32, 32},
+                                                                   {16, 16, 32, 32},
+                                                                   0.25,
+                                                                   4,
+                                                                   gisland::Rgba{64, 80, 96, 255},
+                                                                   gisland::Rgba{32, 192, 96, 255},
+                                                                   "/progress",
+                                                                   std::nullopt}},
+                                 {}};
 
   Image rendered = render_image([&] { REQUIRE(painter.draw_content(plan).has_value()); });
 

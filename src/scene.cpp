@@ -78,7 +78,10 @@ private:
     if (auto result = validate_identifier(icon.name, path + "/name"); !result) {
       return result;
     }
-    return validate_text(icon.accessible_label, path + "/accessible_label");
+    if (auto result = validate_text(icon.accessible_label, path + "/accessible_label"); !result) {
+      return result;
+    }
+    return validate_identifier(icon.role, path + "/role");
   }
 
   [[nodiscard]] static SceneValidation validate_primitive(const Image &image, std::size_t /*depth*/,
@@ -127,6 +130,12 @@ private:
   validate_primitive(const Progress &progress, std::size_t /*depth*/, const std::string &path) {
     if (!std::isfinite(progress.value) || progress.value < 0.0 || progress.value > 1.0) {
       return std::unexpected(SceneError{SceneErrorCode::invalid_progress, path + "/value"});
+    }
+    if (progress.transition_from &&
+        (!std::isfinite(*progress.transition_from) || *progress.transition_from < 0.0 ||
+         *progress.transition_from > 1.0)) {
+      return std::unexpected(
+          SceneError{SceneErrorCode::invalid_progress, path + "/transition_from"});
     }
     if (auto result = validate_text(progress.label, path + "/label"); !result) {
       return result;

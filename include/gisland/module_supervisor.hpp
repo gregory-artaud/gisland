@@ -37,12 +37,14 @@ struct ProcessStartedEvent {
   pid_t pid;
   pid_t process_group;
   MonotonicTime at;
+  std::uint64_t generation{0};
 };
 
 struct ModuleMessageEvent {
   std::string instance_id;
   ModuleMessage message;
   MonotonicTime at;
+  std::uint64_t generation{0};
 };
 
 struct StderrLogEvent {
@@ -64,6 +66,7 @@ struct ProtocolViolationEvent {
 struct ContextsRemovedEvent {
   std::string instance_id;
   MonotonicTime at;
+  std::uint64_t generation{0};
 };
 
 struct ProcessExitedEvent {
@@ -71,6 +74,24 @@ struct ProcessExitedEvent {
   pid_t pid;
   ExitStatus status;
   StopCause cause;
+  MonotonicTime at;
+  std::uint64_t generation{0};
+};
+
+enum class ActionDeliveryError {
+  unknown_instance,
+  generation_mismatch,
+  unavailable,
+  queue_saturated,
+  serialization_failed,
+};
+
+struct ActionDeliveryEvent {
+  std::string instance_id;
+  std::uint64_t generation;
+  std::uint64_t invocation_id;
+  bool succeeded;
+  std::optional<ActionDeliveryError> error;
   MonotonicTime at;
 };
 
@@ -91,7 +112,7 @@ struct RestartCompletedEvent {
 using SupervisorEvent =
     std::variant<StateChangedEvent, ProcessStartedEvent, ModuleMessageEvent, StderrLogEvent,
                  ProtocolViolationEvent, ContextsRemovedEvent, ProcessExitedEvent,
-                 SupervisorErrorEvent, RestartCompletedEvent>;
+                 SupervisorErrorEvent, RestartCompletedEvent, ActionDeliveryEvent>;
 
 enum class SupervisorCommandError { invalid_request, queue_full, shutting_down };
 
@@ -112,6 +133,8 @@ public:
                                                                     std::uint64_t generation);
   [[nodiscard]] std::expected<void, SupervisorCommandError> send(std::string instance_id,
                                                                  CoreMessage message);
+  [[nodiscard]] std::expected<void, SupervisorCommandError>
+  send_action(std::string instance_id, std::uint64_t generation, ActionMessage message);
   [[nodiscard]] std::expected<void, SupervisorCommandError>
   reconfigure(SupervisorReconfiguration reconfiguration);
 

@@ -82,6 +82,20 @@ size = 14
 weight = 400
 line_height = 1.45
 
+[typography.hud-mute-icon]
+font = "icons"
+color = "foreground"
+size = 24
+weight = 600
+line_height = 1.0
+
+[typography.hud-volume-icon]
+font = "icons"
+color = "foreground"
+size = 18
+weight = 600
+line_height = 1.0
+
 [images.notification-icon]
 width = 24
 height = 24
@@ -129,6 +143,26 @@ max_width = 340
 min_height = 32
 max_height = 32
 
+[view.compact.styles.hud-symbol]
+padding_horizontal = 0
+padding_vertical = 0
+radius = 19
+border = 0
+min_width = 56
+max_width = 56
+min_height = 52
+max_height = 52
+
+[view.compact.styles.hud-meter]
+padding_horizontal = 12
+padding_vertical = 0
+radius = 18
+border = 0
+min_width = 220
+max_width = 220
+min_height = 36
+max_height = 36
+
 [view.expanded]
 padding = 24
 radius = 30
@@ -141,6 +175,7 @@ max_height = 344
 [progress]
 ring_diameter = 32
 ring_thickness = 4
+linear_thickness = 5
 compact_height = 48
 track = "muted"
 ring_track_opacity = 0.25
@@ -157,9 +192,16 @@ compact_to_expanded_ms = 350
 context_change_ms = 250
 easing = "ease-in-out"
 
+[animation.progress]
+duration_ms = 270
+easing = "ease-out"
+
 [animation.reduced_motion]
 compact_to_expanded_ms = 0
 context_change_ms = 0
+
+[animation.reduced_motion.progress]
+duration_ms = 0
 
 [icons.calendar]
 font = "icons"
@@ -176,3 +218,15 @@ codepoint = 0xF054
 [icons.close]
 font = "icons"
 codepoint = 0xF00D
+
+[icons.volume-muted]
+font = "icons"
+codepoint = 0xF6A9
+
+[icons.volume-high]
+font = "icons"
+codepoint = 0xF028
+
+[icons.volume-low]
+font = "icons"
+codepoint = 0xF027

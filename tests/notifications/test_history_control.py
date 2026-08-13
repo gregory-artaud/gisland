@@ -63,6 +63,10 @@ class HistoryControlTests(unittest.TestCase):
         )
 
         self.assertEqual(count, 2)
+        self.assertEqual(calls[0], ["/usr/bin/gislandctl", "status", "--json"])
+        self.assertEqual(
+            calls[1], ["/usr/bin/gislandctl", "activate-open", "notifications"]
+        )
         self.assertEqual(calls[-1], ["/usr/bin/gislandctl", "open"])
         self.assertEqual(confirmations, [True])
 
@@ -92,15 +96,42 @@ class HistoryControlTests(unittest.TestCase):
             )
 
     def test_reports_status_and_open_failures(self):
+        with self.assertRaisesRegex(RuntimeError, "activate failed"):
+            calls = 0
+
+            def unavailable(arguments):
+                nonlocal calls
+                calls += 1
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0 if calls == 1 else 1,
+                    '{"format_version":2,"expanded":null}' if calls == 1 else "",
+                    "unavailable",
+                )
+
+            open_history(
+                "gislandctl",
+                show_more=lambda: 1,
+                confirm_visible=lambda: None,
+                run=unavailable,
+            )
+
         with self.assertRaisesRegex(RuntimeError, "status failed"):
             open_history(
                 "gislandctl",
                 show_more=lambda: 1,
                 confirm_visible=lambda: None,
-                run=lambda arguments: subprocess.CompletedProcess(arguments, 1, "", "offline"),
+                run=lambda arguments: subprocess.CompletedProcess(
+                    arguments,
+                    1,
+                    "",
+                    "offline",
+                ),
             )
 
         def run(arguments):
+            if arguments[-2:] == ["activate-open", "notifications"]:
+                return subprocess.CompletedProcess(arguments, 0, "", "")
             if arguments[-2:] == ["status", "--json"]:
                 status = {
                     "format_version": 2,

@@ -76,6 +76,38 @@ TEST_CASE("protocol 1.4 parses independent views and presentation intent") {
   CHECK(publish->presentation->duration == std::chrono::milliseconds{1000});
 }
 
+TEST_CASE("protocol 1.7 parses compact HUD style icon role and progress source") {
+  constexpr auto line = R"({
+    "type":"publish","context_id":"audio-volume","priority":80,"expires_in_ms":1500,
+    "views":{"compact":{"type":"row","children":[
+      {"type":"icon","name":"volume-low","accessible_label":"Volume","role":"hud-icon"},
+      {"type":"progress","value":0.5,"transition_from":0.4,"state":"accent"}
+    ]}},
+    "presentation":{"compact_style":"hud-meter"}
+  })";
+
+  const auto result = gisland::parse_module_message(line);
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  REQUIRE(publish->presentation.has_value());
+  CHECK(publish->presentation->compact_style == "hud-meter");
+  CHECK_FALSE(publish->presentation->reveal.has_value());
+  REQUIRE(publish->compact.has_value());
+  const auto &row = std::get<gisland::Row>(publish->compact->value);
+  CHECK(std::get<gisland::Icon>(row.children[0]->value).role == "hud-icon");
+  CHECK(std::get<gisland::Progress>(row.children[1]->value).transition_from == 0.4);
+}
+
+TEST_CASE("protocol 1.7 rejects invalid progress transition source") {
+  const auto result = gisland::parse_module_message(
+      R"({"type":"publish","context_id":"audio","priority":80,"views":{"compact":{"type":"progress","value":0.5,"transition_from":1.1}}})");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "/views/compact/transition_from");
+}
+
 TEST_CASE("protocol 1.4 requires at least one independent view") {
   const auto result = gisland::parse_module_message(
       R"({"type":"publish","context_id":"empty","priority":0,"views":{}})");
@@ -295,6 +327,15 @@ TEST_CASE("ready dismiss action-result and log lines are parsed into typed messa
   CHECK(typed_action_result->action_id == "calendar.today");
   CHECK_FALSE(typed_action_result->accepted);
   CHECK(typed_action_result->message == "not available");
+  CHECK_FALSE(typed_action_result->invocation_id.has_value());
+
+  const auto correlated_action_result = gisland::parse_module_message(
+      R"({"type":"action_result","action_id":"audio.volume-up","invocation_id":"18446744073709551615","accepted":true})");
+  REQUIRE(correlated_action_result.has_value());
+  const auto *typed_correlated =
+      std::get_if<gisland::ActionResultMessage>(&*correlated_action_result);
+  REQUIRE(typed_correlated != nullptr);
+  CHECK(typed_correlated->invocation_id == 18446744073709551615ULL);
 
   const auto log =
       gisland::parse_module_message(R"({"type":"log","level":"warning","message":"late update"})");
@@ -415,6 +456,17 @@ TEST_CASE("protocol errors identify the failing JSON path") {
         gisland::parse_module_message(R"({"type":"action_result","action_id":"","accepted":true})");
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().path == "/action_id");
+  }
+
+  SECTION("invalid action result invocation identifier") {
+    for (const std::string_view invocation_id : {"", "-1", "12x", "18446744073709551616"}) {
+      const auto result = gisland::parse_module_message(
+          std::string{
+              R"({"type":"action_result","action_id":"audio.volume-up","accepted":true,"invocation_id":")"} +
+          std::string{invocation_id} + R"("})");
+      REQUIRE_FALSE(result.has_value());
+      CHECK(result.error().path == "/invocation_id");
+    }
   }
 
   SECTION("unknown log level") {

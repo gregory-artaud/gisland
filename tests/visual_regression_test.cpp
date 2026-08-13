@@ -1,3 +1,4 @@
+#include "gisland/island.hpp"
 #include "gisland/layout.hpp"
 #include "gisland/raylib_renderer.hpp"
 #include "gisland/scene.hpp"
@@ -9,12 +10,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -240,14 +243,30 @@ public:
                                           "body", "end"}};
 }
 
+[[nodiscard]] gisland::SceneNode audio_symbol(std::string name, std::string label,
+                                              std::string role = "hud-mute-icon") {
+  return gisland::SceneNode{gisland::Icon{std::move(name), std::move(label), std::move(role)}};
+}
+
+[[nodiscard]] gisland::SceneNode audio_volume() {
+  return gisland::SceneNode{
+      gisland::Row{{audio_symbol("volume-high", "Volume 120 percent", "hud-volume-icon"),
+                    gisland::SceneNode{gisland::Progress{
+                        0.8, {}, "foreground", gisland::ProgressShape::linear, 0.2}}},
+                   "center",
+                   "small"}};
+}
+
 [[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode,
-                                   const std::vector<gisland::ImageResource> &resources = {}) {
+                                   const std::vector<gisland::ImageResource> &resources = {},
+                                   std::string_view compact_style = {},
+                                   std::optional<float> progress_elapsed = std::nullopt) {
   const auto theme = load_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
   REQUIRE(fonts.has_value());
   auto pango = gisland::PangoTextBook::load(theme, asset_root());
   REQUIRE(pango.has_value());
-  const auto plan = gisland::layout_scene(scene, theme, mode, *fonts, *pango);
+  const auto plan = gisland::layout_scene(scene, theme, mode, *fonts, *pango, compact_style);
   REQUIRE(plan.has_value());
   REQUIRE(plan->view.bounds.width <= image_width);
   REQUIRE(plan->view.bounds.height <= image_height);
@@ -258,15 +277,23 @@ public:
   REQUIRE(rich_textures.has_value());
   REQUIRE(rich_textures->prepare(*plan).has_value());
 
-  const gisland::RenderOrigin origin{(image_width - plan->view.bounds.width) / 2,
-                                     (image_height - plan->view.bounds.height) / 2};
+  gisland::LayoutPlan rendered_plan = *plan;
+  if (progress_elapsed) {
+    gisland::ProgressAnimator animator;
+    animator.retarget(rendered_plan, std::chrono::milliseconds{270}, gisland::Easing::ease_out,
+                      false);
+    animator.update(*progress_elapsed);
+    rendered_plan = animator.apply(rendered_plan);
+  }
+  const gisland::RenderOrigin origin{(image_width - rendered_plan.view.bounds.width) / 2,
+                                     (image_height - rendered_plan.view.bounds.height) / 2};
   const gisland::RaylibPainter painter{*fonts, *images, *rich_textures};
   RenderTexture2D target = LoadRenderTexture(image_width, image_height);
   REQUIRE(IsRenderTextureValid(target));
   BeginTextureMode(target);
   ClearBackground(BLANK);
-  REQUIRE(painter.draw_surface(*plan, origin).has_value());
-  REQUIRE(painter.draw_content(*plan, origin).has_value());
+  REQUIRE(painter.draw_surface(rendered_plan, origin).has_value());
+  REQUIRE(painter.draw_content(rendered_plan, origin).has_value());
   EndTextureMode();
   Image image = LoadImageFromTexture(target.texture);
   UnloadRenderTexture(target);
@@ -303,8 +330,10 @@ void export_failure_artifacts(std::string_view name, const Image &actual, const 
 }
 
 void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisland::ViewMode mode,
-                   const std::vector<gisland::ImageResource> &resources = {}) {
-  Image actual = render_fixture(scene, mode, resources);
+                   const std::vector<gisland::ImageResource> &resources = {},
+                   std::string_view compact_style = {},
+                   std::optional<float> progress_elapsed = std::nullopt) {
+  Image actual = render_fixture(scene, mode, resources, compact_style, progress_elapsed);
   const auto baseline = baseline_root() / (std::string{name} + ".png");
   const char *update = std::getenv("GISLAND_UPDATE_BASELINES");
   const char *approved_update = std::getenv("GISLAND_BASELINE_UPDATE_TARGET");
@@ -446,4 +475,23 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: expanded July 2026 calendar")
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: constrained UTF-8 truncation") {
   check_fixture("utf8-truncation", constrained_utf8(), gisland::ViewMode::compact);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: audio mute HUD") {
+  check_fixture("audio-muted", audio_symbol("volume-muted", "Muted"), gisland::ViewMode::compact,
+                {}, "hud-symbol");
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: audio unmute HUD") {
+  check_fixture("audio-unmuted", audio_symbol("volume-high", "Unmuted"), gisland::ViewMode::compact,
+                {}, "hud-symbol");
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: audio volume animation") {
+  check_fixture("audio-volume-source", audio_volume(), gisland::ViewMode::compact, {}, "hud-meter",
+                0.0F);
+  check_fixture("audio-volume-intermediate", audio_volume(), gisland::ViewMode::compact, {},
+                "hud-meter", 0.135F);
+  check_fixture("audio-volume-settled", audio_volume(), gisland::ViewMode::compact, {}, "hud-meter",
+                0.27F);
 }

@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <string>
@@ -34,6 +35,7 @@ struct InitMessage {
 struct ActionMessage {
   std::string action_id;
   std::optional<nlohmann::json> value;
+  std::optional<std::uint64_t> invocation_id{};
 };
 
 enum class Visibility { hidden, compact_active, expanded_active };
@@ -78,6 +80,7 @@ struct ActionResultMessage {
   std::string action_id;
   bool accepted;
   std::optional<std::string> message;
+  std::optional<std::uint64_t> invocation_id{};
 };
 
 enum class LogLevel { debug, info, warning, error };

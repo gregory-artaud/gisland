@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -22,6 +23,7 @@ struct Text {
 struct Icon {
   std::string name;
   std::string accessible_label;
+  std::string role{"body"};
 };
 
 struct Image {
@@ -83,10 +85,17 @@ struct Spacer {
 enum class ProgressShape { linear, ring };
 
 struct Progress {
-  double value{};
+  Progress(double initial_value, std::string initial_label, std::string initial_state,
+           ProgressShape initial_shape = ProgressShape::linear,
+           std::optional<double> initial_transition_from = std::nullopt)
+      : value(initial_value), label(std::move(initial_label)), state(std::move(initial_state)),
+        shape(initial_shape), transition_from(initial_transition_from) {}
+
+  double value;
   std::string label;
   std::string state;
   ProgressShape shape{ProgressShape::linear};
+  std::optional<double> transition_from;
 };
 
 struct Indicator {

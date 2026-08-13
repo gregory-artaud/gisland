@@ -68,6 +68,11 @@ wait_for(int descriptor, short events, std::chrono::steady_clock::time_point dea
 
 } // namespace
 
+std::chrono::milliseconds control_read_timeout(const ControlCommand &command) {
+  return std::holds_alternative<ActionControl>(command) ? std::chrono::seconds{3}
+                                                        : std::chrono::seconds{2};
+}
+
 std::expected<ControlResponse, ControlClientError>
 send_control_command(std::string_view socket_path, const ControlCommand &command,
                      std::chrono::milliseconds phase_timeout) {
@@ -132,7 +137,9 @@ send_control_command(std::string_view socket_path, const ControlCommand &command
   }
 
   std::string record;
-  const auto read_deadline = std::chrono::steady_clock::now() + phase_timeout;
+  const auto read_timeout =
+      phase_timeout == std::chrono::seconds{2} ? control_read_timeout(command) : phase_timeout;
+  const auto read_deadline = std::chrono::steady_clock::now() + read_timeout;
   while (true) {
     char buffer[4096];
     const ssize_t received = ::recv(descriptor, buffer, sizeof(buffer), 0);

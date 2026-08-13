@@ -63,6 +63,11 @@ struct RuntimeModuleStatus {
   bool operator==(const RuntimeModuleStatus &) const = default;
 };
 
+struct RuntimeActionTarget {
+  std::uint64_t generation;
+  ProtocolVersion protocol;
+};
+
 struct PreparedRuntimeReload {
   ContextArbiter arbiter;
   std::vector<std::pair<std::string, bool>> configured_instances;
@@ -95,6 +100,8 @@ public:
   [[nodiscard]] std::expected<ContextKey, RuntimeError>
   dismiss_active(std::string_view context_id, ViewSlot slot, MonotonicTime now);
   [[nodiscard]] std::vector<RuntimeModuleStatus> module_statuses(MonotonicTime now);
+  [[nodiscard]] std::expected<RuntimeActionTarget, RuntimeError>
+  action_target(std::string_view instance_id) const;
   [[nodiscard]] std::expected<PreparedRuntimeReload, RuntimeError>
   prepare_reload(const ReloadPlan &plan) const;
   void commit_reload(PreparedRuntimeReload prepared) noexcept;
@@ -113,6 +120,8 @@ private:
   std::map<std::string, ModuleViewState> views_;
   std::vector<std::string> enabled_instances_;
   std::set<std::string> ready_instances_;
+  std::map<std::string, std::uint64_t> process_generations_;
+  std::map<std::string, ProtocolVersion> negotiated_protocols_;
   std::map<std::string, Visibility> visibility_;
   std::map<ContextKey, std::optional<PublishedContext>> pending_replacements_;
   std::uint64_t revision_{};

@@ -298,16 +298,23 @@ parse_pixel_tokens(const toml::table &root, std::string_view table_name,
 }
 
 [[nodiscard]] std::expected<ViewGeometry, ThemeError>
-parse_geometry(const toml::table &view, std::string_view name, std::string_view source_name) {
-  const std::string path = "view." + std::string{name};
+parse_geometry(const toml::table &view, std::string_view name, std::string_view source_name,
+               std::string_view path_prefix = "view", bool allow_styles = false) {
+  const std::string path = std::string{path_prefix} + "." + std::string{name};
   auto table = required_table(view, name, path, source_name);
   if (!table) {
     return std::unexpected(table.error());
   }
-  auto keys = reject_unknown(**table,
-                             {"padding", "padding_horizontal", "padding_vertical", "radius",
-                              "border", "min_width", "max_width", "min_height", "max_height"},
-                             path, source_name);
+  auto keys =
+      allow_styles
+          ? reject_unknown(**table,
+                           {"padding", "padding_horizontal", "padding_vertical", "radius", "border",
+                            "min_width", "max_width", "min_height", "max_height", "styles"},
+                           path, source_name)
+          : reject_unknown(**table,
+                           {"padding", "padding_horizontal", "padding_vertical", "radius", "border",
+                            "min_width", "max_width", "min_height", "max_height"},
+                           path, source_name);
   if (!keys) {
     return std::unexpected(keys.error());
   }
@@ -408,7 +415,7 @@ parse_geometry(const toml::table &view, std::string_view name, std::string_view 
   if (!keys) {
     return std::unexpected(keys.error());
   }
-  auto compact = parse_geometry(**view, "compact", source_name);
+  auto compact = parse_geometry(**view, "compact", source_name, "view", true);
   auto expanded = parse_geometry(**view, "expanded", source_name);
   if (!compact) {
     return std::unexpected(compact.error());
@@ -416,7 +423,28 @@ parse_geometry(const toml::table &view, std::string_view name, std::string_view 
   if (!expanded) {
     return std::unexpected(expanded.error());
   }
-  return ThemeViews{*compact, *expanded};
+  std::map<std::string, ViewGeometry, std::less<>> compact_styles;
+  const auto *compact_table = (*view)->get_as<toml::table>("compact");
+  const auto *styles_node = compact_table == nullptr ? nullptr : compact_table->get("styles");
+  if (styles_node != nullptr) {
+    const auto *styles = styles_node->as_table();
+    if (styles == nullptr) {
+      return std::unexpected(
+          error_at(source_name, "view.compact.styles", "expected a table", styles_node));
+    }
+    for (const auto &[name, node] : *styles) {
+      if (name.str().empty() || name.str().size() > 128U) {
+        return std::unexpected(error_at(source_name, "view.compact.styles",
+                                        "style name must contain 1 through 128 bytes", &node));
+      }
+      auto geometry = parse_geometry(*styles, name.str(), source_name, "view.compact.styles");
+      if (!geometry) {
+        return std::unexpected(geometry.error());
+      }
+      compact_styles.emplace(name.str(), *geometry);
+    }
+  }
+  return ThemeViews{*compact, *expanded, std::move(compact_styles)};
 }
 
 [[nodiscard]] std::expected<ThemeColor, ThemeError>
@@ -480,15 +508,16 @@ parse_theme_color(const toml::node *node, const std::string &path, std::string_v
 parse_progress(const toml::table &root, std::string_view source_name) {
   const auto *node = root.get("progress");
   if (node == nullptr) {
-    return ProgressStyle{32.0, 4.0, 48.0, std::string{"muted"}, 0.25};
+    return ProgressStyle{32.0, 4.0, 10.0, 48.0, std::string{"muted"}, 0.25};
   }
   const auto *table = node->as_table();
   if (table == nullptr) {
     return std::unexpected(error_at(source_name, "progress", "expected a table", node));
   }
-  auto keys = reject_unknown(
-      *table, {"ring_diameter", "ring_thickness", "compact_height", "track", "ring_track_opacity"},
-      "progress", source_name);
+  auto keys = reject_unknown(*table,
+                             {"ring_diameter", "ring_thickness", "linear_thickness",
+                              "compact_height", "track", "ring_track_opacity"},
+                             "progress", source_name);
   if (!keys) {
     return std::unexpected(keys.error());
   }
@@ -496,6 +525,11 @@ parse_progress(const toml::table &root, std::string_view source_name) {
                                1.0, maximum_pixels);
   auto thickness = number_value(table->get("ring_thickness"), "progress.ring_thickness",
                                 source_name, 1.0, maximum_pixels);
+  auto linear_thickness =
+      table->get("linear_thickness") == nullptr
+          ? std::expected<double, ThemeError>{10.0}
+          : number_value(table->get("linear_thickness"), "progress.linear_thickness", source_name,
+                         1.0, maximum_pixels);
   auto compact_height = number_value(table->get("compact_height"), "progress.compact_height",
                                      source_name, 1.0, maximum_pixels);
   auto track = parse_theme_color(table->get("track"), "progress.track", source_name);
@@ -514,6 +548,9 @@ parse_progress(const toml::table &root, std::string_view source_name) {
   if (!thickness) {
     return std::unexpected(thickness.error());
   }
+  if (!linear_thickness) {
+    return std::unexpected(linear_thickness.error());
+  }
   if (!compact_height) {
     return std::unexpected(compact_height.error());
   }
@@ -530,8 +567,8 @@ parse_progress(const toml::table &root, std::string_view source_name) {
                                     "compact height must contain the ring diameter",
                                     table->get("compact_height")));
   }
-  return ProgressStyle{*diameter, *thickness, *compact_height, std::move(*track),
-                       ring_track_opacity};
+  return ProgressStyle{*diameter,       *thickness,        *linear_thickness,
+                       *compact_height, std::move(*track), ring_track_opacity};
 }
 
 [[nodiscard]] std::expected<IndicatorStyle, ThemeError>
@@ -612,9 +649,8 @@ parse_duration(const toml::table &table, std::string_view key, const std::string
   return std::chrono::milliseconds{*value};
 }
 
-[[nodiscard]] std::expected<Easing, ThemeError> parse_easing(const toml::table &table,
-                                                             std::string_view source_name) {
-  constexpr std::string_view path = "animation.easing";
+[[nodiscard]] std::expected<Easing, ThemeError>
+parse_easing(const toml::table &table, std::string_view path, std::string_view source_name) {
   const auto *node = table.get("easing");
   if (node == nullptr) {
     return std::unexpected(error_at(source_name, std::string{path}, "missing required easing"));
@@ -646,31 +682,75 @@ parse_animation(const toml::table &root, std::string_view source_name) {
     return std::unexpected(table.error());
   }
   auto keys = reject_unknown(
-      **table, {"compact_to_expanded_ms", "context_change_ms", "easing", "reduced_motion"},
+      **table,
+      {"compact_to_expanded_ms", "context_change_ms", "easing", "progress", "reduced_motion"},
       "animation", source_name);
   if (!keys) {
     return std::unexpected(keys.error());
+  }
+  const bool has_progress = (*table)->contains("progress");
+  std::expected<const toml::table *, ThemeError> progress = nullptr;
+  if (has_progress) {
+    progress = required_table(**table, "progress", "animation.progress", source_name);
+    if (!progress) {
+      return std::unexpected(progress.error());
+    }
+    auto progress_keys =
+        reject_unknown(**progress, {"duration_ms", "easing"}, "animation.progress", source_name);
+    if (!progress_keys) {
+      return std::unexpected(progress_keys.error());
+    }
   }
   auto reduced = required_table(**table, "reduced_motion", "animation.reduced_motion", source_name);
   if (!reduced) {
     return std::unexpected(reduced.error());
   }
-  auto reduced_keys = reject_unknown(**reduced, {"compact_to_expanded_ms", "context_change_ms"},
-                                     "animation.reduced_motion", source_name);
+  auto reduced_keys =
+      reject_unknown(**reduced, {"compact_to_expanded_ms", "context_change_ms", "progress"},
+                     "animation.reduced_motion", source_name);
   if (!reduced_keys) {
     return std::unexpected(reduced_keys.error());
+  }
+  const bool has_reduced_progress = (*reduced)->contains("progress");
+  std::expected<const toml::table *, ThemeError> reduced_progress = nullptr;
+  if (has_reduced_progress) {
+    reduced_progress =
+        required_table(**reduced, "progress", "animation.reduced_motion.progress", source_name);
+    if (!reduced_progress) {
+      return std::unexpected(reduced_progress.error());
+    }
+    auto reduced_progress_keys = reject_unknown(**reduced_progress, {"duration_ms"},
+                                                "animation.reduced_motion.progress", source_name);
+    if (!reduced_progress_keys) {
+      return std::unexpected(reduced_progress_keys.error());
+    }
   }
 
   auto compact = parse_duration(**table, "compact_to_expanded_ms",
                                 "animation.compact_to_expanded_ms", source_name);
   auto context =
       parse_duration(**table, "context_change_ms", "animation.context_change_ms", source_name);
-  auto easing = parse_easing(**table, source_name);
+  auto easing = parse_easing(**table, "animation.easing", source_name);
+  std::expected<std::chrono::milliseconds, ThemeError> progress_duration =
+      std::chrono::milliseconds{270};
+  std::expected<Easing, ThemeError> progress_easing = Easing::ease_out;
+  if (has_progress) {
+    progress_duration =
+        parse_duration(**progress, "duration_ms", "animation.progress.duration_ms", source_name);
+    progress_easing = parse_easing(**progress, "animation.progress.easing", source_name);
+  }
   auto reduced_compact =
       parse_duration(**reduced, "compact_to_expanded_ms",
                      "animation.reduced_motion.compact_to_expanded_ms", source_name);
   auto reduced_context = parse_duration(**reduced, "context_change_ms",
                                         "animation.reduced_motion.context_change_ms", source_name);
+  std::expected<std::chrono::milliseconds, ThemeError> reduced_progress_duration =
+      std::chrono::milliseconds{0};
+  if (has_reduced_progress) {
+    reduced_progress_duration =
+        parse_duration(**reduced_progress, "duration_ms",
+                       "animation.reduced_motion.progress.duration_ms", source_name);
+  }
   if (!compact) {
     return std::unexpected(compact.error());
   }
@@ -680,13 +760,26 @@ parse_animation(const toml::table &root, std::string_view source_name) {
   if (!easing) {
     return std::unexpected(easing.error());
   }
+  if (!progress_duration) {
+    return std::unexpected(progress_duration.error());
+  }
+  if (!progress_easing) {
+    return std::unexpected(progress_easing.error());
+  }
   if (!reduced_compact) {
     return std::unexpected(reduced_compact.error());
   }
   if (!reduced_context) {
     return std::unexpected(reduced_context.error());
   }
-  return AnimationStyle{*compact, *context, *easing, {*reduced_compact, *reduced_context}};
+  if (!reduced_progress_duration) {
+    return std::unexpected(reduced_progress_duration.error());
+  }
+  return AnimationStyle{*compact,
+                        *context,
+                        *easing,
+                        {*progress_duration, *progress_easing},
+                        {*reduced_compact, *reduced_context, *reduced_progress_duration}};
 }
 
 [[nodiscard]] bool valid_codepoint(std::int64_t value) {

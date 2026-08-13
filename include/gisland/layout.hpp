@@ -123,6 +123,9 @@ struct ProgressDrawCommand {
   Rect fill;
   Rgba track_color;
   Rgba fill_color;
+  std::string path;
+  double value;
+  std::optional<double> transition_from;
 };
 
 struct RingProgressDrawCommand {
@@ -132,6 +135,8 @@ struct RingProgressDrawCommand {
   int thickness;
   Rgba track_color;
   Rgba fill_color;
+  std::string path;
+  std::optional<double> transition_from;
 };
 
 struct IndicatorDrawCommand {
@@ -174,6 +179,7 @@ struct LayoutPlan {
 
 enum class LayoutErrorCode {
   unknown_role,
+  unknown_compact_style,
   unknown_image_role,
   invalid_image_placement,
   unknown_gap,
@@ -194,9 +200,10 @@ struct LayoutError {
 
 [[nodiscard]] std::expected<LayoutPlan, LayoutError>
 layout_scene(const SceneNode &scene, const Theme &theme, ViewMode mode,
-             const GlyphMetrics &glyph_metrics);
+             const GlyphMetrics &glyph_metrics, std::string_view compact_style = {});
 [[nodiscard]] std::expected<LayoutPlan, LayoutError>
 layout_scene(const SceneNode &scene, const Theme &theme, ViewMode mode,
-             const GlyphMetrics &glyph_metrics, const RichTextMetrics &rich_text_metrics);
+             const GlyphMetrics &glyph_metrics, const RichTextMetrics &rich_text_metrics,
+             std::string_view compact_style = {});
 
 } // namespace gisland

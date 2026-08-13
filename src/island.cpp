@@ -63,9 +63,16 @@ IslandCanvasSize fixed_canvas_for(const Theme &theme) {
   const auto rounded = [](double value) { return static_cast<int>(std::lround(value)); };
   const auto &views = theme.views();
   const auto &shadow = theme.shadow();
-  const int surface_width = rounded(std::max(views.compact.max_width, views.expanded.max_width));
-  const int surface_height = rounded(std::max(
-      {views.compact.max_height, theme.progress().compact_height, views.expanded.max_height}));
+  double maximum_compact_width = views.compact.max_width;
+  double maximum_compact_height =
+      std::max(views.compact.max_height, theme.progress().compact_height);
+  for (const auto &[name, style] : views.compact_styles) {
+    (void)name;
+    maximum_compact_width = std::max(maximum_compact_width, style.max_width);
+    maximum_compact_height = std::max(maximum_compact_height, style.max_height);
+  }
+  const int surface_width = rounded(std::max(maximum_compact_width, views.expanded.max_width));
+  const int surface_height = rounded(std::max(maximum_compact_height, views.expanded.max_height));
   const int shadow_radius = rounded(shadow.blur) + rounded(shadow.spread);
   const int shadow_x = rounded(shadow.offset_x);
   const int shadow_y = rounded(shadow.offset_y);
@@ -121,6 +128,77 @@ void SpringProgress::update(float delta_seconds) {
 }
 
 float SpringProgress::value() const { return value_; }
+
+void ProgressAnimator::retarget(const LayoutPlan &plan, std::chrono::milliseconds duration,
+                                Easing easing, bool preserve_current) {
+  const float duration_seconds = std::max(std::chrono::duration<float>{duration}.count(), 0.0F);
+  std::vector<Track> next;
+
+  const auto add_target = [&](std::string_view path, double target,
+                              std::optional<double> transition_from) {
+    const auto previous =
+        preserve_current ? std::ranges::find(tracks_, path, &Track::path) : tracks_.end();
+    if (previous != tracks_.end() && previous->target == target) {
+      next.push_back(*previous);
+      return;
+    }
+
+    const std::optional<double> source =
+        previous != tracks_.end() ? std::optional<double>{previous->current} : transition_from;
+    if (!source.has_value() || duration_seconds <= 0.0F || *source == target) {
+      return;
+    }
+    next.push_back(
+        Track{std::string{path}, *source, *source, target, 0.0F, duration_seconds, easing, true});
+  };
+
+  for (const auto &command : plan.content) {
+    if (const auto *progress = std::get_if<ProgressDrawCommand>(&command)) {
+      add_target(progress->path, progress->value, progress->transition_from);
+    } else if (const auto *ring = std::get_if<RingProgressDrawCommand>(&command)) {
+      add_target(ring->path, ring->value, ring->transition_from);
+    }
+  }
+  tracks_ = std::move(next);
+}
+
+void ProgressAnimator::update(float delta_seconds) {
+  for (auto &track : tracks_) {
+    if (!track.active) {
+      continue;
+    }
+    track.elapsed_seconds += std::max(delta_seconds, 0.0F);
+    const float progress = std::clamp(track.elapsed_seconds / track.duration_seconds, 0.0F, 1.0F);
+    const double eased = static_cast<double>(apply_easing(progress, track.easing));
+    track.current = track.source + ((track.target - track.source) * eased);
+    if (progress >= 1.0F) {
+      track.current = track.target;
+      track.active = false;
+    }
+  }
+}
+
+bool ProgressAnimator::active() const { return std::ranges::any_of(tracks_, &Track::active); }
+
+LayoutPlan ProgressAnimator::apply(const LayoutPlan &plan) const {
+  auto animated = plan;
+  for (auto &command : animated.content) {
+    if (auto *progress = std::get_if<ProgressDrawCommand>(&command)) {
+      const auto track = std::ranges::find(tracks_, progress->path, &Track::path);
+      if (track == tracks_.end()) {
+        continue;
+      }
+      progress->fill.width = static_cast<int>(
+          std::lround(static_cast<double>(progress->track.width) * track->current));
+    } else if (auto *ring = std::get_if<RingProgressDrawCommand>(&command)) {
+      const auto track = std::ranges::find(tracks_, ring->path, &Track::path);
+      if (track != tracks_.end()) {
+        ring->value = track->current;
+      }
+    }
+  }
+  return animated;
+}
 
 void ContentCrossfade::set_mode(IslandMode mode) {
   if (mode == mode_) {
@@ -190,6 +268,16 @@ ContextTransitionKind classify_context_transition(const std::optional<ContextKey
 
 float context_incoming_opacity(ContextTransitionKind kind, const ContextTransitionVisual &visual) {
   return kind == ContextTransitionKind::aligned_content_crossfade ? 1.0F : visual.incoming_opacity;
+}
+
+bool preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requested_mode,
+                                             const std::optional<ContextKey> &current_compact,
+                                             const std::optional<ContextKey> &current_expanded,
+                                             const std::optional<ContextKey> &next_compact,
+                                             const std::optional<ContextKey> &next_expanded) {
+  return current_mode == IslandMode::compact && requested_mode == IslandMode::expanded &&
+         current_compact != next_compact && current_expanded != next_expanded &&
+         next_expanded.has_value();
 }
 
 void ContextTransition::update(float delta_seconds) {

@@ -36,6 +36,7 @@ def open_history(
 ) -> int:
     visible_count = show_more()
     deadline = monotonic() + timeout
+    activated = False
     while True:
         result = run([gislandctl, "status", "--json"])
         if result.returncode != 0:
@@ -46,6 +47,11 @@ def open_history(
             raise RuntimeError("invalid status response") from error
         if _selected_history(status):
             break
+        if not activated:
+            result = run([gislandctl, "activate-open", "notifications"])
+            if result.returncode != 0:
+                raise RuntimeError(f"gislandctl activate failed: {result.stderr.strip()}")
+            activated = True
         if monotonic() >= deadline:
             raise RuntimeError("timed out waiting for notification history")
         sleep(0.02)

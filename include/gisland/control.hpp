@@ -2,7 +2,10 @@
 
 #include "gisland/island.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <chrono>
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <string>
@@ -39,14 +42,25 @@ struct ActivateControl {
   std::optional<std::chrono::milliseconds> duration;
   bool operator==(const ActivateControl &) const = default;
 };
+struct ActivateOpenControl {
+  std::string instance_id;
+  bool operator==(const ActivateOpenControl &) const = default;
+};
 struct DismissControl {
   std::string context_id;
   bool operator==(const DismissControl &) const = default;
 };
+struct ActionControl {
+  std::string instance_id;
+  std::string action_id;
+  std::optional<nlohmann::json> value;
+  bool operator==(const ActionControl &) const = default;
+};
 
 using ControlCommand =
     std::variant<OpenControl, CloseControl, ToggleControl, StatusControl, ModulesControl,
-                 ReloadControl, RestartModuleControl, ActivateControl, DismissControl>;
+                 ReloadControl, RestartModuleControl, ActivateControl, ActivateOpenControl,
+                 DismissControl, ActionControl>;
 
 enum class ControlErrorCode {
   invalid_request,
@@ -59,6 +73,11 @@ enum class ControlErrorCode {
   invalid_duration,
   restart_rejected,
   reload_rejected,
+  unsupported_module_protocol,
+  action_rejected,
+  action_delivery_failed,
+  action_timeout,
+  action_cancelled,
   internal_error
 };
 
@@ -111,6 +130,13 @@ public:
 private:
   ControlResponseValue value_;
 };
+
+struct PendingControlToken {
+  std::uint64_t value;
+  bool operator==(const PendingControlToken &) const = default;
+};
+
+using ControlDispatchResult = std::variant<ControlResponse, PendingControlToken>;
 
 struct ControlInvocation {
   ControlCommand command;

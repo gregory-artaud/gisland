@@ -28,8 +28,9 @@ enum class ViewSlot { compact, expanded };
 enum class Reveal { expanded };
 
 struct PresentationIntent {
-  Reveal reveal{Reveal::expanded};
+  std::optional<Reveal> reveal;
   std::optional<std::chrono::milliseconds> duration;
+  std::optional<std::string> compact_style;
 };
 
 struct PublishedContext {

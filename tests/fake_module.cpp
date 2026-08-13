@@ -125,7 +125,7 @@ void read_init() {
   write_json({
       {"type", "ready"},
       {"protocol_major", 1},
-      {"protocol_minor", 1},
+      {"protocol_minor", 8},
       {"capabilities", {"data-snapshots"}},
   });
   write_json({{"type", "data"}, {"value", {{"time", "14:35"}}}});
@@ -153,11 +153,15 @@ void read_init() {
       write_json({{"type", "data"}, {"value", {{"time", "14:36"}}}});
       replaced = true;
     }
-    write_json({
+    nlohmann::json result{
         {"type", "action_result"},
         {"action_id", action_id},
         {"accepted", true},
-    });
+    };
+    if (message.contains("invocation_id")) {
+      result["invocation_id"] = message.at("invocation_id");
+    }
+    write_json(result);
   }
   return EXIT_SUCCESS;
 }
@@ -545,6 +549,49 @@ void read_init() {
       }
     }
     return EXIT_SUCCESS;
+  }
+  if (mode == "audio-hud" || mode == "hud-style-without-capability" ||
+      mode == "icon-role-without-capability" || mode == "progress-transition-without-capability" ||
+      mode == "hud-capability-on-1.6") {
+    read_init();
+    const bool legacy = mode == "hud-capability-on-1.6";
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", legacy ? 6 : 7}};
+    if (mode == "audio-hud") {
+      ready["capabilities"] = {"independent-views", "compact-view-styles", "icon-roles",
+                               "progress-transitions"};
+    } else if (legacy) {
+      ready["capabilities"] = {"independent-views", "compact-view-styles"};
+    } else {
+      ready["capabilities"] = {"independent-views"};
+    }
+    write_json(ready);
+
+    nlohmann::json compact;
+    nlohmann::json publish{{"type", "publish"}, {"context_id", "audio"}, {"priority", 80}};
+    if (mode == "hud-style-without-capability" || mode == "hud-capability-on-1.6") {
+      compact = {{"type", "text"}, {"value", "HUD"}, {"role", "body"}};
+      publish["presentation"] = {{"compact_style", "hud-meter"}};
+    } else if (mode == "icon-role-without-capability") {
+      compact = {{"type", "icon"},
+                 {"name", "volume-high"},
+                 {"accessible_label", "Volume"},
+                 {"role", "hud-icon"}};
+    } else if (mode == "progress-transition-without-capability") {
+      compact = {{"type", "progress"}, {"value", 0.5}, {"transition_from", 0.4}};
+    } else {
+      compact = {{"type", "row"},
+                 {"children",
+                  {{{"type", "icon"},
+                    {"name", "volume-high"},
+                    {"accessible_label", "Volume"},
+                    {"role", "hud-icon"}},
+                   {{"type", "progress"}, {"value", 0.5}, {"transition_from", 0.4}}}}};
+      publish["presentation"] = {{"compact_style", "hud-meter"}};
+    }
+    publish["views"] = {{"compact", std::move(compact)}};
+    write_json(publish);
+    return silent();
   }
   if (mode == "image" || mode == "image-without-capability") {
     read_init();

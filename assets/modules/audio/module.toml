@@ -1,0 +1,23 @@
+id = "audio"
+name = "Audio"
+description = "Default output volume and mute HUD"
+command = ["gisland-audio"]
+
+[protocol]
+major = 1
+minimum_minor = 7
+maximum_minor = 7
+
+[defaults]
+step_percent = 5
+maximum_percent = 150
+hud_duration_ms = 1500
+
+[options_schema.step_percent]
+type = "integer"
+
+[options_schema.maximum_percent]
+type = "integer"
+
+[options_schema.hud_duration_ms]
+type = "integer"

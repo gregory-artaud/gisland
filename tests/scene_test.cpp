@@ -82,6 +82,17 @@ TEST_CASE("progress values must be finite and normalized") {
   }
 }
 
+TEST_CASE("progress transition source must be finite and normalized") {
+  for (const double value : {-0.1, 1.1, std::numeric_limits<double>::infinity()}) {
+    const gisland::SceneNode scene{
+        gisland::Progress{0.5, "", "accent", gisland::ProgressShape::linear, value}};
+    const auto result = gisland::validate_scene(scene);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::SceneErrorCode::invalid_progress);
+    CHECK(result.error().path == "/transition_from");
+  }
+}
+
 TEST_CASE("button action IDs must not be empty") {
   const auto result = gisland::validate_scene(gisland::SceneNode{
       gisland::Button{gisland::SceneNode{gisland::Text{"Dismiss", "label"}}, "", true, "Dismiss"}});

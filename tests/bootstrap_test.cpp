@@ -156,7 +156,7 @@ TEST_CASE(
   REQUIRE(bootstrap.has_value());
   CHECK(bootstrap->config_path == std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml");
   CHECK(bootstrap->config.default_module == "clock");
-  REQUIRE(bootstrap->config.modules.size() == 3);
+  REQUIRE(bootstrap->config.modules.size() == 4);
   CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
   CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
   CHECK(bootstrap->config.modules[1].module_id == "notifications");
@@ -171,7 +171,16 @@ TEST_CASE(
   CHECK(bootstrap->config.modules[2].command.front() == "gisland-battery");
   CHECK(bootstrap->config.modules[2].minimum_protocol == gisland::ProtocolVersion{1, 5});
   CHECK(bootstrap->config.modules[2].maximum_protocol == gisland::ProtocolVersion{1, 5});
-  REQUIRE(bootstrap->manifest_paths.size() == 3);
+  CHECK(bootstrap->config.modules[3].module_id == "audio");
+  CHECK(bootstrap->config.modules[3].command.front() == "gisland-audio");
+  CHECK(bootstrap->config.modules[3].minimum_protocol == gisland::ProtocolVersion{1, 7});
+  CHECK(bootstrap->config.modules[3].maximum_protocol == gisland::ProtocolVersion{1, 7});
+  CHECK(std::get<std::int64_t>(bootstrap->config.modules[3].options.at("step_percent").value) == 5);
+  CHECK(std::get<std::int64_t>(bootstrap->config.modules[3].options.at("maximum_percent").value) ==
+        150);
+  CHECK(std::get<std::int64_t>(bootstrap->config.modules[3].options.at("hud_duration_ms").value) ==
+        1500);
+  REQUIRE(bootstrap->manifest_paths.size() == 4);
   CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
   const auto *clock_view =
       bootstrap->config.modules.front().view ? &*bootstrap->config.modules.front().view : nullptr;

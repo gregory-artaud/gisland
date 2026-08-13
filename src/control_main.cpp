@@ -20,8 +20,11 @@ Commands:
   reload                                    Reload the configuration
   module restart <instance>                 Restart a module instance
   activate <instance> [--duration <duration>]
-                                            Activate a module instance
+                                             Activate a module instance
+  activate-open <instance>                   Activate and open a module atomically
   dismiss <context>                         Dismiss a context
+  action <instance> <action> [--value <json>]
+                                             Invoke a module action and await its result
   help                                      Show this help
 
 Options:
