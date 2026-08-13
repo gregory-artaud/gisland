@@ -9,6 +9,7 @@ A C++23 raylib application for Linux/X11.
 - GCC or Clang with C++23 support
 - Git
 - clang-format and clang-tidy for optional quality checks
+- Lua 5.4 development files for Lua modules
 - Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
 - `pactl` for default output mute and volume controls
 - tzdata and the system locales selected for clock-calendar formatting
@@ -20,7 +21,8 @@ A C++23 raylib application for Linux/X11.
 sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
-  libpango1.0-dev libfontconfig1-dev python3 python3-gi gir1.2-gtk-3.0 pulseaudio-utils
+  libpango1.0-dev libfontconfig1-dev liblua5.4-dev python3 python3-gi \
+  gir1.2-gtk-3.0 pulseaudio-utils
 ```
 
 ### Fedora
@@ -29,7 +31,7 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel python3 python3-gobject gtk3 pulseaudio-utils
+  fontconfig-devel lua-devel python3 python3-gobject gtk3 pulseaudio-utils
 ```
 
 ### Arch Linux
@@ -37,7 +39,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  python-gobject gtk3 libpulse
+  lua python-gobject gtk3 libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -236,6 +238,95 @@ default options, and an option schema. Configured values are merged over default
 before any process starts. A missing, malformed, or protocol-incompatible referenced manifest
 rejects startup or reload; malformed unreferenced manifests do not terminate gisland. Existing
 instances with an explicit `command` remain supported and bypass discovery.
+
+## Lua Modules
+
+`gisland-lua-host` runs trusted Lua 5.4 modules as external processes. Lua code and native Lua
+libraries have the current user's full permissions; gisland does not sandbox them. Each configured
+module instance gets its own supervised host process, Lua state, timers, and failure lifecycle. A
+blocking callback delays only that module instance, not rendering or other modules, but modules
+should still keep synchronous work bounded.
+
+This increment requires a manifest command containing the host and Lua entry as absolute paths:
+
+```toml
+id = "example-clock"
+name = "Example clock"
+description = "Publishes local time as template data"
+command = ["/usr/local/bin/gisland-lua-host", "/home/user/modules/example-clock.lua"]
+
+[protocol]
+major = 1
+minimum_minor = 8
+maximum_minor = 8
+```
+
+The host accepts exactly one argument, the entry script path. Package-local `entry`, `config.toml`,
+and `view.toml` discovery arrive in Increment 3; do not use those manifest fields yet. Standard Lua
+`require` uses the inherited Lua 5.4 `package.path`. The host does not yet prepend the entry
+directory, and it leaves native `package.cpath` unchanged. Set standard Lua search paths in the
+launch environment when dependencies are outside the system paths.
+
+A script must return exactly one definition produced by `gisland.module`:
+
+```lua
+return gisland.module {
+  every = "1s",
+  init = function(config) end,
+  update = function() return { value = 42 } end,
+  actions = {
+    refresh = function(value) return true end,
+  },
+  visibility = function(state) end,
+  shutdown = function() end,
+}
+```
+
+All fields and callbacks are optional. `init(config)` runs once after protocol initialization;
+`ready` is emitted only if it succeeds. `update()` runs at the bounded `every` interval and emits one
+`data` record when it returns a non-nil JSON-compatible value. `visibility(state)` receives the
+current visibility string. `shutdown()` runs during graceful shutdown. Callbacks run serially.
+
+The data-oriented API pairs Lua values with declarative views configured by the core. A minimal
+module is available at `tests/fixtures/lua/example_data_module.lua`:
+
+```lua
+return gisland.module {
+  every = "1s",
+  update = function()
+    return { time = os.date("%H:%M"), date = os.date("%A %d") }
+  end,
+}
+```
+
+`gisland.data(value)` emits data explicitly. Lua tables with contiguous integer keys become arrays;
+string-keyed tables become objects. Empty tables are objects unless created with
+`gisland.array()`. Values are bounded and must be JSON-compatible.
+
+Context-oriented modules call `gisland.publish(context)`, `gisland.dismiss(context_id)`, and
+`gisland.log(level, message)`. The `gisland.ui` constructors cover `text`, `icon`, `image`,
+`rich_text`, `row`, `column`, `spacer`, `progress`, `indicator`, `button`, and `action_region`.
+Modules provide semantic roles and action IDs, while the core remains responsible for protocol
+validation, styling, layout, capabilities, and rendering. See the executable counter example in
+`tests/fixtures/lua/example_action_module.lua`.
+
+Rendered interactions and `gislandctl action` both dispatch the same semantic action callback. The
+callback receives the optional JSON-compatible value and returns `true`, `false`, or
+`false, "reason"`. The host creates the protocol 1.8 correlated `action_result`; invocation IDs are
+never exposed to Lua. A missing handler, invalid return, or thrown action error rejects and logs only
+that invocation, leaving the module ready.
+
+Timers use the same positive `ms`, `s`, `m`, or `h` duration syntax as `every`, up to 24 hours:
+
+```lua
+gisland.defer(function() gisland.data { ready = true } end)
+gisland.after("500ms", function() gisland.dismiss("temporary") end)
+```
+
+Timer callbacks run serially and are cancelled on shutdown. Script-load, `init`, periodic `update`,
+timer, visibility, shutdown, transport, queue, and value-conversion errors terminate only that host
+process. gisland removes its contexts and applies the manifest's restart policy and backoff. Scene
+records rejected by the core follow the normal last-valid-context behavior.
 
 The shipped `gisland-clock-calendar` executable uses the same public protocol as third-party
 modules. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at minute

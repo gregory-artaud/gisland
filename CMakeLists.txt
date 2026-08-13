@@ -71,6 +71,10 @@ pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
 pkg_check_modules(PANGOFT2 REQUIRED IMPORTED_TARGET pangoft2)
 pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+pkg_check_modules(LUA54 REQUIRED IMPORTED_TARGET lua5.4>=5.4)
+if(LUA54_VERSION VERSION_LESS 5.4 OR NOT LUA54_VERSION VERSION_LESS 5.5)
+  message(FATAL_ERROR "gisland requires Lua >= 5.4 and < 5.5; found ${LUA54_VERSION}")
+endif()
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -95,6 +99,37 @@ target_include_directories(
 )
 gisland_set_project_options(gisland_clock_calendar_model)
 
+add_library(gisland_io STATIC src/line_buffer.cpp src/write_queue.cpp)
+add_library(gisland::io ALIAS gisland_io)
+target_compile_features(gisland_io PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_io
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+gisland_set_project_options(gisland_io)
+
+add_library(
+  gisland_lua_runtime STATIC
+  src/lua_host.cpp
+  src/lua_scene.cpp
+  src/lua_transport.cpp
+  src/lua_value.cpp
+)
+add_library(gisland::lua_runtime ALIAS gisland_lua_runtime)
+target_compile_features(gisland_lua_runtime PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_lua_runtime
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+target_link_libraries(
+  gisland_lua_runtime
+  PUBLIC nlohmann_json::nlohmann_json PkgConfig::LUA54
+  PRIVATE gisland::io
+)
+gisland_set_project_options(gisland_lua_runtime)
+
 add_executable(gisland_clock_calendar src/clock_calendar_main.cpp)
 set_target_properties(gisland_clock_calendar PROPERTIES OUTPUT_NAME gisland-clock-calendar)
 target_compile_features(gisland_clock_calendar PRIVATE cxx_std_23)
@@ -103,6 +138,11 @@ target_link_libraries(
   PRIVATE gisland::clock_calendar_model nlohmann_json::nlohmann_json
 )
 gisland_set_project_options(gisland_clock_calendar)
+
+add_executable(gisland-lua-host src/lua_host_main.cpp)
+target_compile_features(gisland-lua-host PRIVATE cxx_std_23)
+target_link_libraries(gisland-lua-host PRIVATE gisland::lua_runtime)
+gisland_set_project_options(gisland-lua-host)
 
 add_library(
   gisland_app STATIC
@@ -118,7 +158,6 @@ add_library(
   src/ipc_server.cpp
   src/island.cpp
   src/layout.cpp
-  src/line_buffer.cpp
   src/module_lifecycle.cpp
   src/module_manifest.cpp
   src/module_supervisor.cpp
@@ -131,7 +170,6 @@ add_library(
   src/scene.cpp
   src/scene_template.cpp
   src/theme.cpp
-  src/write_queue.cpp
   src/x11_monitor.cpp
   src/x11_window_host.cpp
   src/x11_shape.cpp
@@ -148,6 +186,7 @@ target_link_libraries(
   PUBLIC
     nlohmann_json::nlohmann_json
   PRIVATE
+    gisland::io
     raylib
     tomlplusplus::tomlplusplus
     PkgConfig::PANGOCAIRO
@@ -276,7 +315,7 @@ configure_file(
   @ONLY
 )
 install(
-  TARGETS gisland gislandctl gisland_clock_calendar
+  TARGETS gisland gislandctl gisland-lua-host gisland_clock_calendar
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(FILES assets/config.toml DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
@@ -443,6 +482,54 @@ if(BUILD_TESTING)
     DISCOVERY_MODE PRE_TEST
   )
 
+  add_executable(gisland_lua_value_tests tests/lua_value_test.cpp)
+  target_compile_features(gisland_lua_value_tests PRIVATE cxx_std_23)
+  target_link_libraries(
+    gisland_lua_value_tests
+    PRIVATE gisland::lua_runtime Catch2::Catch2WithMain
+  )
+  gisland_set_project_options(gisland_lua_value_tests)
+  catch_discover_tests(
+    gisland_lua_value_tests
+    TEST_PREFIX "lua_value::"
+    PROPERTIES ${GISLAND_UNIT_TEST_PROPERTIES}
+    DISCOVERY_MODE PRE_TEST
+  )
+
+  add_executable(gisland_lua_host_tests tests/lua_host_test.cpp)
+  target_compile_features(gisland_lua_host_tests PRIVATE cxx_std_23)
+  target_link_libraries(
+    gisland_lua_host_tests
+    PRIVATE gisland::lua_runtime Catch2::Catch2WithMain
+  )
+  target_compile_definitions(
+    gisland_lua_host_tests
+    PRIVATE
+      GISLAND_LUA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/lua"
+      GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
+  )
+  add_dependencies(gisland_lua_host_tests gisland-lua-host)
+  gisland_set_project_options(gisland_lua_host_tests)
+  catch_discover_tests(
+    gisland_lua_host_tests
+    TEST_PREFIX "lua_host_transport::"
+    PROPERTIES ${GISLAND_UNIT_TEST_PROPERTIES}
+    DISCOVERY_MODE PRE_TEST
+  )
+
+  add_executable(gisland_lua_scene_tests tests/lua_scene_test.cpp)
+  target_compile_features(gisland_lua_scene_tests PRIVATE cxx_std_23)
+  target_link_libraries(
+    gisland_lua_scene_tests
+    PRIVATE gisland::lua_runtime Catch2::Catch2WithMain
+  )
+  gisland_set_project_options(gisland_lua_scene_tests)
+  catch_discover_tests(
+    gisland_lua_scene_tests
+    TEST_PREFIX "lua_scene::"
+    PROPERTIES ${GISLAND_UNIT_TEST_PROPERTIES}
+    DISCOVERY_MODE PRE_TEST
+  )
   if(GISLAND_BUILD_GRAPHICAL_TESTS)
     add_executable(gisland_application_x11_smoke_tests tests/application_x11_smoke_test.cpp)
     target_compile_features(gisland_application_x11_smoke_tests PRIVATE cxx_std_23)
@@ -553,6 +640,10 @@ set(
   include/gisland/island.hpp
   include/gisland/layout.hpp
   include/gisland/line_buffer.hpp
+  include/gisland/lua_value.hpp
+  include/gisland/lua_scene.hpp
+  include/gisland/lua_transport.hpp
+  include/gisland/lua_host.hpp
   include/gisland/module_lifecycle.hpp
   include/gisland/module_manifest.hpp
   include/gisland/module_supervisor.hpp
@@ -585,6 +676,11 @@ set(
   src/island.cpp
   src/layout.cpp
   src/line_buffer.cpp
+  src/lua_value.cpp
+  src/lua_scene.cpp
+  src/lua_transport.cpp
+  src/lua_host.cpp
+  src/lua_host_main.cpp
   src/main.cpp
   src/module_lifecycle.cpp
   src/module_manifest.cpp
@@ -619,6 +715,9 @@ set(
   tests/island_test.cpp
   tests/layout_test.cpp
   tests/line_buffer_test.cpp
+  tests/lua_value_test.cpp
+  tests/lua_host_test.cpp
+  tests/lua_scene_test.cpp
   tests/module_lifecycle_test.cpp
   tests/module_manifest_test.cpp
   tests/module_supervisor_test.cpp

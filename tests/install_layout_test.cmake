@@ -14,6 +14,7 @@ set(root "${STAGING_DIR}${INSTALL_PREFIX}")
 set(required_files
     "${root}/${BINDIR}/gisland"
     "${root}/${BINDIR}/gislandctl"
+    "${root}/${BINDIR}/gisland-lua-host"
     "${root}/${BINDIR}/gisland-clock-calendar"
     "${root}/${BINDIR}/gisland-notifications"
     "${root}/${BINDIR}/gisland-notification-history"
