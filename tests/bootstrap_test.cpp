@@ -179,9 +179,23 @@ TEST_CASE(
   CHECK(std::get<std::int64_t>(
             bootstrap->config.modules[1].options.at("history_visible_limit").value) == 5);
   CHECK(bootstrap->config.modules[2].module_id == "battery");
-  CHECK(bootstrap->config.modules[2].command.front() == "gisland-battery");
-  CHECK(bootstrap->config.modules[2].minimum_protocol == gisland::ProtocolVersion{1, 5});
-  CHECK(bootstrap->config.modules[2].maximum_protocol == gisland::ProtocolVersion{1, 5});
+  const auto battery_package = std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "modules/battery";
+  CHECK(bootstrap->config.modules[2].command.front() == "gisland-lua-host");
+  REQUIRE(bootstrap->config.modules[2].command.size() == 3);
+  CHECK(bootstrap->config.modules[2].command[1] ==
+        std::filesystem::canonical(battery_package / "battery.lua"));
+  CHECK(bootstrap->config.modules[2].minimum_protocol == gisland::ProtocolVersion{1, 8});
+  CHECK(bootstrap->config.modules[2].maximum_protocol == gisland::ProtocolVersion{1, 8});
+  CHECK(std::get<std::int64_t>(bootstrap->config.modules[2].options.at("warning_percent").value) ==
+        20);
+  CHECK(std::get<std::int64_t>(
+            bootstrap->config.modules[2].options.at("persistent_percent").value) == 10);
+  REQUIRE(bootstrap->config.modules[2].dependencies.config.has_value());
+  CHECK(bootstrap->config.modules[2].dependencies.config->path ==
+        std::filesystem::canonical(battery_package / "config.toml"));
+  REQUIRE(bootstrap->config.modules[2].dependencies.entry.has_value());
+  CHECK(bootstrap->config.modules[2].dependencies.entry->path ==
+        std::filesystem::canonical(battery_package / "battery.lua"));
   CHECK(bootstrap->config.modules[3].module_id == "audio");
   const auto audio_package = std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "modules/audio";
   CHECK(bootstrap->config.modules[3].command.front() == "gisland-lua-host");

@@ -132,12 +132,12 @@ endif()
 if(NOT GISLAND_LGI_CHECK_RESULT EQUAL 0)
   message(
     FATAL_ERROR
-      "gisland requires Lua 5.4-compatible lgi with GLib and Gio; install lgi for "
+      "gisland requires Lua 5.4-compatible lgi with GLib, Gio, and Json-GLib 1.0; install lgi and the Json typelib for "
       "${LUA54_EXECUTABLE} or set GISLAND_LGI_ROOT to a staged installation. "
       "Probe error: ${GISLAND_LGI_CHECK_ERROR}"
   )
 endif()
-message(STATUS "Found a Lua 5.4-compatible lgi with GLib and Gio")
+message(STATUS "Found a Lua 5.4-compatible lgi with GLib, Gio, and Json-GLib 1.0")
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -317,16 +317,6 @@ file(
   CHMOD "${PROJECT_BINARY_DIR}/gisland-notification-history"
   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
 )
-set(GISLAND_BATTERY_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/battery")
-configure_file(
-  packaging/gisland-battery.in
-  "${PROJECT_BINARY_DIR}/gisland-battery"
-  @ONLY
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-battery"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
 set(
   GISLAND_NOTIFICATION_PYTHON_ROOT
   "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
@@ -339,12 +329,6 @@ configure_file(
 configure_file(
   packaging/gisland-notification-history.in
   "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
-  @ONLY
-)
-set(GISLAND_BATTERY_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/battery")
-configure_file(
-  packaging/gisland-battery.in
-  "${PROJECT_BINARY_DIR}/install/gisland-battery"
   @ONLY
 )
 configure_file(
@@ -381,6 +365,13 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/battery"
 )
 install(
+  FILES
+    assets/modules/battery/config.toml
+    assets/modules/battery/view.toml
+    assets/modules/battery/battery.lua
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/battery"
+)
+install(
   FILES "${PROJECT_BINARY_DIR}/install/audio.module.toml"
   RENAME module.toml
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/audio"
@@ -408,17 +399,11 @@ install(
   PROGRAMS
     "${PROJECT_BINARY_DIR}/install/gisland-notifications"
     "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
-    "${PROJECT_BINARY_DIR}/install/gisland-battery"
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(
   DIRECTORY modules/notifications/gisland_notifications
   DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/notifications"
-  PATTERN "__pycache__" EXCLUDE
-)
-install(
-  DIRECTORY modules/battery/gisland_battery
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/battery"
   PATTERN "__pycache__" EXCLUDE
 )
 install(
@@ -448,14 +433,26 @@ if(BUILD_TESTING)
       "${Python3_EXECUTABLE}" -m unittest discover -s
       "${PROJECT_SOURCE_DIR}/tests/notifications" -p "test_*.py" -v
   )
-  add_test(
-    NAME battery_python
-    COMMAND
-      env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/battery"
-      "GISLAND_BATTERY_PATH=${PROJECT_BINARY_DIR}/gisland-battery"
-      "${Python3_EXECUTABLE}" -m unittest discover -s
-      "${PROJECT_SOURCE_DIR}/tests/battery" -p "test_*.py" -v
-  )
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME battery_contract_lua
+      COMMAND
+        dbus-run-session -- env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/battery/battery_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/battery/battery.lua\"]"
+        --protocol-minor 8
+    )
+  else()
+    add_test(
+      NAME battery_contract_lua
+      COMMAND
+        dbus-run-session -- "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/battery/battery_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/battery/battery.lua\"]"
+        --protocol-minor 8
+    )
+  endif()
   add_test(
     NAME audio_command
     COMMAND

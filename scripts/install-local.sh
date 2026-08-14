@@ -7,7 +7,7 @@ if [[ -z ${HOME:-} ]]; then
   exit 1
 fi
 
-for command_name in cmake ninja systemctl; do
+for command_name in cmake cmp ninja systemctl; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf 'install-local: required command not found: %s\n' "$command_name" >&2
     exit 1
@@ -65,6 +65,13 @@ fi
 
 cmake --install build/release
 
+if ! cmp -s -- "$source_dir/build/release/gisland-lua-host" \
+  "$install_prefix/bin/gisland-lua-host"; then
+  printf 'install-local: installed Lua host is not current: %s\n' \
+    "$install_prefix/bin/gisland-lua-host" >&2
+  exit 1
+fi
+
 replacement_clock_files=(
   "$install_prefix/bin/gisland-lua-host"
   "$install_prefix/share/gisland/distributed/modules/clock-calendar/module.toml"
@@ -95,6 +102,41 @@ for replacement_audio_file in "${replacement_audio_files[@]}"; do
   fi
 done
 
+replacement_battery_files=(
+  "$install_prefix/bin/gisland-lua-host"
+  "$install_prefix/share/gisland/distributed/modules/battery/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/battery/config.toml"
+  "$install_prefix/share/gisland/distributed/modules/battery/view.toml"
+  "$install_prefix/share/gisland/distributed/modules/battery/battery.lua"
+)
+for replacement_battery_file in "${replacement_battery_files[@]}"; do
+  if [[ ! -f $replacement_battery_file ]]; then
+    printf 'install-local: replacement battery file was not installed: %s\n' \
+      "$replacement_battery_file" >&2
+    exit 1
+  fi
+done
+
+battery_sources=(
+  "$source_dir/build/release/install/battery.module.toml"
+  "$source_dir/assets/modules/battery/config.toml"
+  "$source_dir/assets/modules/battery/view.toml"
+  "$source_dir/assets/modules/battery/battery.lua"
+)
+battery_destinations=(
+  "$install_prefix/share/gisland/distributed/modules/battery/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/battery/config.toml"
+  "$install_prefix/share/gisland/distributed/modules/battery/view.toml"
+  "$install_prefix/share/gisland/distributed/modules/battery/battery.lua"
+)
+for index in "${!battery_sources[@]}"; do
+  if ! cmp -s -- "${battery_sources[$index]}" "${battery_destinations[$index]}"; then
+    printf 'install-local: installed battery file is not current: %s\n' \
+      "${battery_destinations[$index]}" >&2
+    exit 1
+  fi
+done
+
 rm -f -- "$install_prefix/bin/gisland-clock-calendar"
 rm -f -- "$install_prefix/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 rm -f -- "$install_prefix/bin/gisland-audio"
@@ -102,6 +144,9 @@ rm -f -- "$install_prefix/bin/gisland-audio-control"
 rm -rf -- "$install_prefix/share/gisland/audio/gisland_audio"
 rmdir -- "$install_prefix/share/gisland/audio" 2>/dev/null || true
 rm -rf -- "$install_prefix/share/gisland/distributed/modules/audio-lua"
+rm -f -- "$install_prefix/bin/gisland-battery"
+rm -rf -- "$install_prefix/share/gisland/battery/gisland_battery"
+rmdir -- "$install_prefix/share/gisland/battery" 2>/dev/null || true
 
 systemctl --user daemon-reload
 

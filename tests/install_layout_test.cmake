@@ -23,7 +23,6 @@ set(required_files
     "${root}/${BINDIR}/gisland-lua-host"
     "${root}/${BINDIR}/gisland-notifications"
     "${root}/${BINDIR}/gisland-notification-history"
-    "${root}/${BINDIR}/gisland-battery"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
@@ -32,6 +31,9 @@ set(required_files
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/clock_calendar.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/battery/config.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/battery/view.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/battery/battery.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/lua-example/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/lua-example/config.toml"
@@ -41,7 +43,6 @@ set(required_files
     "${root}/${DATADIR}/gisland/distributed/modules/audio/audio.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/audio/command.lua"
     "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
-    "${root}/${DATADIR}/gisland/battery/gisland_battery/application.py"
     "${root}/${DATADIR}/systemd/user/gisland.service")
 foreach(required_file IN LISTS required_files)
   if(NOT EXISTS "${required_file}")
@@ -65,6 +66,8 @@ set(forbidden_paths
     "${root}/${BINDIR}/gisland-audio-control"
     "${root}/${DATADIR}/gisland/audio"
     "${root}/${DATADIR}/gisland/distributed/modules/audio-lua"
+    "${root}/${BINDIR}/gisland-battery"
+    "${root}/${DATADIR}/gisland/battery"
     "${root}/${DATADIR}/dbus-1/services/org.gisland.Audio.service"
     "${root}/${DATADIR}/systemd/user/gisland-audio.service")
 foreach(forbidden_path IN LISTS forbidden_paths)
@@ -76,6 +79,15 @@ endforeach()
 file(READ "${personal_manifest}" personal_manifest_contents)
 if(NOT personal_manifest_contents STREQUAL "personal module sentinel\n")
   message(FATAL_ERROR "installation modified a personal module")
+endif()
+
+file(GLOB installed_battery_lua_files LIST_DIRECTORIES false
+     "${root}/${DATADIR}/gisland/distributed/modules/battery/*.lua")
+set(expected_battery_lua_file
+    "${root}/${DATADIR}/gisland/distributed/modules/battery/battery.lua")
+if(NOT installed_battery_lua_files STREQUAL expected_battery_lua_file)
+  message(FATAL_ERROR
+          "battery must install only its entry Lua file: ${installed_battery_lua_files}")
 endif()
 file(READ "${prefix_sentinel}" prefix_sentinel_contents)
 if(NOT prefix_sentinel_contents STREQUAL "custom prefix sentinel\n")
@@ -131,6 +143,25 @@ if(audio_command_position EQUAL -1 OR audio_entry_position EQUAL -1 OR
   message(FATAL_ERROR "installed audio manifest is incomplete: ${audio_manifest}")
 endif()
 
+file(READ "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
+     battery_manifest)
+set(battery_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-lua-host\"]")
+string(FIND "${battery_manifest}" "${battery_command}" battery_command_position)
+string(FIND "${battery_manifest}" "entry = \"battery.lua\"" battery_entry_position)
+string(FIND "${battery_manifest}" "config = \"config.toml\"" battery_config_position)
+string(FIND "${battery_manifest}" "view = \"view.toml\"" battery_view_position)
+string(FIND "${battery_manifest}" "minimum_minor = 8" battery_minimum_position)
+string(FIND "${battery_manifest}" "maximum_minor = 8" battery_maximum_position)
+string(FIND "${battery_manifest}" "maximum = 60000" battery_duration_maximum_position)
+string(FIND "${battery_manifest}" "[defaults]" battery_inline_defaults_position)
+if(battery_command_position EQUAL -1 OR battery_entry_position EQUAL -1 OR
+   battery_config_position EQUAL -1 OR battery_view_position EQUAL -1 OR
+   battery_minimum_position EQUAL -1 OR battery_maximum_position EQUAL -1 OR
+   battery_duration_maximum_position EQUAL -1 OR
+   NOT battery_inline_defaults_position EQUAL -1)
+  message(FATAL_ERROR "installed battery manifest is incomplete: ${battery_manifest}")
+endif()
+
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
      notification_manifest)
 set(notification_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-notifications\"]")
@@ -177,11 +208,13 @@ set(upgrade_staging_dir "${STAGING_DIR}-manual-upgrade")
 set(upgrade_root "${upgrade_staging_dir}${INSTALL_PREFIX}")
 set(upgrade_legacy_wrapper "${upgrade_root}/${BINDIR}/gisland-audio")
 set(upgrade_legacy_clock "${upgrade_root}/${BINDIR}/gisland-clock-calendar")
+set(upgrade_legacy_battery "${upgrade_root}/${BINDIR}/gisland-battery")
 set(upgrade_sentinel "${upgrade_root}/${DATADIR}/gisland/custom/sentinel")
 file(REMOVE_RECURSE "${upgrade_staging_dir}")
 file(MAKE_DIRECTORY "${upgrade_root}/${BINDIR}" "${upgrade_root}/${DATADIR}/gisland/custom")
 file(WRITE "${upgrade_legacy_wrapper}" "legacy wrapper sentinel\n")
 file(WRITE "${upgrade_legacy_clock}" "legacy clock sentinel\n")
+file(WRITE "${upgrade_legacy_battery}" "legacy battery sentinel\n")
 file(WRITE "${upgrade_sentinel}" "manual upgrade sentinel\n")
 execute_process(
   COMMAND
@@ -202,6 +235,10 @@ endif()
 file(READ "${upgrade_legacy_clock}" upgrade_legacy_clock_contents)
 if(NOT upgrade_legacy_clock_contents STREQUAL "legacy clock sentinel\n")
   message(FATAL_ERROR "manual CMake install unexpectedly changed the stale native clock")
+endif()
+file(READ "${upgrade_legacy_battery}" upgrade_legacy_battery_contents)
+if(NOT upgrade_legacy_battery_contents STREQUAL "legacy battery sentinel\n")
+  message(FATAL_ERROR "manual CMake install unexpectedly changed the stale battery wrapper")
 endif()
 file(READ "${upgrade_sentinel}" upgrade_sentinel_contents)
 if(NOT upgrade_sentinel_contents STREQUAL "manual upgrade sentinel\n")

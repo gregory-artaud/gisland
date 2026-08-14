@@ -19,10 +19,11 @@ user's XDG directories and does not need to be added to this repository.
 - Git
 - clang-format and clang-tidy for optional quality checks
 - Lua 5.4 interpreter and development files for Lua modules and tests
-- A Lua 5.4-compatible `lgi`, plus GLib and Gio typelibs, for asynchronous Lua modules
+- A Lua 5.4-compatible `lgi`, plus GLib, Gio, and Json-GLib 1.0 typelibs, for Lua modules
 - Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
 - `pactl` for default output mute and volume controls
 - `timeout` for bounded audio module commands
+- UPower for event-driven battery status and charge alerts
 - tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
@@ -33,7 +34,7 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
   libpango1.0-dev libfontconfig1-dev lua5.4 liblua5.4-dev python3 python3-gi \
-  gir1.2-gtk-3.0 pulseaudio-utils
+  gir1.2-gtk-3.0 gir1.2-json-1.0 lua-lgi pulseaudio-utils
 ```
 
 ### Fedora
@@ -42,7 +43,7 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel lua-devel python3 python3-gobject gtk3 pulseaudio-utils
+  fontconfig-devel lua-devel lua-lgi json-glib python3 python3-gobject gtk3 pulseaudio-utils
 ```
 
 ### Arch Linux
@@ -50,7 +51,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  lua54 lua54-lgi glib2 python-gobject gtk3 libpulse
+  lua54 lua54-lgi glib2 json-glib python-gobject gtk3 libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -105,8 +106,8 @@ systemctl --user enable --now gisland.service
 
 This manual sequence is not an equivalent upgrade path: CMake installs current files but cannot
 safely identify and remove files owned by older releases. Use `./scripts/install-local.sh` for
-user-local updates that require legacy audio migration and cleanup. For another prefix, review and
-remove stale release-owned files explicitly before using the manual sequence.
+user-local updates that require legacy clock, audio, or battery migration and cleanup. For another
+prefix, review and remove stale release-owned files explicitly before using the manual sequence.
 
 The installation owns binaries, the user service, and private distributed resources under
 `$HOME/.local/share/gisland/distributed`. It never writes user configuration or custom modules under
@@ -414,6 +415,25 @@ minute boundaries, and handles previous-month, next-month, and today actions. Lo
 come from core initialization by default without changing process `TZ`. Module options can override
 `locale`, `timezone`, and `week_start` (`monday` or `sunday`). Its default compact and expanded views
 live in the package's `view.toml` rather than the global configuration.
+
+The shipped battery module is also a self-contained protocol-1.8 Lua package. It creates Gio UPower
+proxies synchronously during initialization and then reacts only to UPower property-change signals on
+the host's shared GLib main context; it does not poll. Its package-local defaults control warning,
+persistent, critical, semantic-color thresholds, and temporary preview duration. The package view
+shows normalized charge, the active charge estimate, battery health, and power draw. An unavailable
+UPower service is logged, while absent or nonfinite readings are ignored; neither terminates the
+graphical core.
+
+Battery percentages use strict ordering: `0 < critical_percent < persistent_percent <
+warning_percent <= 100` and `0 < red_percent < yellow_percent <= 100`. Manifests validate each
+option's integer range but cannot express relations between options, so the Lua module rejects an
+invalid combination during initialization.
+
+Low-battery thresholds fire once per discharge cycle. Plugging in replaces an active persistent or
+critical alert, and unplugging starts a new cycle. Threshold state is stored under
+`$XDG_STATE_HOME/gisland/battery-cycle.json`, falling back to
+`$HOME/.local/state/gisland/battery-cycle.json`; a persistent alert can be dismissed without
+re-enabling duplicate alerts in the same cycle.
 
 When user configuration is absent, gisland loads the distributed `assets/config.toml`, which
 selects this module and enables the desktop
