@@ -1,16 +1,23 @@
 #include "gisland/content_fingerprint.hpp"
+#include "gisland/glib_main_context.hpp"
 #include "gisland/lua_host.hpp"
 #include "gisland/lua_transport.hpp"
+#include "gisland/poll.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
 #include <fcntl.h>
+#include <glib-unix.h>
+#include <glib.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -23,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #ifndef GISLAND_LUA_FIXTURE_DIR
@@ -58,6 +66,11 @@ public:
   void close_write() {
     REQUIRE(::close(write_) == 0);
     write_ = -1;
+  }
+
+  void close_read() {
+    REQUIRE(::close(read_) == 0);
+    read_ = -1;
   }
 
 private:
@@ -101,6 +114,18 @@ void write_all(int descriptor, std::string_view value) {
   }
 }
 
+void configure_lgi_test_environment() {
+#ifdef GISLAND_TEST_LGI_PREFIX
+  const std::string prefix = GISLAND_TEST_LGI_PREFIX;
+  const auto lua_path = prefix + "/share/lua/5.4/?.lua;" + prefix + "/share/lua/5.4/?/init.lua;;";
+  const auto lua_cpath = prefix + "/lib/lua/5.4/?.so;;";
+  if (::setenv("LUA_PATH", lua_path.c_str(), 1) != 0 ||
+      ::setenv("LUA_CPATH", lua_cpath.c_str(), 1) != 0) {
+    _exit(126);
+  }
+#endif
+}
+
 [[nodiscard]] std::string read_available(int descriptor) {
   std::string result;
   std::array<char, 4096> buffer{};
@@ -117,6 +142,29 @@ void write_all(int descriptor, std::string_view value) {
 }
 
 using Records = std::vector<nlohmann::json>;
+
+volatile sig_atomic_t signal_count = 0;
+
+void count_signal(int) {
+  const sig_atomic_t current = signal_count;
+  signal_count = current + 1;
+}
+
+class ScopedSignalHandler {
+public:
+  explicit ScopedSignalHandler(int signal) : signal_(signal) {
+    struct sigaction action{};
+    action.sa_handler = count_signal;
+    sigemptyset(&action.sa_mask);
+    REQUIRE(::sigaction(signal_, &action, &previous_) == 0);
+  }
+
+  ~ScopedSignalHandler() { static_cast<void>(::sigaction(signal_, &previous_, nullptr)); }
+
+private:
+  int signal_;
+  struct sigaction previous_{};
+};
 
 [[nodiscard]] gisland::LuaHost::Emit collect_into(Records &records) {
   return [&records](nlohmann::json record) -> std::expected<void, gisland::LuaHostError> {
@@ -167,6 +215,9 @@ TEST_CASE("lua host transport frames partial and multiple JSONL records") {
   CHECK(records.empty());
 
   write_all(input.write_fd(), "}\n{\"type\":\"two\"}\n");
+  REQUIRE((*transport)->poll_once(0).has_value());
+  REQUIRE(records.size() == 1);
+  REQUIRE((*transport)->poll_once(0).has_value());
   REQUIRE((*transport)->poll_once(0).has_value());
   REQUIRE(records.size() == 2);
   CHECK(records[0].at("type") == "one");
@@ -271,6 +322,51 @@ TEST_CASE("lua host transport preserves queued output across partial writes") {
   CHECK(nlohmann::json::parse(output_text) == record);
 }
 
+TEST_CASE("lua host transport leaves input unread while output is pending") {
+  Pipe input;
+  Pipe output;
+  Records records;
+  auto transport = make_transport(input, output, records);
+  REQUIRE(transport.has_value());
+
+  REQUIRE((*transport)->send({{"pending", true}}).has_value());
+  write_all(input.write_fd(), "{\"sequence\":1}\n{\"sequence\":2}\n");
+
+  auto descriptors = (*transport)->poll_descriptors(false);
+  REQUIRE(gisland::poll_with_timeout(descriptors, 0).has_value());
+  REQUIRE((*transport)->advance(descriptors).has_value());
+  CHECK(records.empty());
+
+  while ((*transport)->pending_output_bytes() > 0) {
+    static_cast<void>(read_available(output.read_fd()));
+    descriptors = (*transport)->poll_descriptors(false);
+    REQUIRE(gisland::poll_with_timeout(descriptors, 0).has_value());
+    REQUIRE((*transport)->advance(descriptors).has_value());
+  }
+
+  descriptors = (*transport)->poll_descriptors(true);
+  REQUIRE(gisland::poll_with_timeout(descriptors, 0).has_value());
+  REQUIRE((*transport)->advance(descriptors).has_value());
+  REQUIRE(records.size() == 1);
+  CHECK(records.front().at("sequence") == 1);
+}
+
+TEST_CASE("lua host transport detects output failure while input is disabled") {
+  Pipe input;
+  Pipe output;
+  Records records;
+  auto transport = make_transport(input, output, records);
+  REQUIRE(transport.has_value());
+  REQUIRE((*transport)->send({{"pending", true}}).has_value());
+  output.close_read();
+
+  auto descriptors = (*transport)->poll_descriptors(false);
+  REQUIRE(gisland::poll_with_timeout(descriptors, 0).has_value());
+  const auto advanced = (*transport)->advance(descriptors);
+  REQUIRE_FALSE(advanced.has_value());
+  CHECK(advanced.error().code == gisland::LuaTransportErrorCode::write_failed);
+}
+
 TEST_CASE("lua host transport fails rather than dropping output on queue overflow") {
   Pipe input;
   Pipe output;
@@ -317,6 +413,43 @@ TEST_CASE("lua host transport does not open or own injected descriptors") {
     CHECK(open_descriptor_count() == with_pipes);
   }
   CHECK(open_descriptor_count() == before);
+}
+
+TEST_CASE("GLib main context adapter supports cancel reprepare check and destruction") {
+  Pipe wakeup;
+  int dispatches = 0;
+  GSource *source = g_unix_fd_source_new(wakeup.read_fd(), G_IO_IN);
+  g_source_set_callback(source, G_SOURCE_FUNC(+[](gint, GIOCondition, gpointer data) -> gboolean {
+                          ++*static_cast<int *>(data);
+                          return G_SOURCE_REMOVE;
+                        }),
+                        &dispatches, nullptr);
+  g_source_attach(source, nullptr);
+
+  const auto before = open_descriptor_count();
+  {
+    gisland::GlibMainContext context;
+    auto query = context.prepare();
+    REQUIRE(query.has_value());
+    context.cancel_poll();
+
+    query = context.prepare();
+    REQUIRE(query.has_value());
+    const auto descriptor =
+        std::ranges::find_if(query->descriptors, [&wakeup](const pollfd &candidate) {
+          return candidate.fd == wakeup.read_fd();
+        });
+    REQUIRE(descriptor != query->descriptors.end());
+    CHECK((descriptor->events & POLLIN) != 0);
+
+    write_all(wakeup.write_fd(), "x");
+    REQUIRE(gisland::poll_with_timeout(query->descriptors, 0).has_value());
+    CHECK((descriptor->revents & POLLIN) != 0);
+    REQUIRE(context.check_and_dispatch(query->descriptors).has_value());
+    CHECK(dispatches == 1);
+  }
+  CHECK(open_descriptor_count() == before);
+  g_source_unref(source);
 }
 
 TEST_CASE("lua host script reports entry loading failures", "[lua_host_script]") {
@@ -1120,6 +1253,82 @@ TEST_CASE("lua host poll timeout rounds sub-millisecond deadlines up", "[lua_hos
   CHECK(gisland::lua_host_poll_timeout(now + 1000001ns, now) == 2);
 }
 
+TEST_CASE("interrupted polling preserves a shared GLib and Lua deadline",
+          "[lua_host_glib][lua_host_timer]") {
+  using namespace std::chrono_literals;
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "interrupted-timeout.lua";
+  write_file(entry, R"lua(return gisland.module {
+  every = '20ms',
+  update = function() gisland.data { source = 'lua' } end,
+})lua");
+  auto host = gisland::LuaHost::load(entry.string());
+  REQUIRE(host.has_value());
+
+  std::vector<std::string> ordering;
+  const auto emit =
+      [&ordering](nlohmann::json record) -> std::expected<void, gisland::LuaHostError> {
+    if (record.value("type", "") == "data") {
+      ordering.push_back(record.at("value").at("source").get<std::string>());
+    }
+    return {};
+  };
+  const auto started = gisland::LuaHost::Clock::now();
+  REQUIRE((*host)->handle(init_record(), emit, started).has_value());
+
+  GSource *source = g_timeout_source_new(20);
+  g_source_set_callback(
+      source,
+      [](gpointer data) -> gboolean {
+        static_cast<std::vector<std::string> *>(data)->push_back("glib");
+        return G_SOURCE_REMOVE;
+      },
+      &ordering, nullptr);
+  g_source_attach(source, nullptr);
+
+  gisland::GlibMainContext context;
+  auto query = context.prepare();
+  REQUIRE(query.has_value());
+  const auto now = gisland::LuaHost::Clock::now();
+  const int lua_timeout = gisland::lua_host_poll_timeout((*host)->next_deadline(), now);
+  const int timeout =
+      query->timeout_ms < 0 ? lua_timeout : std::min(lua_timeout, query->timeout_ms);
+  REQUIRE(timeout > 0);
+
+  signal_count = 0;
+  ScopedSignalHandler signal_handler{SIGUSR1};
+  const pthread_t waiting_thread = pthread_self();
+  std::atomic_bool stop_signals{false};
+  std::atomic_bool interrupting{false};
+  std::jthread interrupter{[waiting_thread, &stop_signals, &interrupting] {
+    interrupting = true;
+    while (!stop_signals.load()) {
+      static_cast<void>(pthread_kill(waiting_thread, SIGUSR1));
+      std::this_thread::sleep_for(2ms);
+    }
+  }};
+  while (!interrupting.load()) {
+    std::this_thread::yield();
+  }
+  std::vector<pollfd> no_descriptors;
+  const auto poll_started = std::chrono::steady_clock::now();
+  REQUIRE(gisland::poll_with_timeout(no_descriptors, timeout).has_value());
+  const auto elapsed = std::chrono::steady_clock::now() - poll_started;
+  stop_signals = true;
+  interrupter.join();
+
+  REQUIRE(signal_count >= 3);
+  CHECK(elapsed < 80ms);
+  REQUIRE((*host)
+              ->run_external_callbacks(
+                  gisland::LuaHost::Clock::now(), emit,
+                  [&] { REQUIRE(context.check_and_dispatch(query->descriptors).has_value()); })
+              .has_value());
+  REQUIRE((*host)->run_due(gisland::LuaHost::Clock::now(), emit).has_value());
+  CHECK(ordering == std::vector<std::string>{"glib", "lua"});
+  g_source_unref(source);
+}
+
 TEST_CASE("lua_host_data nil periodic update emits nothing", "[lua_host_data]") {
   using namespace std::chrono_literals;
   auto host = gisland::LuaHost::load(
@@ -1259,4 +1468,418 @@ TEST_CASE("lua host process does not run deferred callbacks while output is pend
   CHECK(WEXITSTATUS(status) == 0);
   std::filesystem::remove(fixture);
   std::filesystem::remove(marker);
+}
+
+TEST_CASE("lua host process pauses sustained input behind saturated output and resumes FIFO",
+          "[lua_host_lifecycle][lua_host_transport]") {
+  using namespace std::chrono_literals;
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "sustained-backpressure.lua";
+  write_file(entry, R"lua(local sequence = 0
+return gisland.module {
+  init = function() gisland.data { payload = string.rep('x', 512 * 1024) } end,
+  actions = {
+    next = function()
+      sequence = sequence + 1
+      gisland.data { sequence = sequence }
+      return true
+    end,
+  },
+})lua");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  std::this_thread::sleep_for(30ms);
+  const int flags = ::fcntl(input.write_fd(), F_GETFL);
+  REQUIRE(flags >= 0);
+  REQUIRE(::fcntl(input.write_fd(), F_SETFL, flags & ~O_NONBLOCK) == 0);
+
+  constexpr int action_count = 200;
+  std::atomic_bool writer_ok{true};
+  std::jthread writer{[&] {
+    for (int sequence = 1; sequence <= action_count; ++sequence) {
+      const auto record = nlohmann::json{{"type", "action"}, {"action_id", "next"}}.dump() + "\n";
+      std::size_t offset = 0;
+      while (offset < record.size()) {
+        const auto written =
+            ::write(input.write_fd(), record.data() + offset, record.size() - offset);
+        if (written <= 0) {
+          writer_ok = false;
+          return;
+        }
+        offset += static_cast<std::size_t>(written);
+      }
+    }
+  }};
+
+  std::this_thread::sleep_for(30ms);
+  int early_status = 0;
+  CHECK(::waitpid(child, &early_status, WNOHANG) == 0);
+
+  std::string text;
+  constexpr int expected_records = 2 + action_count * 2;
+  for (int attempt = 0; attempt < 2000 && std::ranges::count(text, '\n') < expected_records;
+       ++attempt) {
+    text += read_available(output.read_fd());
+    std::this_thread::sleep_for(1ms);
+  }
+  writer.join();
+  REQUIRE(writer_ok.load());
+  REQUIRE(std::ranges::count(text, '\n') == expected_records);
+
+  int expected_sequence = 1;
+  std::size_t start = 0;
+  for (auto end = text.find('\n'); end != std::string::npos; end = text.find('\n', start)) {
+    const auto record = nlohmann::json::parse(text.substr(start, end - start));
+    if (record.value("type", "") == "data" && record.at("value").contains("sequence")) {
+      CHECK(record.at("value").at("sequence") == expected_sequence);
+      ++expected_sequence;
+    }
+    start = end + 1;
+  }
+  CHECK(expected_sequence == action_count + 1);
+
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("lua host process advances GLib idle and timeout sources with protocol traffic",
+          "[lua_host_glib]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "glib-sources.lua";
+  write_file(entry, R"lua(local lgi = require('lgi')
+local GLib = lgi.GLib
+
+return gisland.module {
+  init = function()
+    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, function()
+      gisland.data { source = 'idle' }
+      return false
+    end)
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10, function()
+      gisland.data { source = 'timeout' }
+      return false
+    end)
+  end,
+  actions = {
+    ping = function()
+      gisland.data { source = 'action' }
+      return true
+    end,
+  },
+}
+)lua");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    configure_lgi_test_environment();
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "action"}, {"action_id", "ping"}}.dump() + "\n");
+
+  std::string text;
+  for (int attempt = 0; attempt < 500 && std::ranges::count(text, '\n') < 5; ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  REQUIRE(WEXITSTATUS(status) == 0);
+
+  Records records;
+  std::size_t start = 0;
+  for (auto end = text.find('\n'); end != std::string::npos; end = text.find('\n', start)) {
+    records.push_back(nlohmann::json::parse(text.substr(start, end - start)));
+    start = end + 1;
+  }
+  REQUIRE(records.size() == 5);
+  CHECK(records.front().at("type") == "ready");
+  CHECK(std::ranges::count_if(records, [](const auto &record) {
+          return record.value("type", "") == "data" && record.at("value").at("source") == "idle";
+        }) == 1);
+  CHECK(std::ranges::count_if(records, [](const auto &record) {
+          return record.value("type", "") == "data" && record.at("value").at("source") == "timeout";
+        }) == 1);
+  CHECK(std::ranges::count_if(records, [](const auto &record) {
+          return record.value("type", "") == "data" && record.at("value").at("source") == "action";
+        }) == 1);
+  CHECK(std::ranges::count_if(records, [](const auto &record) {
+          return record.value("type", "") == "action_result" && record.at("action_id") == "ping";
+        }) == 1);
+}
+
+TEST_CASE("lua host drains queued output before dispatching a GLib idle source",
+          "[lua_host_glib]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "glib-backpressure.lua";
+  const auto marker = temporary.path() / "idle.marker";
+  write_file(entry, "local lgi = require('lgi')\nlocal GLib = lgi.GLib\nlocal marker = " +
+                        nlohmann::json(marker.string()).dump() +
+                        R"lua(
+return gisland.module {
+  init = function()
+    gisland.data { payload = string.rep('x', 512 * 1024) }
+    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, function()
+      local file = assert(io.open(marker, 'w'))
+      file:write('ran')
+      file:close()
+      return false
+    end)
+  end,
+}
+)lua");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    configure_lgi_test_environment();
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  ::usleep(50000);
+  CHECK_FALSE(std::filesystem::exists(marker));
+
+  std::string text;
+  for (int attempt = 0; attempt < 500 && !std::filesystem::exists(marker); ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+  CHECK(std::filesystem::exists(marker));
+  CHECK(text.starts_with("{\"capabilities\""));
+
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("lua host gives ready GLib sources a turn after draining saturated output",
+          "[lua_host_glib][lua_host_timer]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "glib-timer-fairness.lua";
+  write_file(entry, R"lua(local lgi = require('lgi')
+local GLib = lgi.GLib
+local refill = true
+local payload = string.rep('x', 256 * 1024)
+
+local function deferred_refill()
+  if refill then
+    gisland.data { source = 'deferred', payload = payload }
+    gisland.defer(deferred_refill)
+  end
+end
+
+return gisland.module {
+  every = '1ms',
+  init = function()
+    gisland.data { source = 'initial', payload = payload }
+    gisland.defer(deferred_refill)
+    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, function()
+      refill = false
+      gisland.data { source = 'glib' }
+      return false
+    end)
+  end,
+  update = function()
+    if refill then gisland.data { source = 'periodic', payload = payload } end
+  end,
+}
+)lua");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    configure_lgi_test_environment();
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  std::string text;
+  for (int attempt = 0; attempt < 1000 && std::ranges::count(text, '\n') < 3; ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+
+  const auto first_end = text.find('\n');
+  const auto second_end =
+      first_end == std::string::npos ? std::string::npos : text.find('\n', first_end + 1);
+  const auto third_end =
+      second_end == std::string::npos ? std::string::npos : text.find('\n', second_end + 1);
+  const bool glib_dispatched_before_refill =
+      third_end != std::string::npos &&
+      nlohmann::json::parse(text.substr(second_end + 1, third_end - second_end - 1))
+              .at("value")
+              .at("source") == "glib";
+
+  if (!glib_dispatched_before_refill) {
+    REQUIRE(::kill(child, SIGTERM) == 0);
+  } else {
+    write_all(
+        input.write_fd(),
+        nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+            "\n");
+  }
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  CHECK(glib_dispatched_before_refill);
+  if (glib_dispatched_before_refill) {
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+  }
+}
+
+TEST_CASE("lua host advances an asynchronous Gio session bus source", "[lua_host_glib][dbus]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "gio-bus.lua";
+  write_file(entry, R"lua(local lgi = require('lgi')
+local Gio = lgi.Gio
+
+return gisland.module {
+  init = function()
+    Gio.bus_get(Gio.BusType.SESSION, nil, function(_, result)
+      local connection = Gio.bus_get_finish(result)
+      gisland.data { bus = connection ~= nil }
+    end)
+  end,
+}
+)lua");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    configure_lgi_test_environment();
+    ::execlp("dbus-run-session", "dbus-run-session", "--", GISLAND_LUA_HOST_PATH, entry.c_str(),
+             nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  std::string text;
+  for (int attempt = 0; attempt < 500 && std::ranges::count(text, '\n') < 2; ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+  const auto first_end = text.find('\n');
+  REQUIRE(first_end != std::string::npos);
+  CHECK(nlohmann::json::parse(text.substr(0, first_end)).at("type") == "ready");
+  const auto second_end = text.find('\n', first_end + 1);
+  REQUIRE(second_end != std::string::npos);
+  CHECK(nlohmann::json::parse(text.substr(first_end + 1, second_end - first_end - 1)) ==
+        nlohmann::json{{"type", "data"}, {"value", {{"bus", true}}}});
+
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("lua host lets shutdown remove module-owned GLib sources", "[lua_host_glib]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "glib-shutdown.lua";
+  const auto callback_marker = temporary.path() / "callback.marker";
+  const auto shutdown_marker = temporary.path() / "shutdown.marker";
+  write_file(entry,
+             std::string{"local lgi = require('lgi')\nlocal GLib = lgi.GLib\n"} +
+                 "local callback_marker = " + nlohmann::json(callback_marker.string()).dump() +
+                 "\n" +
+                 "local shutdown_marker = " + nlohmann::json(shutdown_marker.string()).dump() +
+                 R"lua(
+local source
+return gisland.module {
+  init = function()
+    source = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, function()
+      local file = assert(io.open(callback_marker, 'w'))
+      file:write('ran')
+      file:close()
+      return false
+    end)
+  end,
+  shutdown = function()
+    GLib.Source.remove(source)
+    local file = assert(io.open(shutdown_marker, 'w'))
+    file:write('stopped')
+    file:close()
+  end,
+}
+)lua");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    configure_lgi_test_environment();
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  std::string text;
+  for (int attempt = 0; attempt < 100 && !text.contains('\n'); ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+  REQUIRE(text.contains('\n'));
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+  CHECK(std::filesystem::exists(shutdown_marker));
+  CHECK_FALSE(std::filesystem::exists(callback_marker));
 }

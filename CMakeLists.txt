@@ -16,6 +16,7 @@ include(cmake/ProjectOptions.cmake)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
+set(GISLAND_LGI_ROOT "" CACHE PATH "Optional root containing a Lua 5.4-compatible lgi")
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
@@ -72,9 +73,71 @@ pkg_check_modules(PANGOFT2 REQUIRED IMPORTED_TARGET pangoft2)
 pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 pkg_check_modules(LUA54 REQUIRED IMPORTED_TARGET lua5.4>=5.4)
+pkg_check_modules(GLIB2 REQUIRED IMPORTED_TARGET glib-2.0)
+pkg_check_modules(GIO2 REQUIRED IMPORTED_TARGET gio-2.0)
 if(LUA54_VERSION VERSION_LESS 5.4 OR NOT LUA54_VERSION VERSION_LESS 5.5)
   message(FATAL_ERROR "gisland requires Lua >= 5.4 and < 5.5; found ${LUA54_VERSION}")
 endif()
+
+find_program(LUA54_EXECUTABLE NAMES lua5.4 lua)
+if(NOT LUA54_EXECUTABLE)
+  message(FATAL_ERROR "gisland requires a Lua 5.4 interpreter (lua5.4 or lua)")
+endif()
+execute_process(
+  COMMAND "${LUA54_EXECUTABLE}" -e "io.write(_VERSION)"
+  RESULT_VARIABLE LUA54_VERSION_RESULT
+  OUTPUT_VARIABLE LUA54_INTERPRETER_VERSION
+  ERROR_VARIABLE LUA54_VERSION_ERROR
+)
+if(NOT LUA54_VERSION_RESULT EQUAL 0 OR NOT LUA54_INTERPRETER_VERSION STREQUAL "Lua 5.4")
+  message(
+    FATAL_ERROR
+      "gisland requires a Lua 5.4 interpreter; ${LUA54_EXECUTABLE} reported "
+      "'${LUA54_INTERPRETER_VERSION}' (${LUA54_VERSION_ERROR})"
+  )
+endif()
+
+set(GISLAND_LGI_PREFIX "")
+if(GISLAND_LGI_ROOT)
+  if(EXISTS "${GISLAND_LGI_ROOT}/usr/share/lua/5.4/lgi.lua")
+    set(GISLAND_LGI_PREFIX "${GISLAND_LGI_ROOT}/usr")
+  elseif(EXISTS "${GISLAND_LGI_ROOT}/share/lua/5.4/lgi.lua")
+    set(GISLAND_LGI_PREFIX "${GISLAND_LGI_ROOT}")
+  else()
+    message(
+      FATAL_ERROR
+        "GISLAND_LGI_ROOT does not contain share/lua/5.4/lgi.lua: ${GISLAND_LGI_ROOT}"
+    )
+  endif()
+  set(
+    GISLAND_LGI_LUA_PATH
+    "${GISLAND_LGI_PREFIX}/share/lua/5.4/?.lua;${GISLAND_LGI_PREFIX}/share/lua/5.4/?/init.lua;;"
+  )
+  set(GISLAND_LGI_LUA_CPATH "${GISLAND_LGI_PREFIX}/lib/lua/5.4/?.so;;")
+  execute_process(
+    COMMAND
+      ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+      "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${LUA54_EXECUTABLE}"
+      "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    RESULT_VARIABLE GISLAND_LGI_CHECK_RESULT
+    ERROR_VARIABLE GISLAND_LGI_CHECK_ERROR
+  )
+else()
+  execute_process(
+    COMMAND "${LUA54_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    RESULT_VARIABLE GISLAND_LGI_CHECK_RESULT
+    ERROR_VARIABLE GISLAND_LGI_CHECK_ERROR
+  )
+endif()
+if(NOT GISLAND_LGI_CHECK_RESULT EQUAL 0)
+  message(
+    FATAL_ERROR
+      "gisland requires Lua 5.4-compatible lgi with GLib and Gio; install lgi for "
+      "${LUA54_EXECUTABLE} or set GISLAND_LGI_ROOT to a staged installation. "
+      "Probe error: ${GISLAND_LGI_CHECK_ERROR}"
+  )
+endif()
+message(STATUS "Found a Lua 5.4-compatible lgi with GLib and Gio")
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -99,7 +162,7 @@ target_include_directories(
 )
 gisland_set_project_options(gisland_clock_calendar_model)
 
-add_library(gisland_io STATIC src/line_buffer.cpp src/write_queue.cpp)
+add_library(gisland_io STATIC src/line_buffer.cpp src/poll.cpp src/write_queue.cpp)
 add_library(gisland::io ALIAS gisland_io)
 target_compile_features(gisland_io PUBLIC cxx_std_23)
 target_include_directories(
@@ -108,6 +171,17 @@ target_include_directories(
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 gisland_set_project_options(gisland_io)
+
+add_library(gisland_glib_runtime STATIC src/glib_main_context.cpp)
+add_library(gisland::glib_runtime ALIAS gisland_glib_runtime)
+target_compile_features(gisland_glib_runtime PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_glib_runtime
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+target_link_libraries(gisland_glib_runtime PRIVATE PkgConfig::GLIB2 PkgConfig::GIO2)
+gisland_set_project_options(gisland_glib_runtime)
 
 add_library(
   gisland_lua_runtime STATIC
@@ -141,7 +215,7 @@ gisland_set_project_options(gisland_clock_calendar)
 
 add_executable(gisland-lua-host src/lua_host_main.cpp)
 target_compile_features(gisland-lua-host PRIVATE cxx_std_23)
-target_link_libraries(gisland-lua-host PRIVATE gisland::lua_runtime)
+target_link_libraries(gisland-lua-host PRIVATE gisland::glib_runtime gisland::lua_runtime)
 gisland_set_project_options(gisland-lua-host)
 
 add_library(
@@ -365,21 +439,18 @@ install(
 )
 
 if(BUILD_TESTING)
-  find_program(LUA54_EXECUTABLE NAMES lua5.4 lua)
-  if(NOT LUA54_EXECUTABLE)
-    message(FATAL_ERROR "gisland tests require a Lua 5.4 interpreter (lua5.4 or lua)")
-  endif()
-  execute_process(
-    COMMAND "${LUA54_EXECUTABLE}" -e "io.write(_VERSION)"
-    RESULT_VARIABLE LUA54_VERSION_RESULT
-    OUTPUT_VARIABLE LUA54_INTERPRETER_VERSION
-    ERROR_VARIABLE LUA54_VERSION_ERROR
-  )
-  if(NOT LUA54_VERSION_RESULT EQUAL 0 OR NOT LUA54_INTERPRETER_VERSION STREQUAL "Lua 5.4")
-    message(
-      FATAL_ERROR
-        "gisland tests require a Lua 5.4 interpreter; ${LUA54_EXECUTABLE} reported "
-        "'${LUA54_INTERPRETER_VERSION}' (${LUA54_VERSION_ERROR})"
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME lgi_runtime_check
+      COMMAND
+        ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${LUA54_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    )
+  else()
+    add_test(
+      NAME lgi_runtime_check
+      COMMAND "${LUA54_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
     )
   endif()
   add_test(
@@ -522,7 +593,11 @@ if(BUILD_TESTING)
   target_compile_features(gisland_lua_host_tests PRIVATE cxx_std_23)
   target_link_libraries(
     gisland_lua_host_tests
-    PRIVATE gisland::lua_runtime Catch2::Catch2WithMain
+    PRIVATE
+      gisland::glib_runtime
+      gisland::lua_runtime
+      Catch2::Catch2WithMain
+      PkgConfig::GLIB2
   )
   target_compile_definitions(
     gisland_lua_host_tests
@@ -530,6 +605,12 @@ if(BUILD_TESTING)
       GISLAND_LUA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/lua"
       GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
   )
+  if(GISLAND_LGI_PREFIX)
+    target_compile_definitions(
+      gisland_lua_host_tests
+      PRIVATE GISLAND_TEST_LGI_PREFIX="${GISLAND_LGI_PREFIX}"
+    )
+  endif()
   add_dependencies(gisland_lua_host_tests gisland-lua-host)
   gisland_set_project_options(gisland_lua_host_tests)
   catch_discover_tests(
@@ -669,6 +750,7 @@ set(
   include/gisland/control_dispatcher.hpp
   include/gisland/context.hpp
   include/gisland/file_watcher.hpp
+  include/gisland/glib_main_context.hpp
   include/gisland/interaction.hpp
   include/gisland/ipc_server.hpp
   include/gisland/island.hpp
@@ -681,6 +763,7 @@ set(
   include/gisland/module_lifecycle.hpp
   include/gisland/module_manifest.hpp
   include/gisland/module_supervisor.hpp
+  include/gisland/poll.hpp
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
@@ -705,6 +788,7 @@ set(
   src/control_dispatcher.cpp
   src/context.cpp
   src/file_watcher.cpp
+  src/glib_main_context.cpp
   src/interaction.cpp
   src/ipc_server.cpp
   src/island.cpp
@@ -719,6 +803,7 @@ set(
   src/module_lifecycle.cpp
   src/module_manifest.cpp
   src/module_supervisor.cpp
+  src/poll.cpp
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp

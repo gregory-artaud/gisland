@@ -19,6 +19,7 @@ user's XDG directories and does not need to be added to this repository.
 - Git
 - clang-format and clang-tidy for optional quality checks
 - Lua 5.4 interpreter and development files for Lua modules and tests
+- A Lua 5.4-compatible `lgi`, plus GLib and Gio typelibs, for asynchronous Lua modules
 - Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
 - `pactl` for default output mute and volume controls
 - `timeout` for bounded audio module commands
@@ -49,7 +50,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  lua python-gobject gtk3 libpulse
+  lua54 lua54-lgi glib2 python-gobject gtk3 libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -64,6 +65,11 @@ cmake --build --preset dev
 ```
 
 raylib 6.0 is fetched automatically during the first configure.
+
+`lgi` is normally loaded from the Lua 5.4 system search path. For tests against an unpacked or
+staged installation, pass `-DGISLAND_LGI_ROOT=/path/to/root`; the root may contain either
+`share/lua/5.4` directly or under `usr/`. This test-only override is not compiled into installed
+binaries.
 
 For an optimized build:
 

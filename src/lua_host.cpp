@@ -445,6 +445,24 @@ public:
     return {};
   }
 
+  [[nodiscard]] std::expected<void, LuaHostError>
+  run_external_callbacks(TimePoint now, const Emit &emit, const std::function<void()> &dispatch) {
+    if (stopped_) {
+      return {};
+    }
+    external_dispatch_error_.reset();
+    external_dispatch_ = true;
+    current_emit_ = &emit;
+    current_time_ = now;
+    dispatch();
+    current_emit_ = nullptr;
+    external_dispatch_ = false;
+    if (external_dispatch_error_) {
+      return std::unexpected(std::move(*external_dispatch_error_));
+    }
+    return {};
+  }
+
 private:
   struct Timer {
     TimePoint deadline;
@@ -864,7 +882,11 @@ private:
       return std::unexpected(
           error(LuaHostErrorCode::output_error, "Lua API called outside host dispatch"));
     }
-    return (*current_emit_)(std::move(record));
+    auto emitted = (*current_emit_)(std::move(record));
+    if (!emitted && external_dispatch_ && !external_dispatch_error_) {
+      external_dispatch_error_ = emitted.error();
+    }
+    return emitted;
   }
 
   [[nodiscard]] std::expected<void, LuaHostError> invoke_update() {
@@ -920,12 +942,14 @@ private:
   bool initialized_{};
   bool stopped_{};
   std::string callback_error_;
+  std::optional<LuaHostError> external_dispatch_error_;
   std::optional<std::chrono::milliseconds> every_;
   std::optional<TimePoint> periodic_deadline_;
   std::vector<Timer> timers_;
   std::vector<nlohmann::json> buffered_output_;
   std::size_t buffered_output_bytes_{};
   const Emit *current_emit_{};
+  bool external_dispatch_{};
   TimePoint current_time_{};
   TimePoint current_time_for_record_{};
   std::uint64_t next_timer_sequence_{};
@@ -1017,6 +1041,12 @@ std::optional<LuaHost::TimePoint> LuaHost::next_deadline() const noexcept {
 
 std::expected<void, LuaHostError> LuaHost::run_due(TimePoint now, const Emit &emit) {
   return impl_->run_due(now, emit);
+}
+
+std::expected<void, LuaHostError>
+LuaHost::run_external_callbacks(TimePoint now, const Emit &emit,
+                                const std::function<void()> &dispatch) {
+  return impl_->run_external_callbacks(now, emit, dispatch);
 }
 
 int lua_host_poll_timeout(std::optional<LuaHost::TimePoint> deadline, LuaHost::TimePoint now) {

@@ -2,10 +2,14 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include <poll.h>
+
+#include <array>
 #include <cstddef>
 #include <expected>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace gisland {
@@ -50,11 +54,14 @@ public:
   LuaTransport &operator=(LuaTransport &&) noexcept;
 
   [[nodiscard]] Result send(nlohmann::json record);
-  [[nodiscard]] Result poll_once(int timeout_ms);
+  [[nodiscard]] std::array<pollfd, 2> poll_descriptors(bool read_enabled = true) const;
+  [[nodiscard]] Result advance(std::span<const pollfd> descriptors);
+  [[nodiscard]] Result poll_once(int timeout_ms, bool read_enabled = true);
   [[nodiscard]] Result run();
 
   [[nodiscard]] std::size_t pending_output_messages() const noexcept;
   [[nodiscard]] std::size_t pending_output_bytes() const noexcept;
+  [[nodiscard]] bool has_buffered_input() const noexcept;
 
 private:
   class Impl;
