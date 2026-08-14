@@ -83,8 +83,8 @@ spread = 0
 color = "muted"
 
 [animation]
-compact_to_expanded_ms = 350
-context_change_ms = 250
+compact_to_expanded_ms = 325
+context_change_ms = 325
 easing = "ease-in-out"
 
 [animation.progress]
@@ -150,8 +150,8 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->shadow().spread == 0.0);
   REQUIRE(std::holds_alternative<std::string>(result->shadow().color));
   CHECK(std::get<std::string>(result->shadow().color) == "muted");
-  CHECK(result->animation().compact_to_expanded_ms == std::chrono::milliseconds{350});
-  CHECK(result->animation().context_change_ms == std::chrono::milliseconds{250});
+  CHECK(result->animation().compact_to_expanded_ms == std::chrono::milliseconds{325});
+  CHECK(result->animation().context_change_ms == std::chrono::milliseconds{325});
   CHECK(result->animation().easing == gisland::Easing::ease_in_out);
   CHECK(result->animation().progress.duration == std::chrono::milliseconds{270});
   CHECK(result->animation().progress.easing == gisland::Easing::ease_out);
@@ -494,14 +494,14 @@ TEST_CASE("theme rejects invalid animation values with exact paths") {
     CHECK(result.error().path == path);
   };
 
-  check_invalid(replace_once(std::string{valid_theme}, "compact_to_expanded_ms = 350",
+  check_invalid(replace_once(std::string{valid_theme}, "compact_to_expanded_ms = 325",
                              "compact_to_expanded_ms = -1"),
                 "animation.compact_to_expanded_ms");
-  check_invalid(replace_once(std::string{valid_theme}, "context_change_ms = 250",
+  check_invalid(replace_once(std::string{valid_theme}, "context_change_ms = 325",
                              "context_change_ms = 60001"),
                 "animation.context_change_ms");
-  check_invalid(replace_once(std::string{valid_theme}, "compact_to_expanded_ms = 350",
-                             "compact_to_expanded_ms = 350.0"),
+  check_invalid(replace_once(std::string{valid_theme}, "compact_to_expanded_ms = 325",
+                             "compact_to_expanded_ms = 325.0"),
                 "animation.compact_to_expanded_ms");
   check_invalid(
       replace_once(std::string{valid_theme}, "easing = \"ease-in-out\"", "easing = \"ease\""),
@@ -645,7 +645,7 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
 
   const auto animation = gisland::parse_theme(
       replace_once(std::string{valid_theme},
-                   "[animation]\ncompact_to_expanded_ms = 350\ncontext_change_ms = 250\n"
+                   "[animation]\ncompact_to_expanded_ms = 325\ncontext_change_ms = 325\n"
                    "easing = \"ease-in-out\"\n\n[animation.progress]\n"
                    "duration_ms = 270\neasing = \"ease-out\"\n\n"
                    "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"

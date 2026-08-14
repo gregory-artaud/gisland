@@ -200,51 +200,71 @@ LayoutPlan ProgressAnimator::apply(const LayoutPlan &plan) const {
   return animated;
 }
 
-void ContentCrossfade::set_mode(IslandMode mode) {
+namespace {
+
+struct ContentOpacity {
+  float outgoing;
+  float incoming;
+};
+
+ContentOpacity black_fade_opacity(float progress) {
+  constexpr float fade_out_end = 0.38F;
+  constexpr float fade_in_start = 0.48F;
+  const float clamped = std::clamp(progress, 0.0F, 1.0F);
+  if (clamped < fade_out_end) {
+    return {.outgoing = 1.0F - apply_easing(clamped / fade_out_end, Easing::ease_in),
+            .incoming = 0.0F};
+  }
+  if (clamped <= fade_in_start) {
+    return {.outgoing = 0.0F, .incoming = 0.0F};
+  }
+  return {.outgoing = 0.0F,
+          .incoming = apply_easing((clamped - fade_in_start) / (1.0F - fade_in_start),
+                                   Easing::ease_out)};
+}
+
+} // namespace
+
+void ContentCrossfade::set_mode(IslandMode mode, std::chrono::milliseconds duration) {
   if (mode == mode_) {
     return;
   }
+  outgoing_mode_ = mode_;
+  outgoing_start_opacity_ =
+      outgoing_mode_ == IslandMode::compact ? compact_.opacity : expanded_.opacity;
   mode_ = mode;
-  retarget(compact_, mode == IslandMode::compact);
-  retarget(expanded_, mode == IslandMode::expanded);
+  elapsed_seconds_ = 0.0F;
+  duration_seconds_ = std::max(std::chrono::duration<float>{duration}.count(), 0.0F);
+  compact_ = {0.0F, 0.0F, 1.0F};
+  expanded_ = {0.0F, 0.0F, 1.0F};
+  if (duration_seconds_ <= 0.0F) {
+    (mode_ == IslandMode::compact ? compact_ : expanded_).opacity = 1.0F;
+    return;
+  }
+  (outgoing_mode_ == IslandMode::compact ? compact_ : expanded_).opacity =
+      outgoing_start_opacity_;
 }
 
 void ContentCrossfade::update(float delta_seconds) {
-  const float nonnegative_delta = std::max(delta_seconds, 0.0F);
-  update_layer(compact_, nonnegative_delta);
-  update_layer(expanded_, nonnegative_delta);
+  if (duration_seconds_ <= 0.0F) {
+    return;
+  }
+  elapsed_seconds_ =
+      std::min(elapsed_seconds_ + std::max(delta_seconds, 0.0F), duration_seconds_);
+  const auto opacity = black_fade_opacity(elapsed_seconds_ / duration_seconds_);
+  compact_.opacity = 0.0F;
+  expanded_.opacity = 0.0F;
+  (outgoing_mode_ == IslandMode::compact ? compact_ : expanded_).opacity =
+      outgoing_start_opacity_ * opacity.outgoing;
+  (mode_ == IslandMode::compact ? compact_ : expanded_).opacity = opacity.incoming;
+  if (elapsed_seconds_ >= duration_seconds_) {
+    duration_seconds_ = 0.0F;
+  }
 }
 
-ContentVisual ContentCrossfade::compact() const { return compact_.value; }
+ContentVisual ContentCrossfade::compact() const { return compact_; }
 
-ContentVisual ContentCrossfade::expanded() const { return expanded_.value; }
-
-void ContentCrossfade::retarget(LayerTransition &layer, bool active) {
-  layer.start = layer.value;
-  layer.target = active ? ContentVisual{1.0F, 0.0F, 1.0F} : ContentVisual{0.0F, 6.0F, 0.96F};
-  layer.elapsed = 0.0F;
-  layer.delay = active ? 0.06F : 0.0F;
-}
-
-void ContentCrossfade::update_layer(LayerTransition &layer, float delta_seconds) {
-  constexpr float opacity_duration = 0.25F;
-  constexpr float blur_duration = 0.30F;
-  constexpr float scale_duration = 0.35F;
-
-  layer.elapsed += delta_seconds;
-  const float active_elapsed = std::max(layer.elapsed - layer.delay, 0.0F);
-  const float opacity_progress =
-      cubic_bezier(active_elapsed / opacity_duration, 0.25F, 0.1F, 0.25F, 1.0F);
-  const float blur_progress =
-      cubic_bezier(active_elapsed / blur_duration, 0.25F, 0.1F, 0.25F, 1.0F);
-  const float scale_progress =
-      cubic_bezier(active_elapsed / scale_duration, 0.175F, 0.885F, 0.32F, 1.1F);
-  layer.value = {
-      .opacity = mix(layer.start.opacity, layer.target.opacity, opacity_progress),
-      .blur = mix(layer.start.blur, layer.target.blur, blur_progress),
-      .scale = mix(layer.start.scale, layer.target.scale, scale_progress),
-  };
-}
+ContentVisual ContentCrossfade::expanded() const { return expanded_; }
 
 void ContextTransition::start(IslandGeometry source, IslandGeometry target,
                               std::chrono::milliseconds duration, Easing easing) {
@@ -254,7 +274,8 @@ void ContextTransition::start(IslandGeometry source, IslandGeometry target,
   duration_seconds_ = std::max(std::chrono::duration<float>{duration}.count(), 0.0F);
   easing_ = easing;
   active_ = duration_seconds_ > 0.0F;
-  progress_ = active_ ? 0.0F : 1.0F;
+  linear_progress_ = active_ ? 0.0F : 1.0F;
+  progress_ = linear_progress_;
 }
 
 ContextTransitionKind classify_context_transition(const std::optional<ContextKey> &current_compact,
@@ -268,6 +289,12 @@ ContextTransitionKind classify_context_transition(const std::optional<ContextKey
 
 float context_incoming_opacity(ContextTransitionKind kind, const ContextTransitionVisual &visual) {
   return kind == ContextTransitionKind::aligned_content_crossfade ? 1.0F : visual.incoming_opacity;
+}
+
+float context_outgoing_opacity(ContextTransitionKind kind, const ContextTransitionVisual &visual) {
+  return kind == ContextTransitionKind::aligned_content_crossfade
+             ? visual.local_outgoing_opacity
+             : visual.outgoing_opacity;
 }
 
 bool preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requested_mode,
@@ -285,9 +312,9 @@ void ContextTransition::update(float delta_seconds) {
     return;
   }
   elapsed_seconds_ += std::max(delta_seconds, 0.0F);
-  const float linear_progress = std::clamp(elapsed_seconds_ / duration_seconds_, 0.0F, 1.0F);
-  progress_ = apply_easing(linear_progress, easing_);
-  if (linear_progress >= 1.0F) {
+  linear_progress_ = std::clamp(elapsed_seconds_ / duration_seconds_, 0.0F, 1.0F);
+  progress_ = apply_easing(linear_progress_, easing_);
+  if (linear_progress_ >= 1.0F) {
     progress_ = 1.0F;
     active_ = false;
   }
@@ -296,10 +323,13 @@ void ContextTransition::update(float delta_seconds) {
 bool ContextTransition::active() const { return active_; }
 
 ContextTransitionVisual ContextTransition::visual() const {
+  const auto opacity = black_fade_opacity(linear_progress_);
   return {
       .geometry = interpolate(source_, target_, progress_),
-      .outgoing_opacity = 1.0F - progress_,
-      .incoming_opacity = progress_,
+      .outgoing_opacity = opacity.outgoing,
+      .incoming_opacity = opacity.incoming,
+      .local_outgoing_opacity = 1.0F - progress_,
+      .surface_progress = progress_,
   };
 }
 
