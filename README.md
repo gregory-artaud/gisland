@@ -9,9 +9,10 @@ A C++23 raylib application for Linux/X11.
 - GCC or Clang with C++23 support
 - Git
 - clang-format and clang-tidy for optional quality checks
-- Lua 5.4 development files for Lua modules
+- Lua 5.4 interpreter and development files for Lua modules and tests
 - Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
 - `pactl` for default output mute and volume controls
+- `timeout` for bounded audio module commands
 - tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
@@ -21,7 +22,7 @@ A C++23 raylib application for Linux/X11.
 sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
-  libpango1.0-dev libfontconfig1-dev liblua5.4-dev python3 python3-gi \
+  libpango1.0-dev libfontconfig1-dev lua5.4 liblua5.4-dev python3 python3-gi \
   gir1.2-gtk-3.0 pulseaudio-utils
 ```
 
@@ -74,7 +75,8 @@ The script builds the release before interrupting a running instance, installs u
 reloads the systemd user manager, and enables and starts `gisland.service`. It does not use `sudo`,
 update the source checkout, install system packages, or modify user configuration and modules.
 
-For troubleshooting, the equivalent build and installation commands are:
+For troubleshooting or as the basis of a fresh custom-prefix installation, the underlying CMake
+commands are:
 
 ```bash
 cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
@@ -85,6 +87,11 @@ systemctl --user daemon-reload
 systemctl --user import-environment DISPLAY XAUTHORITY
 systemctl --user enable --now gisland.service
 ```
+
+This manual sequence is not an equivalent upgrade path: CMake installs current files but cannot
+safely identify and remove files owned by older releases. Use `./scripts/install-local.sh` for
+user-local updates that require legacy audio migration and cleanup. For another prefix, review and
+remove stale release-owned files explicitly before using the manual sequence.
 
 The installation owns binaries, the user service, and private distributed resources under
 `$HOME/.local/share/gisland/distributed`. It never writes user configuration or custom modules under
@@ -106,10 +113,10 @@ exec --no-startup-id systemctl --user import-environment DISPLAY XAUTHORITY
 exec --no-startup-id systemctl --user start gisland.service
 bindsym $mod+grave exec --no-startup-id gislandctl toggle
 bindsym $mod+Shift+grave exec --no-startup-id gislandctl close
-bindsym $mod+m exec --no-startup-id gisland-audio-control mute
-bindsym XF86AudioMute exec --no-startup-id gisland-audio-control mute
-bindsym XF86AudioRaiseVolume exec --no-startup-id gisland-audio-control up
-bindsym XF86AudioLowerVolume exec --no-startup-id gisland-audio-control down
+bindsym $mod+m exec --no-startup-id gislandctl action audio toggle-mute
+bindsym XF86AudioMute exec --no-startup-id gislandctl action audio toggle-mute
+bindsym XF86AudioRaiseVolume exec --no-startup-id gislandctl action audio volume-up
+bindsym XF86AudioLowerVolume exec --no-startup-id gislandctl action audio volume-down
 ```
 
 Equivalent sxhkd bindings are ordinary commands:

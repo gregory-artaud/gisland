@@ -978,6 +978,50 @@ TEST_CASE("lua host process verifies discovered entry bytes before loading") {
   }
 }
 
+TEST_CASE("lua host process overrides its executable directory before loading scripts") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "bindir.lua";
+  const auto marker = temporary.path() / "bindir.txt";
+  const auto expected = std::filesystem::canonical(GISLAND_LUA_HOST_PATH).parent_path().string();
+  write_file(entry, "local file = assert(io.open(" + nlohmann::json(marker.string()).dump() +
+                        ", 'w'))\n"
+                        "file:write(assert(os.getenv('GISLAND_LUA_HOST_BINDIR')))\n"
+                        "file:close()\n"
+                        "return gisland.module {}\n");
+
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    static_cast<void>(::setenv("GISLAND_LUA_HOST_BINDIR", "/spoofed", 1));
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  std::string text;
+  for (int attempt = 0; attempt < 100 && !text.contains('\n'); ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+  REQUIRE(text.contains('\n'));
+  CHECK(nlohmann::json::parse(text.substr(0, text.find('\n'))).at("type") == "ready");
+  REQUIRE(std::filesystem::exists(marker));
+  std::ifstream marker_stream{marker};
+  CHECK(std::string{std::istreambuf_iterator<char>{marker_stream}, {}} == expected);
+
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
 TEST_CASE("lua_host_timer parses bounded durations", "[lua_host_timer]") {
   using namespace std::chrono_literals;
   CHECK(gisland::LuaHost::parse_duration("1ms") == 1ms);

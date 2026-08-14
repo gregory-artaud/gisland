@@ -31,6 +31,19 @@ namespace {
   return {gisland::LuaTransportErrorCode::callback_failed, error.message};
 }
 
+[[nodiscard]] std::expected<void, std::string> set_host_bindir() {
+  std::error_code error;
+  const auto executable = std::filesystem::canonical("/proc/self/exe", error);
+  if (error) {
+    return std::unexpected("cannot resolve the host executable directory");
+  }
+  const auto bindir = executable.parent_path().string();
+  if (::setenv("GISLAND_LUA_HOST_BINDIR", bindir.c_str(), 1) != 0) {
+    return std::unexpected("cannot export the host executable directory");
+  }
+  return {};
+}
+
 [[nodiscard]] std::expected<std::string, std::string>
 read_expected_entry(const std::filesystem::path &path, std::string_view expected) {
   const int directory =
@@ -92,6 +105,10 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   std::signal(SIGPIPE, SIG_IGN);
+  if (const auto bindir = set_host_bindir(); !bindir) {
+    std::cerr << "gisland-lua-host: " << bindir.error() << '\n';
+    return EXIT_FAILURE;
+  }
 
   std::expected<std::unique_ptr<gisland::LuaHost>, gisland::LuaHostError> host;
   const std::string_view fingerprint_argument = argc >= 3 ? argv[2] : "";

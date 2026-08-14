@@ -272,17 +272,6 @@ file(
   CHMOD "${PROJECT_BINARY_DIR}/gisland-battery"
   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
 )
-set(GISLAND_AUDIO_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/audio")
-configure_file(packaging/gisland-audio.in "${PROJECT_BINARY_DIR}/gisland-audio" @ONLY)
-configure_file(
-  packaging/gisland-audio-control.in
-  "${PROJECT_BINARY_DIR}/gisland-audio-control"
-  @ONLY
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-audio" "${PROJECT_BINARY_DIR}/gisland-audio-control"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
 set(
   GISLAND_NOTIFICATION_PYTHON_ROOT
   "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
@@ -301,17 +290,6 @@ set(GISLAND_BATTERY_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/battery")
 configure_file(
   packaging/gisland-battery.in
   "${PROJECT_BINARY_DIR}/install/gisland-battery"
-  @ONLY
-)
-set(GISLAND_AUDIO_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/audio")
-configure_file(
-  packaging/gisland-audio.in
-  "${PROJECT_BINARY_DIR}/install/gisland-audio"
-  @ONLY
-)
-configure_file(
-  packaging/gisland-audio-control.in
-  "${PROJECT_BINARY_DIR}/install/gisland-audio-control"
   @ONLY
 )
 configure_file(
@@ -346,6 +324,13 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/audio"
 )
 install(
+  FILES
+    assets/modules/audio/config.toml
+    assets/modules/audio/audio.lua
+    assets/modules/audio/command.lua
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/audio"
+)
+install(
   FILES "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
   RENAME module.toml
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/lua-example"
@@ -362,8 +347,6 @@ install(
     "${PROJECT_BINARY_DIR}/install/gisland-notifications"
     "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
     "${PROJECT_BINARY_DIR}/install/gisland-battery"
-    "${PROJECT_BINARY_DIR}/install/gisland-audio"
-    "${PROJECT_BINARY_DIR}/install/gisland-audio-control"
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(
@@ -377,16 +360,28 @@ install(
   PATTERN "__pycache__" EXCLUDE
 )
 install(
-  DIRECTORY modules/audio/gisland_audio
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/audio"
-  PATTERN "__pycache__" EXCLUDE
-)
-install(
   FILES "${PROJECT_BINARY_DIR}/install/gisland.service"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/systemd/user"
 )
 
 if(BUILD_TESTING)
+  find_program(LUA54_EXECUTABLE NAMES lua5.4 lua)
+  if(NOT LUA54_EXECUTABLE)
+    message(FATAL_ERROR "gisland tests require a Lua 5.4 interpreter (lua5.4 or lua)")
+  endif()
+  execute_process(
+    COMMAND "${LUA54_EXECUTABLE}" -e "io.write(_VERSION)"
+    RESULT_VARIABLE LUA54_VERSION_RESULT
+    OUTPUT_VARIABLE LUA54_INTERPRETER_VERSION
+    ERROR_VARIABLE LUA54_VERSION_ERROR
+  )
+  if(NOT LUA54_VERSION_RESULT EQUAL 0 OR NOT LUA54_INTERPRETER_VERSION STREQUAL "Lua 5.4")
+    message(
+      FATAL_ERROR
+        "gisland tests require a Lua 5.4 interpreter; ${LUA54_EXECUTABLE} reported "
+        "'${LUA54_INTERPRETER_VERSION}' (${LUA54_VERSION_ERROR})"
+    )
+  endif()
   add_test(
     NAME notifications_python
     COMMAND
@@ -403,11 +398,20 @@ if(BUILD_TESTING)
       "${PROJECT_SOURCE_DIR}/tests/battery" -p "test_*.py" -v
   )
   add_test(
-    NAME audio_python
+    NAME audio_command
     COMMAND
-      dbus-run-session -- env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/audio"
-      "${Python3_EXECUTABLE}" -m unittest discover -s
-      "${PROJECT_SOURCE_DIR}/tests/audio" -p "test_*.py" -v
+      ${CMAKE_COMMAND} -E env "GISLAND_LUA_EXECUTABLE=${LUA54_EXECUTABLE}"
+      "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/audio/test_lua_command.py" -v
+  )
+  add_test(
+    NAME audio_contract
+    COMMAND
+      "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/audio/audio_contract.py"
+      --module-command
+      "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua\"]"
+      --fake-path "${PROJECT_SOURCE_DIR}/tests/audio/fixtures"
+      --init
+      "{\"type\":\"init\",\"protocol\":{\"minimum\":{\"major\":1,\"minor\":8},\"maximum\":{\"major\":1,\"minor\":8}},\"instance_id\":\"audio-contract\",\"capabilities\":[\"independent-views\",\"compact-view-styles\",\"icon-roles\",\"progress-transitions\"],\"configuration\":{},\"locale\":\"C\",\"timezone\":\"UTC\"}"
   )
   add_test(
     NAME install_local_script
@@ -559,14 +563,21 @@ if(BUILD_TESTING)
       gisland_application_x11_smoke_tests
       PRIVATE
         GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
+        GISLANDCTL_BINARY_PATH="$<TARGET_FILE:gislandctl>"
         GISLAND_CLOCK_CALENDAR_PATH="$<TARGET_FILE:gisland_clock_calendar>"
         GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
+        GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
+        GISLAND_AUDIO_LUA_PATH="${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua"
+        GISLAND_AUDIO_FAKE_PACTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-pactl"
+        GISLAND_AUDIO_FAKE_GISLANDCTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-gislandctl"
         GISLAND_NOTIFICATION_HISTORY_PATH="${PROJECT_BINARY_DIR}/gisland-notification-history"
     )
     gisland_set_project_options(gisland_application_x11_smoke_tests)
     add_dependencies(
       gisland_application_x11_smoke_tests
       gisland
+      gislandctl
+      gisland-lua-host
       gisland_clock_calendar
       fake_module
     )
@@ -622,9 +633,13 @@ if(BUILD_TESTING)
         GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
         GISLAND_TEST_BASELINE_ROOT="${PROJECT_SOURCE_DIR}/tests/baselines"
         GISLAND_VISUAL_ARTIFACT_ROOT="${PROJECT_BINARY_DIR}/visual-artifacts"
+        GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
+        GISLAND_AUDIO_LUA_PATH="${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua"
+        GISLAND_AUDIO_FAKE_PACTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-pactl"
+        GISLAND_AUDIO_FAKE_GISLANDCTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-gislandctl"
     )
     gisland_set_project_options(gisland_visual_regression_tests)
-    add_dependencies(gisland_visual_regression_tests gisland_assets)
+    add_dependencies(gisland_visual_regression_tests gisland-lua-host gisland_assets)
     catch_discover_tests(
       gisland_visual_regression_tests
       TEST_PREFIX "visual_regression::"
@@ -718,6 +733,7 @@ set(
   src/x11_window_host.cpp
   src/x11_shape.cpp
   tests/fake_module.cpp
+  tests/audio/audio_process.hpp
   tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
   tests/bootstrap_test.cpp

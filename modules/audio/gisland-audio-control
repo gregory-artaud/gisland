@@ -1,5 +1,0 @@
-#!/usr/bin/env python3
-from gisland_audio.control import main
-
-
-raise SystemExit(main())

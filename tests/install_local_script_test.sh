@@ -25,6 +25,24 @@ assert_not_contains() {
   fi
 }
 
+assert_exists() {
+  [[ -e $1 ]] || fail "missing expected path: $1"
+}
+
+assert_not_exists() {
+  [[ ! -e $1 ]] || fail "unexpected path: $1"
+}
+
+assert_service_state() {
+  local case_dir=$1
+  local active=$2
+  local enabled=$3
+  [[ $(<"$case_dir/service-active") == "$active" ]] ||
+    fail "unexpected active state for $case_dir"
+  [[ $(<"$case_dir/service-enabled") == "$enabled" ]] ||
+    fail "unexpected enabled state for $case_dir"
+}
+
 line_number() {
   local file=$1
   local expected=$2
@@ -44,9 +62,27 @@ make_case() {
   local name=$1
   local case_dir="$test_root/$name"
   mkdir -p "$case_dir/bin" "$case_dir/home/.config/gisland" \
+    "$case_dir/xdg-config/gisland" "$case_dir/xdg-data/gisland" \
+    "$case_dir/home/.local/bin" \
+    "$case_dir/home/.local/share/gisland/audio/gisland_audio" \
+    "$case_dir/home/.local/share/gisland/distributed/modules/audio-lua" \
     "$case_dir/home/.local/share/gisland/modules"
   printf 'keep-config\n' >"$case_dir/home/.config/gisland/config.toml"
+  printf 'keep-xdg-config\n' >"$case_dir/xdg-config/gisland/sentinel"
+  printf 'keep-xdg-data\n' >"$case_dir/xdg-data/gisland/sentinel"
   printf 'keep-module\n' >"$case_dir/home/.local/share/gisland/modules/sentinel"
+  printf 'legacy-audio\n' >"$case_dir/home/.local/bin/gisland-audio"
+  printf 'legacy-control\n' >"$case_dir/home/.local/bin/gisland-audio-control"
+  printf 'legacy-package\n' \
+    >"$case_dir/home/.local/share/gisland/audio/gisland_audio/application.py"
+  mkdir -p "$case_dir/home/.local/share/gisland/audio/gisland_audio/__pycache__"
+  printf 'legacy-cache\n' \
+    >"$case_dir/home/.local/share/gisland/audio/gisland_audio/__pycache__/application.pyc"
+  printf 'keep-audio-sibling\n' \
+    >"$case_dir/home/.local/share/gisland/audio/sentinel"
+  printf 'legacy-candidate\n' \
+    >"$case_dir/home/.local/share/gisland/distributed/modules/audio-lua/module.toml"
+  printf 'keep-bin\n' >"$case_dir/home/.local/bin/unrelated-tool"
   : >"$case_dir/commands.log"
 
   cat >"$case_dir/bin/cmake" <<'EOF'
@@ -63,16 +99,74 @@ if [[ ${1:-} == --install ]]; then
   mkdir -p "$HOME/.local/bin"
   cp "$FAKE_BIN_DIR/gislandctl-template" "$HOME/.local/bin/gislandctl"
   chmod +x "$HOME/.local/bin/gislandctl"
+  if [[ ${FAKE_CMAKE_MISSING_AUDIO:-0} != 1 ]]; then
+    cp "$FAKE_BIN_DIR/gislandctl-template" "$HOME/.local/bin/gisland-lua-host"
+    chmod +x "$HOME/.local/bin/gisland-lua-host"
+    mkdir -p "$HOME/.local/share/gisland/distributed/modules/audio"
+    for package_file in module.toml config.toml audio.lua command.lua; do
+      printf 'replacement-audio\n' \
+        >"$HOME/.local/share/gisland/distributed/modules/audio/$package_file"
+    done
+  fi
 fi
+EOF
+
+  cat >"$case_dir/bin/rm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'rm|%s\n' "$*" >>"$TEST_COMMAND_LOG"
+if [[ -n ${FAKE_RM_FAIL_MATCH:-} && $* == *"$FAKE_RM_FAIL_MATCH"* ]]; then
+  exit 19
+fi
+/bin/rm "$@"
 EOF
 
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'systemctl|%s\n' "$*" >>"$TEST_COMMAND_LOG"
-if [[ $* == '--user is-active --quiet gisland.service' ]]; then
-  [[ ${FAKE_SERVICE_ACTIVE:-0} == 1 ]]
-fi
+state_dir=${TEST_COMMAND_LOG%/*}
+active_file="$state_dir/service-active"
+enabled_file="$state_dir/service-enabled"
+[[ -f $active_file ]] || printf '%s\n' "${FAKE_SERVICE_ACTIVE:-0}" >"$active_file"
+[[ -f $enabled_file ]] || {
+  if [[ ${FAKE_SERVICE_ENABLED:-0} == 1 ]]; then
+    printf 'enabled\n' >"$enabled_file"
+  else
+    printf '%s\n' "${FAKE_SERVICE_ENABLED_STATE:-disabled}" >"$enabled_file"
+  fi
+}
+
+case "$*" in
+  '--user is-active --quiet gisland.service')
+    [[ $(<"$active_file") == 1 ]]
+    ;;
+  '--user is-enabled gisland.service')
+    enabled_state=$(<"$enabled_file")
+    printf '%s\n' "$enabled_state"
+    [[ $enabled_state == enabled ]]
+    ;;
+  '--user stop gisland.service')
+    printf '0\n' >"$active_file"
+    ;;
+  '--user start gisland.service'|'--user restart gisland.service')
+    printf '1\n' >"$active_file"
+    ;;
+  '--user enable gisland.service')
+    printf 'enabled\n' >"$enabled_file"
+    ;;
+  '--user disable gisland.service')
+    printf 'disabled\n' >"$enabled_file"
+    ;;
+  '--user enable --now gisland.service')
+    printf 'enabled\n' >"$enabled_file"
+    printf '1\n' >"$active_file"
+    ;;
+  '--user disable --now gisland.service')
+    printf 'disabled\n' >"$enabled_file"
+    printf '0\n' >"$active_file"
+    ;;
+esac
 EOF
 
   cat >"$case_dir/bin/journalctl" <<'EOF'
@@ -108,6 +202,8 @@ run_installer() {
   shift
   env -u DISPLAY -u XAUTHORITY \
     HOME="$case_dir/home" \
+    XDG_CONFIG_HOME="$case_dir/xdg-config" \
+    XDG_DATA_HOME="$case_dir/xdg-data" \
     PATH="$case_dir/bin:/usr/bin:/bin" \
     TEST_COMMAND_LOG="$case_dir/commands.log" \
     FAKE_BIN_DIR="$case_dir/bin" \
@@ -117,7 +213,8 @@ run_installer() {
 
 success_case=$(make_case success)
 run_installer "$success_case" \
-  FAKE_SERVICE_ACTIVE=1 DISPLAY=:55 XAUTHORITY="$success_case/Xauthority"
+  FAKE_SERVICE_ACTIVE=1 FAKE_SERVICE_ENABLED=1 \
+  DISPLAY=:55 XAUTHORITY="$success_case/Xauthority"
 success_log="$success_case/commands.log"
 assert_contains "$success_log" "cmake|--preset release -DCMAKE_INSTALL_PREFIX=$success_case/home/.local"
 assert_contains "$success_log" 'cmake|--build --preset release'
@@ -127,19 +224,43 @@ assert_contains "$success_log" 'systemctl|--user daemon-reload'
 assert_contains "$success_log" 'systemctl|--user import-environment DISPLAY XAUTHORITY'
 assert_contains "$success_log" 'systemctl|--user enable --now gisland.service'
 assert_contains "$success_log" 'gislandctl|status'
+assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio"
+assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio-control"
+assert_contains "$success_log" \
+  "rm|-rf -- $success_case/home/.local/share/gisland/audio/gisland_audio"
+assert_contains "$success_log" \
+  "rm|-rf -- $success_case/home/.local/share/gisland/distributed/modules/audio-lua"
 assert_not_contains "$success_log" 'sudo'
 assert_not_contains "$success_log" '/usr/local'
+assert_service_state "$success_case" 1 enabled
 
 build_line=$(line_number "$success_log" 'cmake|--build --preset release')
 stop_line=$(line_number "$success_log" 'systemctl|--user stop gisland.service')
+install_line=$(line_number "$success_log" 'cmake|--install build/release')
+cleanup_line=$(line_number "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio")
+start_line=$(line_number "$success_log" 'systemctl|--user enable --now gisland.service')
 ((build_line < stop_line)) || fail 'the build must complete before the service stops'
+((stop_line < install_line && install_line < cleanup_line && cleanup_line < start_line)) ||
+  fail 'legacy cleanup must follow install while the service is stopped'
+assert_not_exists "$success_case/home/.local/bin/gisland-audio"
+assert_not_exists "$success_case/home/.local/bin/gisland-audio-control"
+assert_not_exists "$success_case/home/.local/share/gisland/audio/gisland_audio"
+assert_not_exists "$success_case/home/.local/share/gisland/distributed/modules/audio-lua"
+assert_exists "$success_case/home/.local/bin/unrelated-tool"
+[[ $(<"$success_case/home/.local/share/gisland/audio/sentinel") == keep-audio-sibling ]] ||
+  fail 'legacy audio cleanup changed a sibling file'
 [[ $(<"$success_case/home/.config/gisland/config.toml") == keep-config ]] ||
   fail 'user configuration changed'
+[[ $(<"$success_case/xdg-config/gisland/sentinel") == keep-xdg-config ]] ||
+  fail 'XDG configuration changed'
+[[ $(<"$success_case/xdg-data/gisland/sentinel") == keep-xdg-data ]] ||
+  fail 'XDG data changed'
 [[ $(<"$success_case/home/.local/share/gisland/modules/sentinel") == keep-module ]] ||
   fail 'user module changed'
 
 run_installer "$success_case" \
-  FAKE_SERVICE_ACTIVE=1 DISPLAY=:55 XAUTHORITY="$success_case/Xauthority"
+  FAKE_SERVICE_ACTIVE=1 FAKE_SERVICE_ENABLED=1 \
+  DISPLAY=:55 XAUTHORITY="$success_case/Xauthority"
 
 build_failure_case=$(make_case build-failure)
 if run_installer "$build_failure_case" FAKE_CMAKE_FAILURE=build FAKE_SERVICE_ACTIVE=1; then
@@ -147,20 +268,82 @@ if run_installer "$build_failure_case" FAKE_CMAKE_FAILURE=build FAKE_SERVICE_ACT
 fi
 assert_not_contains "$build_failure_case/commands.log" 'systemctl|--user is-active'
 assert_not_contains "$build_failure_case/commands.log" 'systemctl|--user stop'
+assert_not_contains "$build_failure_case/commands.log" 'rm|'
+assert_exists "$build_failure_case/home/.local/bin/gisland-audio"
+assert_exists "$build_failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
 
 install_failure_case=$(make_case install-failure)
-if run_installer "$install_failure_case" FAKE_CMAKE_FAILURE=install FAKE_SERVICE_ACTIVE=1; then
+if run_installer "$install_failure_case" FAKE_CMAKE_FAILURE=install \
+  FAKE_SERVICE_ACTIVE=1 FAKE_SERVICE_ENABLED=1; then
   fail 'an install failure must fail the installer'
 fi
 assert_contains "$install_failure_case/commands.log" 'systemctl|--user stop gisland.service'
 assert_contains "$install_failure_case/commands.log" 'systemctl|--user start gisland.service'
+assert_not_contains "$install_failure_case/commands.log" 'rm|'
+assert_exists "$install_failure_case/home/.local/bin/gisland-audio-control"
+assert_exists \
+  "$install_failure_case/home/.local/share/gisland/distributed/modules/audio-lua/module.toml"
 
-health_failure_case=$(make_case health-failure)
-if run_installer "$health_failure_case" FAKE_HEALTH_STATUS=1 FAKE_SERVICE_ACTIVE=0; then
-  fail 'an unhealthy installed service must fail the installer'
+replacement_failure_case=$(make_case replacement-failure)
+if run_installer "$replacement_failure_case" FAKE_CMAKE_MISSING_AUDIO=1 \
+  FAKE_SERVICE_ACTIVE=1 FAKE_SERVICE_ENABLED=1; then
+  fail 'a missing replacement audio package must fail the installer'
 fi
-assert_contains "$health_failure_case/commands.log" \
-  'journalctl|--user -u gisland.service --no-pager -n 20'
-assert_not_contains "$health_failure_case/commands.log" 'systemctl|--user import-environment'
+assert_contains "$replacement_failure_case/commands.log" 'systemctl|--user stop gisland.service'
+assert_contains "$replacement_failure_case/commands.log" 'systemctl|--user start gisland.service'
+assert_not_contains "$replacement_failure_case/commands.log" 'rm|'
+assert_exists "$replacement_failure_case/home/.local/bin/gisland-audio"
+assert_exists "$replacement_failure_case/home/.local/bin/gisland-audio-control"
+assert_exists "$replacement_failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
+
+for failure_kind in health cleanup; do
+  for active in 0 1; do
+    for enabled in 0 1; do
+      failure_case=$(make_case "$failure_kind-$active-$enabled")
+      if [[ $failure_kind == health ]]; then
+        if run_installer "$failure_case" FAKE_HEALTH_STATUS=1 \
+          FAKE_SERVICE_ACTIVE="$active" FAKE_SERVICE_ENABLED="$enabled"; then
+          fail 'an unhealthy installed service must fail the installer'
+        fi
+        assert_contains "$failure_case/commands.log" \
+          'journalctl|--user -u gisland.service --no-pager -n 20'
+        assert_not_contains "$failure_case/commands.log" \
+          'systemctl|--user import-environment'
+      else
+        if run_installer "$failure_case" FAKE_RM_FAIL_MATCH=gisland-audio-control \
+          FAKE_SERVICE_ACTIVE="$active" FAKE_SERVICE_ENABLED="$enabled"; then
+          fail 'a legacy cleanup failure must fail the installer'
+        fi
+        assert_not_exists "$failure_case/home/.local/bin/gisland-audio"
+        assert_exists "$failure_case/home/.local/bin/gisland-audio-control"
+        assert_exists \
+          "$failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
+      fi
+
+      if [[ $enabled == 1 ]]; then
+        assert_contains "$failure_case/commands.log" 'systemctl|--user enable gisland.service'
+        expected_enabled=enabled
+      else
+        assert_contains "$failure_case/commands.log" 'systemctl|--user disable gisland.service'
+        expected_enabled=disabled
+      fi
+      if [[ $active == 1 ]]; then
+        assert_contains "$failure_case/commands.log" 'systemctl|--user start gisland.service'
+      else
+        assert_contains "$failure_case/commands.log" 'systemctl|--user stop gisland.service'
+      fi
+      assert_service_state "$failure_case" "$active" "$expected_enabled"
+    done
+  done
+done
+
+masked_failure_case=$(make_case masked-failure)
+if run_installer "$masked_failure_case" FAKE_CMAKE_FAILURE=install \
+  FAKE_SERVICE_ACTIVE=0 FAKE_SERVICE_ENABLED_STATE=masked; then
+  fail 'an install failure with a masked service must fail the installer'
+fi
+assert_not_contains "$masked_failure_case/commands.log" 'systemctl|--user enable gisland.service'
+assert_not_contains "$masked_failure_case/commands.log" 'systemctl|--user disable gisland.service'
+assert_service_state "$masked_failure_case" 0 masked
 
 printf 'install-local behavioral tests passed\n'

@@ -112,8 +112,8 @@ id = "audio"
 module = "audio"
 enabled = true
 restart = "on-failure"
-protocol_min = "1.7"
-protocol_max = "1.7"
+protocol_min = "1.8"
+protocol_max = "1.8"
 
 [modules.options]
 step_percent = 5

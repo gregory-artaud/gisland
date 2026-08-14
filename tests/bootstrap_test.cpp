@@ -173,14 +173,25 @@ TEST_CASE(
   CHECK(bootstrap->config.modules[2].minimum_protocol == gisland::ProtocolVersion{1, 5});
   CHECK(bootstrap->config.modules[2].maximum_protocol == gisland::ProtocolVersion{1, 5});
   CHECK(bootstrap->config.modules[3].module_id == "audio");
-  CHECK(bootstrap->config.modules[3].command.front() == "gisland-audio");
-  CHECK(bootstrap->config.modules[3].minimum_protocol == gisland::ProtocolVersion{1, 7});
-  CHECK(bootstrap->config.modules[3].maximum_protocol == gisland::ProtocolVersion{1, 7});
+  const auto audio_package = std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "modules/audio";
+  CHECK(bootstrap->config.modules[3].command.front() == "gisland-lua-host");
+  REQUIRE(bootstrap->config.modules[3].command.size() == 3);
+  CHECK(bootstrap->config.modules[3].command[1] ==
+        std::filesystem::canonical(audio_package / "audio.lua"));
+  CHECK(bootstrap->config.modules[3].minimum_protocol == gisland::ProtocolVersion{1, 8});
+  CHECK(bootstrap->config.modules[3].maximum_protocol == gisland::ProtocolVersion{1, 8});
   CHECK(std::get<std::int64_t>(bootstrap->config.modules[3].options.at("step_percent").value) == 5);
   CHECK(std::get<std::int64_t>(bootstrap->config.modules[3].options.at("maximum_percent").value) ==
         150);
   CHECK(std::get<std::int64_t>(bootstrap->config.modules[3].options.at("hud_duration_ms").value) ==
         1500);
+  REQUIRE(bootstrap->config.modules[3].dependencies.config.has_value());
+  CHECK(bootstrap->config.modules[3].dependencies.config->path ==
+        std::filesystem::canonical(audio_package / "config.toml"));
+  REQUIRE(bootstrap->config.modules[3].dependencies.entry.has_value());
+  CHECK(bootstrap->config.modules[3].dependencies.entry->path ==
+        std::filesystem::canonical(audio_package / "audio.lua"));
+  CHECK(std::filesystem::is_regular_file(audio_package / "command.lua"));
   REQUIRE(bootstrap->manifest_paths.size() == 4);
   CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
   const auto *clock_view =

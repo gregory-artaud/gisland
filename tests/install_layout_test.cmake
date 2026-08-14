@@ -1,7 +1,11 @@
 file(REMOVE_RECURSE "${STAGING_DIR}")
+set(root "${STAGING_DIR}${INSTALL_PREFIX}")
 set(personal_manifest "${STAGING_DIR}/personal/gisland/modules/existing/module.toml")
+set(prefix_sentinel "${root}/${DATADIR}/gisland/custom/sentinel")
 file(MAKE_DIRECTORY "${STAGING_DIR}/personal/gisland/modules/existing")
+file(MAKE_DIRECTORY "${root}/${DATADIR}/gisland/custom")
 file(WRITE "${personal_manifest}" "personal module sentinel\n")
+file(WRITE "${prefix_sentinel}" "custom prefix sentinel\n")
 execute_process(
   COMMAND
     "${CMAKE_COMMAND}" -E env "DESTDIR=${STAGING_DIR}" "${CMAKE_COMMAND}" --install "${BUILD_DIR}"
@@ -13,7 +17,6 @@ if(NOT install_result EQUAL 0)
   message(FATAL_ERROR "install failed: ${install_output}${install_error}")
 endif()
 
-set(root "${STAGING_DIR}${INSTALL_PREFIX}")
 set(required_files
     "${root}/${BINDIR}/gisland"
     "${root}/${BINDIR}/gislandctl"
@@ -22,8 +25,6 @@ set(required_files
     "${root}/${BINDIR}/gisland-notifications"
     "${root}/${BINDIR}/gisland-notification-history"
     "${root}/${BINDIR}/gisland-battery"
-    "${root}/${BINDIR}/gisland-audio"
-    "${root}/${BINDIR}/gisland-audio-control"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
@@ -34,9 +35,11 @@ set(required_files
     "${root}/${DATADIR}/gisland/distributed/modules/lua-example/config.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/lua-example/view.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/lua-example/example.lua"
+    "${root}/${DATADIR}/gisland/distributed/modules/audio/config.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/audio/audio.lua"
+    "${root}/${DATADIR}/gisland/distributed/modules/audio/command.lua"
     "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
     "${root}/${DATADIR}/gisland/battery/gisland_battery/application.py"
-    "${root}/${DATADIR}/gisland/audio/gisland_audio/application.py"
     "${root}/${DATADIR}/systemd/user/gisland.service")
 foreach(required_file IN LISTS required_files)
   if(NOT EXISTS "${required_file}")
@@ -44,9 +47,26 @@ foreach(required_file IN LISTS required_files)
   endif()
 endforeach()
 
+set(forbidden_paths
+    "${root}/${BINDIR}/gisland-audio"
+    "${root}/${BINDIR}/gisland-audio-control"
+    "${root}/${DATADIR}/gisland/audio"
+    "${root}/${DATADIR}/gisland/distributed/modules/audio-lua"
+    "${root}/${DATADIR}/dbus-1/services/org.gisland.Audio.service"
+    "${root}/${DATADIR}/systemd/user/gisland-audio.service")
+foreach(forbidden_path IN LISTS forbidden_paths)
+  if(EXISTS "${forbidden_path}")
+    message(FATAL_ERROR "legacy audio path was installed: ${forbidden_path}")
+  endif()
+endforeach()
+
 file(READ "${personal_manifest}" personal_manifest_contents)
 if(NOT personal_manifest_contents STREQUAL "personal module sentinel\n")
   message(FATAL_ERROR "installation modified a personal module")
+endif()
+file(READ "${prefix_sentinel}" prefix_sentinel_contents)
+if(NOT prefix_sentinel_contents STREQUAL "custom prefix sentinel\n")
+  message(FATAL_ERROR "installation modified an unrelated custom-prefix file")
 endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/config.toml" distributed_config)
@@ -54,7 +74,6 @@ string(FIND "${distributed_config}" "module = \"lua-example\"" example_enabled_p
 if(NOT example_enabled_position EQUAL -1)
   message(FATAL_ERROR "the distributed Lua example must not be enabled by default")
 endif()
-
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/lua-example/module.toml"
      example_manifest)
 set(example_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-lua-host\"]")
@@ -75,16 +94,19 @@ if(command_position EQUAL -1)
 endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml" audio_manifest)
-set(audio_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-audio\"]")
+set(audio_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-lua-host\"]")
 string(FIND "${audio_manifest}" "${audio_command}" audio_command_position)
-string(FIND "${audio_manifest}" "minimum_minor = 7" audio_minimum_position)
-string(FIND "${audio_manifest}" "maximum_minor = 7" audio_maximum_position)
-string(FIND "${audio_manifest}" "step_percent = 5" audio_step_position)
-string(FIND "${audio_manifest}" "maximum_percent = 150" audio_limit_position)
-string(FIND "${audio_manifest}" "hud_duration_ms = 1500" audio_duration_position)
-if(audio_command_position EQUAL -1 OR audio_minimum_position EQUAL -1 OR
-   audio_maximum_position EQUAL -1 OR audio_step_position EQUAL -1 OR
-   audio_limit_position EQUAL -1 OR audio_duration_position EQUAL -1)
+string(FIND "${audio_manifest}" "entry = \"audio.lua\"" audio_entry_position)
+string(FIND "${audio_manifest}" "config = \"config.toml\"" audio_config_position)
+string(FIND "${audio_manifest}" "minimum_minor = 8" audio_minimum_position)
+string(FIND "${audio_manifest}" "maximum_minor = 8" audio_maximum_position)
+string(FIND "${audio_manifest}" "minimum = 1" audio_step_minimum_position)
+string(FIND "${audio_manifest}" "maximum = 60000" audio_duration_maximum_position)
+string(FIND "${audio_manifest}" "[defaults]" audio_inline_defaults_position)
+if(audio_command_position EQUAL -1 OR audio_entry_position EQUAL -1 OR
+   audio_config_position EQUAL -1 OR audio_minimum_position EQUAL -1 OR
+   audio_maximum_position EQUAL -1 OR audio_step_minimum_position EQUAL -1 OR
+   audio_duration_maximum_position EQUAL -1 OR NOT audio_inline_defaults_position EQUAL -1)
   message(FATAL_ERROR "installed audio manifest is incomplete: ${audio_manifest}")
 endif()
 
@@ -128,4 +150,33 @@ if(NOT service MATCHES "ExecStart=${INSTALL_PREFIX}/${BINDIR}/gisland")
 endif()
 if(NOT service MATCHES "Restart=on-failure")
   message(FATAL_ERROR "installed service does not restart on failure")
+endif()
+
+set(upgrade_staging_dir "${STAGING_DIR}-manual-upgrade")
+set(upgrade_root "${upgrade_staging_dir}${INSTALL_PREFIX}")
+set(upgrade_legacy_wrapper "${upgrade_root}/${BINDIR}/gisland-audio")
+set(upgrade_sentinel "${upgrade_root}/${DATADIR}/gisland/custom/sentinel")
+file(REMOVE_RECURSE "${upgrade_staging_dir}")
+file(MAKE_DIRECTORY "${upgrade_root}/${BINDIR}" "${upgrade_root}/${DATADIR}/gisland/custom")
+file(WRITE "${upgrade_legacy_wrapper}" "legacy wrapper sentinel\n")
+file(WRITE "${upgrade_sentinel}" "manual upgrade sentinel\n")
+execute_process(
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "DESTDIR=${upgrade_staging_dir}" "${CMAKE_COMMAND}" --install
+    "${BUILD_DIR}"
+  RESULT_VARIABLE upgrade_install_result
+  OUTPUT_VARIABLE upgrade_install_output
+  ERROR_VARIABLE upgrade_install_error
+)
+if(NOT upgrade_install_result EQUAL 0)
+  message(FATAL_ERROR
+          "manual upgrade install failed: ${upgrade_install_output}${upgrade_install_error}")
+endif()
+file(READ "${upgrade_legacy_wrapper}" upgrade_legacy_contents)
+if(NOT upgrade_legacy_contents STREQUAL "legacy wrapper sentinel\n")
+  message(FATAL_ERROR "manual CMake install unexpectedly changed a stale legacy file")
+endif()
+file(READ "${upgrade_sentinel}" upgrade_sentinel_contents)
+if(NOT upgrade_sentinel_contents STREQUAL "manual upgrade sentinel\n")
+  message(FATAL_ERROR "manual CMake install modified an unrelated custom-prefix file")
 endif()
