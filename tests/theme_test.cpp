@@ -158,6 +158,11 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().reduced_motion.compact_to_expanded_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.progress_duration == std::chrono::milliseconds{0});
+  CHECK(result->animation().content_transition.duration == std::chrono::milliseconds{250});
+  CHECK(result->animation().content_transition.distance == 48.0);
+  CHECK(result->animation().content_transition.easing == gisland::Easing::ease_in_out);
+  CHECK(result->animation().reduced_motion.content_transition_duration ==
+        std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
 }

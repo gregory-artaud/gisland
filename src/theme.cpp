@@ -683,7 +683,8 @@ parse_animation(const toml::table &root, std::string_view source_name) {
   }
   auto keys = reject_unknown(
       **table,
-      {"compact_to_expanded_ms", "context_change_ms", "easing", "progress", "reduced_motion"},
+      {"compact_to_expanded_ms", "context_change_ms", "easing", "progress", "content_transition",
+       "reduced_motion"},
       "animation", source_name);
   if (!keys) {
     return std::unexpected(keys.error());
@@ -701,12 +702,29 @@ parse_animation(const toml::table &root, std::string_view source_name) {
       return std::unexpected(progress_keys.error());
     }
   }
+  const bool has_content_transition = (*table)->contains("content_transition");
+  std::expected<const toml::table *, ThemeError> content_transition = nullptr;
+  if (has_content_transition) {
+    content_transition = required_table(**table, "content_transition",
+                                        "animation.content_transition", source_name);
+    if (!content_transition) {
+      return std::unexpected(content_transition.error());
+    }
+    auto content_keys =
+        reject_unknown(**content_transition, {"duration_ms", "distance", "easing"},
+                       "animation.content_transition", source_name);
+    if (!content_keys) {
+      return std::unexpected(content_keys.error());
+    }
+  }
   auto reduced = required_table(**table, "reduced_motion", "animation.reduced_motion", source_name);
   if (!reduced) {
     return std::unexpected(reduced.error());
   }
   auto reduced_keys =
-      reject_unknown(**reduced, {"compact_to_expanded_ms", "context_change_ms", "progress"},
+      reject_unknown(**reduced,
+                     {"compact_to_expanded_ms", "context_change_ms", "progress",
+                      "content_transition"},
                      "animation.reduced_motion", source_name);
   if (!reduced_keys) {
     return std::unexpected(reduced_keys.error());
@@ -725,6 +743,20 @@ parse_animation(const toml::table &root, std::string_view source_name) {
       return std::unexpected(reduced_progress_keys.error());
     }
   }
+  const bool has_reduced_content = (*reduced)->contains("content_transition");
+  std::expected<const toml::table *, ThemeError> reduced_content = nullptr;
+  if (has_reduced_content) {
+    reduced_content = required_table(**reduced, "content_transition",
+                                     "animation.reduced_motion.content_transition", source_name);
+    if (!reduced_content) {
+      return std::unexpected(reduced_content.error());
+    }
+    auto content_keys = reject_unknown(**reduced_content, {"duration_ms"},
+                                       "animation.reduced_motion.content_transition", source_name);
+    if (!content_keys) {
+      return std::unexpected(content_keys.error());
+    }
+  }
 
   auto compact = parse_duration(**table, "compact_to_expanded_ms",
                                 "animation.compact_to_expanded_ms", source_name);
@@ -739,6 +771,19 @@ parse_animation(const toml::table &root, std::string_view source_name) {
         parse_duration(**progress, "duration_ms", "animation.progress.duration_ms", source_name);
     progress_easing = parse_easing(**progress, "animation.progress.easing", source_name);
   }
+  std::expected<std::chrono::milliseconds, ThemeError> content_duration =
+      context.value_or(std::chrono::milliseconds{0});
+  std::expected<double, ThemeError> content_distance = 48.0;
+  std::expected<Easing, ThemeError> content_easing = easing.value_or(Easing::linear);
+  if (has_content_transition) {
+    content_duration = parse_duration(**content_transition, "duration_ms",
+                                      "animation.content_transition.duration_ms", source_name);
+    content_distance = number_value((*content_transition)->get("distance"),
+                                    "animation.content_transition.distance", source_name, 0.0,
+                                    maximum_pixels);
+    content_easing =
+        parse_easing(**content_transition, "animation.content_transition.easing", source_name);
+  }
   auto reduced_compact =
       parse_duration(**reduced, "compact_to_expanded_ms",
                      "animation.reduced_motion.compact_to_expanded_ms", source_name);
@@ -750,6 +795,13 @@ parse_animation(const toml::table &root, std::string_view source_name) {
     reduced_progress_duration =
         parse_duration(**reduced_progress, "duration_ms",
                        "animation.reduced_motion.progress.duration_ms", source_name);
+  }
+  std::expected<std::chrono::milliseconds, ThemeError> reduced_content_duration =
+      reduced_context.value_or(std::chrono::milliseconds{0});
+  if (has_reduced_content) {
+    reduced_content_duration =
+        parse_duration(**reduced_content, "duration_ms",
+                       "animation.reduced_motion.content_transition.duration_ms", source_name);
   }
   if (!compact) {
     return std::unexpected(compact.error());
@@ -775,11 +827,25 @@ parse_animation(const toml::table &root, std::string_view source_name) {
   if (!reduced_progress_duration) {
     return std::unexpected(reduced_progress_duration.error());
   }
+  if (!content_duration) {
+    return std::unexpected(content_duration.error());
+  }
+  if (!content_distance) {
+    return std::unexpected(content_distance.error());
+  }
+  if (!content_easing) {
+    return std::unexpected(content_easing.error());
+  }
+  if (!reduced_content_duration) {
+    return std::unexpected(reduced_content_duration.error());
+  }
   return AnimationStyle{*compact,
                         *context,
                         *easing,
                         {*progress_duration, *progress_easing},
-                        {*reduced_compact, *reduced_context, *reduced_progress_duration}};
+                        {*reduced_compact, *reduced_context, *reduced_progress_duration,
+                         *reduced_content_duration},
+                        {*content_duration, *content_distance, *content_easing}};
 }
 
 [[nodiscard]] bool valid_codepoint(std::int64_t value) {

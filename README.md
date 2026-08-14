@@ -624,6 +624,35 @@ An `action_region` adopts its child's geometry without adding decoration or padd
 buttons, and action regions take hit-test priority over their parent, allowing one default action to
 cover a notification while preserving close, link, and named-action controls.
 
+## Content Transitions
+
+Protocol 1.9 adds the optional `content-transitions` capability. A `publish` or `data` record may
+attach a semantic transition independently to either updated view:
+
+```json
+{
+  "type": "data",
+  "value": {"month_label": "August 2026"},
+  "transitions": {"expanded": "slide-left"}
+}
+```
+
+The closed catalogue is `crossfade`, `slide-left`, and `slide-right`. Omitting `transitions` keeps
+the default crossfade. Modules choose only the semantic type; the theme owns duration, horizontal
+distance, easing, and reduced-motion duration. The core captures, interpolates, and clips outgoing
+and incoming content. Set `GISLAND_REDUCED_MOTION=1` (or `true`) to select the theme's
+reduced-motion values.
+
+```toml
+[animation.content_transition]
+duration_ms = 250
+distance = 48
+easing = "ease-in-out"
+
+[animation.reduced_motion.content_transition]
+duration_ms = 0
+```
+
 ## Repository Layout
 
 ```text

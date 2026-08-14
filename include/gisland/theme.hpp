@@ -81,6 +81,13 @@ struct ReducedMotionStyle {
   std::chrono::milliseconds compact_to_expanded_ms;
   std::chrono::milliseconds context_change_ms;
   std::chrono::milliseconds progress_duration;
+  std::chrono::milliseconds content_transition_duration;
+};
+
+struct ContentTransitionStyle {
+  std::chrono::milliseconds duration;
+  double distance;
+  Easing easing;
 };
 
 struct ProgressAnimationStyle {
@@ -94,6 +101,7 @@ struct AnimationStyle {
   Easing easing;
   ProgressAnimationStyle progress;
   ReducedMotionStyle reduced_motion;
+  ContentTransitionStyle content_transition;
 };
 
 struct IconGlyph {

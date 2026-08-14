@@ -63,7 +63,7 @@ struct ModuleInstanceConfig {
   std::optional<std::filesystem::path> manifest_path;
   std::vector<std::string> command;
   ProtocolVersion minimum_protocol{1, 0};
-  ProtocolVersion maximum_protocol{1, 8};
+  ProtocolVersion maximum_protocol{1, 9};
   bool enabled{true};
   ConfigValue::Table options;
   RestartPolicy restart{RestartPolicy::on_failure};
