@@ -65,6 +65,7 @@ make_case() {
     "$case_dir/xdg-config/gisland" "$case_dir/xdg-data/gisland" \
     "$case_dir/home/.local/bin" \
     "$case_dir/home/.local/share/gisland/audio/gisland_audio" \
+    "$case_dir/home/.local/share/gisland/distributed/modules/clock-calendar" \
     "$case_dir/home/.local/share/gisland/distributed/modules/audio-lua" \
     "$case_dir/home/.local/share/gisland/modules"
   printf 'keep-config\n' >"$case_dir/home/.config/gisland/config.toml"
@@ -73,6 +74,9 @@ make_case() {
   printf 'keep-module\n' >"$case_dir/home/.local/share/gisland/modules/sentinel"
   printf 'legacy-audio\n' >"$case_dir/home/.local/bin/gisland-audio"
   printf 'legacy-control\n' >"$case_dir/home/.local/bin/gisland-audio-control"
+  printf 'legacy-clock\n' >"$case_dir/home/.local/bin/gisland-clock-calendar"
+  printf 'unfingerprinted-clock-helper\n' \
+    >"$case_dir/home/.local/share/gisland/distributed/modules/clock-calendar/calendar.lua"
   printf 'legacy-package\n' \
     >"$case_dir/home/.local/share/gisland/audio/gisland_audio/application.py"
   mkdir -p "$case_dir/home/.local/share/gisland/audio/gisland_audio/__pycache__"
@@ -92,14 +96,23 @@ printf 'cmake|%s\n' "$*" >>"$TEST_COMMAND_LOG"
 if [[ ${FAKE_CMAKE_FAILURE:-} == build && ${1:-} == --build ]]; then
   exit 17
 fi
-if [[ ${1:-} == --install ]]; then
+  if [[ ${1:-} == --install ]]; then
   if [[ ${FAKE_CMAKE_FAILURE:-} == install ]]; then
     exit 18
   fi
   mkdir -p "$HOME/.local/bin"
-  cp "$FAKE_BIN_DIR/gislandctl-template" "$HOME/.local/bin/gislandctl"
-  chmod +x "$HOME/.local/bin/gislandctl"
-  if [[ ${FAKE_CMAKE_MISSING_AUDIO:-0} != 1 ]]; then
+    cp "$FAKE_BIN_DIR/gislandctl-template" "$HOME/.local/bin/gislandctl"
+    chmod +x "$HOME/.local/bin/gislandctl"
+    if [[ ${FAKE_CMAKE_MISSING_CLOCK:-0} != 1 ]]; then
+      cp "$FAKE_BIN_DIR/gislandctl-template" "$HOME/.local/bin/gisland-lua-host"
+      chmod +x "$HOME/.local/bin/gisland-lua-host"
+      mkdir -p "$HOME/.local/share/gisland/distributed/modules/clock-calendar"
+      for package_file in module.toml config.toml view.toml clock_calendar.lua; do
+        printf 'replacement-clock\n' \
+          >"$HOME/.local/share/gisland/distributed/modules/clock-calendar/$package_file"
+      done
+    fi
+    if [[ ${FAKE_CMAKE_MISSING_AUDIO:-0} != 1 ]]; then
     cp "$FAKE_BIN_DIR/gislandctl-template" "$HOME/.local/bin/gisland-lua-host"
     chmod +x "$HOME/.local/bin/gisland-lua-host"
     mkdir -p "$HOME/.local/share/gisland/distributed/modules/audio"
@@ -226,6 +239,9 @@ assert_contains "$success_log" 'systemctl|--user enable --now gisland.service'
 assert_contains "$success_log" 'gislandctl|status'
 assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio"
 assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio-control"
+assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-clock-calendar"
+assert_contains "$success_log" \
+  "rm|-f -- $success_case/home/.local/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 assert_contains "$success_log" \
   "rm|-rf -- $success_case/home/.local/share/gisland/audio/gisland_audio"
 assert_contains "$success_log" \
@@ -244,6 +260,9 @@ start_line=$(line_number "$success_log" 'systemctl|--user enable --now gisland.s
   fail 'legacy cleanup must follow install while the service is stopped'
 assert_not_exists "$success_case/home/.local/bin/gisland-audio"
 assert_not_exists "$success_case/home/.local/bin/gisland-audio-control"
+assert_not_exists "$success_case/home/.local/bin/gisland-clock-calendar"
+assert_not_exists \
+  "$success_case/home/.local/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 assert_not_exists "$success_case/home/.local/share/gisland/audio/gisland_audio"
 assert_not_exists "$success_case/home/.local/share/gisland/distributed/modules/audio-lua"
 assert_exists "$success_case/home/.local/bin/unrelated-tool"
@@ -270,6 +289,7 @@ assert_not_contains "$build_failure_case/commands.log" 'systemctl|--user is-acti
 assert_not_contains "$build_failure_case/commands.log" 'systemctl|--user stop'
 assert_not_contains "$build_failure_case/commands.log" 'rm|'
 assert_exists "$build_failure_case/home/.local/bin/gisland-audio"
+assert_exists "$build_failure_case/home/.local/bin/gisland-clock-calendar"
 assert_exists "$build_failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
 
 install_failure_case=$(make_case install-failure)
@@ -283,6 +303,7 @@ assert_not_contains "$install_failure_case/commands.log" 'rm|'
 assert_exists "$install_failure_case/home/.local/bin/gisland-audio-control"
 assert_exists \
   "$install_failure_case/home/.local/share/gisland/distributed/modules/audio-lua/module.toml"
+assert_exists "$install_failure_case/home/.local/bin/gisland-clock-calendar"
 
 replacement_failure_case=$(make_case replacement-failure)
 if run_installer "$replacement_failure_case" FAKE_CMAKE_MISSING_AUDIO=1 \
@@ -295,6 +316,18 @@ assert_not_contains "$replacement_failure_case/commands.log" 'rm|'
 assert_exists "$replacement_failure_case/home/.local/bin/gisland-audio"
 assert_exists "$replacement_failure_case/home/.local/bin/gisland-audio-control"
 assert_exists "$replacement_failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
+
+clock_replacement_failure_case=$(make_case clock-replacement-failure)
+if run_installer "$clock_replacement_failure_case" FAKE_CMAKE_MISSING_CLOCK=1 \
+  FAKE_SERVICE_ACTIVE=1 FAKE_SERVICE_ENABLED=1; then
+  fail 'a missing replacement clock-calendar package must fail the installer'
+fi
+assert_contains "$clock_replacement_failure_case/commands.log" \
+  'systemctl|--user stop gisland.service'
+assert_contains "$clock_replacement_failure_case/commands.log" \
+  'systemctl|--user start gisland.service'
+assert_not_contains "$clock_replacement_failure_case/commands.log" 'rm|'
+assert_exists "$clock_replacement_failure_case/home/.local/bin/gisland-clock-calendar"
 
 for failure_kind in health cleanup; do
   for active in 0 1; do

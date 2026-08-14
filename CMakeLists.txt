@@ -152,16 +152,6 @@ add_custom_command(
 )
 add_custom_target(gisland_assets DEPENDS "${GISLAND_ASSET_STAMP}")
 
-add_library(gisland_clock_calendar_model STATIC src/clock_calendar.cpp)
-add_library(gisland::clock_calendar_model ALIAS gisland_clock_calendar_model)
-target_compile_features(gisland_clock_calendar_model PUBLIC cxx_std_23)
-target_include_directories(
-  gisland_clock_calendar_model
-  PUBLIC
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-)
-gisland_set_project_options(gisland_clock_calendar_model)
-
 add_library(gisland_io STATIC src/line_buffer.cpp src/poll.cpp src/write_queue.cpp)
 add_library(gisland::io ALIAS gisland_io)
 target_compile_features(gisland_io PUBLIC cxx_std_23)
@@ -203,15 +193,6 @@ target_link_libraries(
   PRIVATE gisland::io
 )
 gisland_set_project_options(gisland_lua_runtime)
-
-add_executable(gisland_clock_calendar src/clock_calendar_main.cpp)
-set_target_properties(gisland_clock_calendar PROPERTIES OUTPUT_NAME gisland-clock-calendar)
-target_compile_features(gisland_clock_calendar PRIVATE cxx_std_23)
-target_link_libraries(
-  gisland_clock_calendar
-  PRIVATE gisland::clock_calendar_model nlohmann_json::nlohmann_json
-)
-gisland_set_project_options(gisland_clock_calendar)
 
 add_executable(gisland-lua-host src/lua_host_main.cpp)
 target_compile_features(gisland-lua-host PRIVATE cxx_std_23)
@@ -372,7 +353,7 @@ configure_file(
   @ONLY
 )
 install(
-  TARGETS gisland gislandctl gisland-lua-host gisland_clock_calendar
+  TARGETS gisland gislandctl gisland-lua-host
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(FILES assets/config.toml DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
@@ -380,6 +361,13 @@ install(DIRECTORY assets/fonts assets/themes DESTINATION "${GISLAND_INSTALL_DATA
 install(
   FILES "${PROJECT_BINARY_DIR}/install/clock-calendar.module.toml"
   RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/clock-calendar"
+)
+install(
+  FILES
+    assets/modules/clock-calendar/config.toml
+    assets/modules/clock-calendar/view.toml
+    assets/modules/clock-calendar/clock_calendar.lua
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/clock-calendar"
 )
 install(
@@ -484,6 +472,43 @@ if(BUILD_TESTING)
       --init
       "{\"type\":\"init\",\"protocol\":{\"minimum\":{\"major\":1,\"minor\":8},\"maximum\":{\"major\":1,\"minor\":8}},\"instance_id\":\"audio-contract\",\"capabilities\":[\"independent-views\",\"compact-view-styles\",\"icon-roles\",\"progress-transitions\"],\"configuration\":{},\"locale\":\"C\",\"timezone\":\"UTC\"}"
   )
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME clock_calendar_contract
+      COMMAND
+        ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_contract.py"
+        --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua\"]"
+    )
+    add_test(
+      NAME clock_calendar_lua_unit
+      COMMAND
+        ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "GISLAND_CLOCK_CALENDAR_HELPER_TEST=1"
+        "${LUA54_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_helpers_test.lua"
+        "${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua"
+    )
+  else()
+    add_test(
+      NAME clock_calendar_contract
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_contract.py"
+        --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua\"]"
+    )
+    add_test(
+      NAME clock_calendar_lua_unit
+      COMMAND
+        ${CMAKE_COMMAND} -E env "GISLAND_CLOCK_CALENDAR_HELPER_TEST=1"
+        "${LUA54_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_helpers_test.lua"
+        "${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua"
+    )
+  endif()
   add_test(
     NAME install_local_script
     COMMAND bash ${PROJECT_SOURCE_DIR}/tests/install_local_script_test.sh ${PROJECT_SOURCE_DIR}
@@ -512,8 +537,6 @@ if(BUILD_TESTING)
     gisland_tests
     tests/application_config_test.cpp
     tests/bootstrap_test.cpp
-    tests/clock_calendar_test.cpp
-    tests/clock_calendar_process_test.cpp
     tests/config_test.cpp
     tests/control_client_test.cpp
     tests/control_dispatcher_test.cpp
@@ -545,7 +568,6 @@ if(BUILD_TESTING)
     gisland_tests
     PRIVATE
       gisland::app
-      gisland::clock_calendar_model
       Catch2::Catch2WithMain
       X11::X11
       X11::Xext
@@ -555,10 +577,9 @@ if(BUILD_TESTING)
     PRIVATE
       GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
       GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
-      GISLAND_CLOCK_CALENDAR_PATH="${PROJECT_BINARY_DIR}/gisland-clock-calendar"
       GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
   )
-  add_dependencies(gisland_tests fake_module gisland-lua-host gisland_clock_calendar gisland_assets)
+  add_dependencies(gisland_tests fake_module gisland-lua-host gisland_assets)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
@@ -645,7 +666,6 @@ if(BUILD_TESTING)
       PRIVATE
         GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
         GISLANDCTL_BINARY_PATH="$<TARGET_FILE:gislandctl>"
-        GISLAND_CLOCK_CALENDAR_PATH="$<TARGET_FILE:gisland_clock_calendar>"
         GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
         GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
         GISLAND_AUDIO_LUA_PATH="${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua"
@@ -653,13 +673,18 @@ if(BUILD_TESTING)
         GISLAND_AUDIO_FAKE_GISLANDCTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-gislandctl"
         GISLAND_NOTIFICATION_HISTORY_PATH="${PROJECT_BINARY_DIR}/gisland-notification-history"
     )
+    if(GISLAND_LGI_PREFIX)
+      target_compile_definitions(
+        gisland_application_x11_smoke_tests
+        PRIVATE GISLAND_TEST_LGI_PREFIX="${GISLAND_LGI_PREFIX}"
+      )
+    endif()
     gisland_set_project_options(gisland_application_x11_smoke_tests)
     add_dependencies(
       gisland_application_x11_smoke_tests
       gisland
       gislandctl
       gisland-lua-host
-      gisland_clock_calendar
       fake_module
     )
     catch_discover_tests(
@@ -742,7 +767,6 @@ set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
   include/gisland/bootstrap.hpp
-  include/gisland/clock_calendar.hpp
   include/gisland/content_fingerprint.hpp
   include/gisland/config.hpp
   include/gisland/control.hpp
@@ -779,8 +803,6 @@ set(
   include/gisland/x11_shape.hpp
   src/application.cpp
   src/bootstrap.cpp
-  src/clock_calendar.cpp
-  src/clock_calendar_main.cpp
   src/config.cpp
   src/control.cpp
   src/control_client.cpp
@@ -822,8 +844,6 @@ set(
   tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
   tests/bootstrap_test.cpp
-  tests/clock_calendar_test.cpp
-  tests/clock_calendar_process_test.cpp
   tests/config_test.cpp
   tests/control_client_test.cpp
   tests/control_dispatcher_test.cpp

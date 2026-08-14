@@ -21,13 +21,15 @@ set(required_files
     "${root}/${BINDIR}/gisland"
     "${root}/${BINDIR}/gislandctl"
     "${root}/${BINDIR}/gisland-lua-host"
-    "${root}/${BINDIR}/gisland-clock-calendar"
     "${root}/${BINDIR}/gisland-notifications"
     "${root}/${BINDIR}/gisland-notification-history"
     "${root}/${BINDIR}/gisland-battery"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/config.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/view.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/clock_calendar.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml"
@@ -47,7 +49,18 @@ foreach(required_file IN LISTS required_files)
   endif()
 endforeach()
 
+file(GLOB installed_clock_lua_files LIST_DIRECTORIES false
+     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/*.lua")
+set(expected_clock_lua_file
+    "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/clock_calendar.lua")
+if(NOT installed_clock_lua_files STREQUAL expected_clock_lua_file)
+  message(FATAL_ERROR
+          "clock-calendar must install only its entry Lua file: ${installed_clock_lua_files}")
+endif()
+
 set(forbidden_paths
+    "${root}/${BINDIR}/gisland-clock-calendar"
+    "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/calendar.lua"
     "${root}/${BINDIR}/gisland-audio"
     "${root}/${BINDIR}/gisland-audio-control"
     "${root}/${DATADIR}/gisland/audio"
@@ -56,7 +69,7 @@ set(forbidden_paths
     "${root}/${DATADIR}/systemd/user/gisland-audio.service")
 foreach(forbidden_path IN LISTS forbidden_paths)
   if(EXISTS "${forbidden_path}")
-    message(FATAL_ERROR "legacy audio path was installed: ${forbidden_path}")
+    message(FATAL_ERROR "forbidden path was installed: ${forbidden_path}")
   endif()
 endforeach()
 
@@ -87,10 +100,18 @@ if(example_command_position EQUAL -1 OR example_entry_position EQUAL -1 OR
 endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml" manifest)
-set(expected_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-clock-calendar\"]")
+set(expected_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-lua-host\"]")
 string(FIND "${manifest}" "${expected_command}" command_position)
-if(command_position EQUAL -1)
-  message(FATAL_ERROR "installed manifest has the wrong command: ${manifest}")
+string(FIND "${manifest}" "entry = \"clock_calendar.lua\"" entry_position)
+string(FIND "${manifest}" "config = \"config.toml\"" config_position)
+string(FIND "${manifest}" "view = \"view.toml\"" view_position)
+string(FIND "${manifest}" "minimum_minor = 8" minimum_position)
+string(FIND "${manifest}" "maximum_minor = 8" maximum_position)
+string(FIND "${manifest}" "[defaults]" inline_defaults_position)
+if(command_position EQUAL -1 OR entry_position EQUAL -1 OR config_position EQUAL -1 OR
+   view_position EQUAL -1 OR minimum_position EQUAL -1 OR maximum_position EQUAL -1 OR
+   NOT inline_defaults_position EQUAL -1)
+  message(FATAL_ERROR "installed clock-calendar manifest is incomplete: ${manifest}")
 endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/audio/module.toml" audio_manifest)
@@ -155,10 +176,12 @@ endif()
 set(upgrade_staging_dir "${STAGING_DIR}-manual-upgrade")
 set(upgrade_root "${upgrade_staging_dir}${INSTALL_PREFIX}")
 set(upgrade_legacy_wrapper "${upgrade_root}/${BINDIR}/gisland-audio")
+set(upgrade_legacy_clock "${upgrade_root}/${BINDIR}/gisland-clock-calendar")
 set(upgrade_sentinel "${upgrade_root}/${DATADIR}/gisland/custom/sentinel")
 file(REMOVE_RECURSE "${upgrade_staging_dir}")
 file(MAKE_DIRECTORY "${upgrade_root}/${BINDIR}" "${upgrade_root}/${DATADIR}/gisland/custom")
 file(WRITE "${upgrade_legacy_wrapper}" "legacy wrapper sentinel\n")
+file(WRITE "${upgrade_legacy_clock}" "legacy clock sentinel\n")
 file(WRITE "${upgrade_sentinel}" "manual upgrade sentinel\n")
 execute_process(
   COMMAND
@@ -175,6 +198,10 @@ endif()
 file(READ "${upgrade_legacy_wrapper}" upgrade_legacy_contents)
 if(NOT upgrade_legacy_contents STREQUAL "legacy wrapper sentinel\n")
   message(FATAL_ERROR "manual CMake install unexpectedly changed a stale legacy file")
+endif()
+file(READ "${upgrade_legacy_clock}" upgrade_legacy_clock_contents)
+if(NOT upgrade_legacy_clock_contents STREQUAL "legacy clock sentinel\n")
+  message(FATAL_ERROR "manual CMake install unexpectedly changed the stale native clock")
 endif()
 file(READ "${upgrade_sentinel}" upgrade_sentinel_contents)
 if(NOT upgrade_sentinel_contents STREQUAL "manual upgrade sentinel\n")

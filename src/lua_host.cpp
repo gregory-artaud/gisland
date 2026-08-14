@@ -26,7 +26,9 @@ namespace {
 
 constexpr std::size_t maximum_identifier_bytes = 128;
 constexpr std::size_t maximum_diagnostic_bytes = 4096;
+constexpr std::size_t maximum_timer_count = 256;
 constexpr std::size_t maximum_buffered_output_messages = 256;
+constexpr LuaValueConversionLimits data_output_limits{.max_items = 512};
 // Module-to-core publish records can be 8 MiB, so this intentionally exceeds the core-to-module
 // WriteQueue's 1 MiB limit.
 constexpr std::size_t maximum_buffered_output_bytes = std::size_t{16} * 1024U * 1024U;
@@ -285,6 +287,12 @@ public:
       return result;
     }
     if (auto result = retain_callback("shutdown", candidate.has_shutdown, shutdown_reference_);
+        !result) {
+      release_references(references);
+      return result;
+    }
+    if (auto result = retain_callback("fallback_action", candidate.has_fallback_action,
+                                      fallback_action_reference_);
         !result) {
       release_references(references);
       return result;
@@ -553,10 +561,18 @@ private:
         return std::unexpected(
             error(LuaHostErrorCode::value_error, std::move(pushed.error().message)));
       }
+      pushed = push_json_to_lua(state_, nlohmann::json{{"instance_id", record.at("instance_id")},
+                                                       {"locale", record.at("locale")},
+                                                       {"timezone", record.at("timezone")}});
+      if (!pushed) {
+        lua_pop(state_, 1);
+        return std::unexpected(
+            error(LuaHostErrorCode::value_error, std::move(pushed.error().message)));
+      }
       initializing_ = true;
       current_emit_ = &emit;
       current_time_ = current_time_for_record_;
-      auto called = invoke(init_reference_, 1, "init");
+      auto called = invoke(init_reference_, 2, "init");
       current_emit_ = nullptr;
       initializing_ = false;
       if (!called) {
@@ -667,12 +683,17 @@ private:
     }
 
     const auto handler = action_references_.find(*action_id);
-    if (handler == action_references_.end()) {
+    const bool fallback =
+        handler == action_references_.end() && fallback_action_reference_ != LUA_NOREF;
+    if (handler == action_references_.end() && !fallback) {
       return reject_action(*action_id, invocation == record.end() ? nullptr : &*invocation,
                            "unknown action", emit);
     }
 
     StackRestore restore{state_};
+    if (fallback) {
+      lua_pushlstring(state_, action_id->data(), action_id->size());
+    }
     const auto value = record.find("value");
     if (value == record.end()) {
       lua_pushnil(state_);
@@ -681,12 +702,13 @@ private:
           error(LuaHostErrorCode::value_error, std::move(pushed.error().message)));
     }
 
-    const int argument_index = lua_gettop(state_);
-    lua_rawgeti(state_, LUA_REGISTRYINDEX, handler->second);
+    const int arguments = fallback ? 2 : 1;
+    const int argument_index = lua_gettop(state_) - arguments + 1;
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, fallback ? fallback_action_reference_ : handler->second);
     lua_insert(state_, argument_index);
     current_emit_ = &emit;
     current_time_ = now;
-    const int status = lua_pcall(state_, 1, LUA_MULTRET, 0);
+    const int status = lua_pcall(state_, arguments, LUA_MULTRET, 0);
     current_emit_ = nullptr;
     if (status != LUA_OK) {
       const auto message = lua_error_message(state_, "action callback failed");
@@ -791,7 +813,7 @@ private:
     }
     bool failed = false;
     {
-      auto value = lua_value_to_json(state, 1);
+      auto value = lua_value_to_json(state, 1, data_output_limits);
       if (!value) {
         impl->callback_error_ = value.error().message;
         failed = true;
@@ -850,7 +872,7 @@ private:
       lua_pushfstring(state, "%s expects a callback", name);
       return lua_error(state);
     }
-    if (timers_.size() >= LuaValueLimits::max_items) {
+    if (timers_.size() >= maximum_timer_count) {
       lua_pushliteral(state, "timer queue limit exceeded");
       return lua_error(state);
     }
@@ -918,7 +940,8 @@ private:
   }
 
   [[nodiscard]] static bool is_known_field(std::string_view field) {
-    constexpr std::array fields{"every", "init", "update", "actions", "visibility", "shutdown"};
+    constexpr std::array fields{"every",           "init",       "update",  "actions",
+                                "fallback_action", "visibility", "shutdown"};
     return std::ranges::find(fields, field) != fields.end();
   }
 
@@ -938,6 +961,7 @@ private:
   int update_reference_{LUA_NOREF};
   int visibility_reference_{LUA_NOREF};
   int shutdown_reference_{LUA_NOREF};
+  int fallback_action_reference_{LUA_NOREF};
   bool module_called_{};
   bool initialized_{};
   bool stopped_{};

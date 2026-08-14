@@ -346,18 +346,20 @@ A script must return exactly one definition produced by `gisland.module`:
 ```lua
 return gisland.module {
   every = "1s",
-  init = function(config) end,
+  init = function(config, metadata) end,
   update = function() return { value = 42 } end,
   actions = {
     refresh = function(value) return true end,
   },
+  fallback_action = function(action_id, value) return false end,
   visibility = function(state) end,
   shutdown = function() end,
 }
 ```
 
-All fields and callbacks are optional. `init(config)` runs once after protocol initialization;
-`ready` is emitted only if it succeeds. `update()` runs at the bounded `every` interval and emits one
+All fields and callbacks are optional. `init(config, metadata)` runs once after protocol
+initialization; metadata contains the core-supplied instance ID, locale, and timezone. `ready` is
+emitted only if it succeeds. `update()` runs at the bounded `every` interval and emits one
 `data` record when it returns a non-nil JSON-compatible value. `visibility(state)` receives the
 current visibility string. `shutdown()` runs during graceful shutdown. Callbacks run serially.
 
@@ -375,7 +377,10 @@ return gisland.module {
 
 `gisland.data(value)` emits data explicitly. Lua tables with contiguous integer keys become arrays;
 string-keyed tables become objects. Empty tables are objects unless created with
-`gisland.array()`. Values are bounded and must be JSON-compatible.
+`gisland.array()`. Values are bounded and must be JSON-compatible. Core-to-Lua values, action and
+configuration values, scene values, and `update()` return values allow at most 256 table items.
+Explicit `gisland.data` output allows at most 512 items for larger declarative snapshots; the same
+depth and serialized-size limits still apply.
 
 Context-oriented modules call `gisland.publish(context)`, `gisland.dismiss(context_id)`, and
 `gisland.log(level, message)`. The `gisland.ui` constructors cover `text`, `icon`, `image`,
@@ -388,7 +393,8 @@ Rendered interactions and `gislandctl action` both dispatch the same semantic ac
 callback receives the optional JSON-compatible value and returns `true`, `false`, or
 `false, "reason"`. The host creates the protocol 1.8 correlated `action_result`; invocation IDs are
 never exposed to Lua. A missing handler, invalid return, or thrown action error rejects and logs only
-that invocation, leaving the module ready.
+that invocation, leaving the module ready. A module may provide
+`fallback_action(action_id, value)` when unknown actions need module-specific rejection behavior.
 
 Timers use the same positive `ms`, `s`, `m`, or `h` duration syntax as `every`, up to 24 hours:
 
@@ -402,14 +408,15 @@ timer, visibility, shutdown, transport, queue, and value-conversion errors termi
 process. gisland removes its contexts and applies the manifest's restart policy and backoff. Scene
 records rejected by the core follow the normal last-valid-context behavior.
 
-The shipped `gisland-clock-calendar` executable uses the same public protocol as third-party
-modules. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at minute
-boundaries, and handles previous-month, next-month, and today actions. Locale and timezone come
-from the process environment by default. Module options can override `locale`, `timezone`, and
-`week_start` (`monday` or `sunday`).
+The shipped clock-calendar is a self-contained protocol-1.8 Lua package hosted by
+`gisland-lua-host`. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at
+minute boundaries, and handles previous-month, next-month, and today actions. Locale and timezone
+come from core initialization by default without changing process `TZ`. Module options can override
+`locale`, `timezone`, and `week_start` (`monday` or `sunday`). Its default compact and expanded views
+live in the package's `view.toml` rather than the global configuration.
 
 When user configuration is absent, gisland loads the distributed `assets/config.toml`, which
-selects this module and its declarative compact and expanded templates and enables the desktop
+selects this module and enables the desktop
 notification module beside it. A user
 `$XDG_CONFIG_HOME/gisland/config.toml` continues to override the distributed default completely.
 

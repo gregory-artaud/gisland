@@ -159,8 +159,17 @@ TEST_CASE(
   CHECK(bootstrap->config.default_module == "clock");
   REQUIRE(bootstrap->config.modules.size() == 4);
   CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
-  CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
+  const auto clock_package =
+      std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "modules/clock-calendar";
+  CHECK(bootstrap->config.modules.front().command.front() == "gisland-lua-host");
+  REQUIRE(bootstrap->config.modules.front().command.size() == 3);
+  CHECK(bootstrap->config.modules.front().command[1] ==
+        std::filesystem::canonical(clock_package / "clock_calendar.lua"));
+  CHECK(bootstrap->config.modules.front().minimum_protocol == gisland::ProtocolVersion{1, 8});
   CHECK(bootstrap->config.modules.front().maximum_protocol == gisland::ProtocolVersion{1, 9});
+  REQUIRE(bootstrap->config.modules.front().view.has_value());
+  CHECK(std::get<std::string>(bootstrap->config.modules.front().options.at("week_start").value) ==
+        "monday");
   CHECK(bootstrap->config.modules[1].module_id == "notifications");
   CHECK(bootstrap->config.modules[1].command.front() == "gisland-notifications");
   CHECK(std::get<std::int64_t>(
@@ -207,6 +216,22 @@ TEST_CASE(
       std::get<gisland::SceneTemplatePtr>(compact.children[2])->value);
   CHECK(std::get<std::string>(primary.role) == "compact-primary");
   CHECK(std::get<std::string>(secondary.role) == "compact-secondary");
+  const auto &expanded = std::get<gisland::TemplateColumn>(clock_view->expanded->value);
+  REQUIRE(expanded.children.size() == 2);
+  const auto &header = std::get<gisland::TemplateRow>(
+      std::get<gisland::SceneTemplatePtr>(expanded.children.front())->value);
+  REQUIRE(header.children.size() == 5);
+  const auto &previous = std::get<gisland::TemplateButton>(
+      std::get<gisland::SceneTemplatePtr>(header.children.front())->value);
+  const auto &heading = std::get<gisland::TemplateColumn>(
+      std::get<gisland::SceneTemplatePtr>(header.children[2])->value);
+  const auto &today = std::get<gisland::TemplateButton>(
+      std::get<gisland::SceneTemplatePtr>(heading.children[1])->value);
+  const auto &next = std::get<gisland::TemplateButton>(
+      std::get<gisland::SceneTemplatePtr>(header.children.back())->value);
+  CHECK(previous.action_id == "previous-month");
+  CHECK(today.action_id == "today");
+  CHECK(next.action_id == "next-month");
   REQUIRE(bootstrap->config.modules[2].view.has_value());
   const auto &battery_compact =
       std::get<gisland::TemplateRow>(bootstrap->config.modules[2].view->compact.value);

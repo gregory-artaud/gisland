@@ -31,6 +31,18 @@
 
 namespace {
 
+void configure_lgi_test_environment() {
+#ifdef GISLAND_TEST_LGI_PREFIX
+  const std::string prefix = GISLAND_TEST_LGI_PREFIX;
+  const auto lua_path = prefix + "/share/lua/5.4/?.lua;" + prefix + "/share/lua/5.4/?/init.lua;;";
+  const auto lua_cpath = prefix + "/lib/lua/5.4/?.so;;";
+  if (::setenv("LUA_PATH", lua_path.c_str(), 1) != 0 ||
+      ::setenv("LUA_CPATH", lua_cpath.c_str(), 1) != 0) {
+    _exit(126);
+  }
+#endif
+}
+
 class ChildProcess {
 public:
   ChildProcess(const std::filesystem::path &config_home,
@@ -41,7 +53,8 @@ public:
       setenv("XDG_RUNTIME_DIR", config_home.c_str(), 1);
       setenv("XDG_STATE_HOME", config_home.c_str(), 1);
       setenv("TZ", "UTC", 1);
-      std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
+      configure_lgi_test_environment();
+      std::string path = std::filesystem::path{GISLAND_LUA_HOST_PATH}.parent_path().string();
       path += ':';
       if (const char *existing_path = std::getenv("PATH"); existing_path != nullptr) {
         path += existing_path;
@@ -420,7 +433,7 @@ struct WindowPosition {
   if (pid == 0) {
     setenv("XDG_RUNTIME_DIR", runtime_directory.c_str(), 1);
     setenv("XDG_STATE_HOME", runtime_directory.c_str(), 1);
-    std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
+    std::string path = std::filesystem::path{GISLAND_LUA_HOST_PATH}.parent_path().string();
     path += ':';
     if (const char *existing_path = std::getenv("PATH"); existing_path != nullptr) {
       path += existing_path;

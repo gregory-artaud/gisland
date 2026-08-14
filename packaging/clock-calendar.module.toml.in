@@ -1,11 +1,14 @@
 id = "clock-calendar"
 name = "Clock and Calendar"
 description = "Localized live clock and monthly calendar"
-command = ["@CMAKE_INSTALL_FULL_BINDIR@/gisland-clock-calendar"]
+command = ["@CMAKE_INSTALL_FULL_BINDIR@/gisland-lua-host"]
+entry = "clock_calendar.lua"
+config = "config.toml"
+view = "view.toml"
 
 [protocol]
 major = 1
-minimum_minor = 1
+minimum_minor = 8
 maximum_minor = 9
 
 [defaults]

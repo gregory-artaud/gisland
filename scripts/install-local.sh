@@ -65,6 +65,21 @@ fi
 
 cmake --install build/release
 
+replacement_clock_files=(
+  "$install_prefix/bin/gisland-lua-host"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/config.toml"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/view.toml"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/clock_calendar.lua"
+)
+for replacement_clock_file in "${replacement_clock_files[@]}"; do
+  if [[ ! -f $replacement_clock_file ]]; then
+    printf 'install-local: replacement clock-calendar file was not installed: %s\n' \
+      "$replacement_clock_file" >&2
+    exit 1
+  fi
+done
+
 replacement_audio_files=(
   "$install_prefix/bin/gisland-lua-host"
   "$install_prefix/share/gisland/distributed/modules/audio/module.toml"
@@ -80,6 +95,8 @@ for replacement_audio_file in "${replacement_audio_files[@]}"; do
   fi
 done
 
+rm -f -- "$install_prefix/bin/gisland-clock-calendar"
+rm -f -- "$install_prefix/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 rm -f -- "$install_prefix/bin/gisland-audio"
 rm -f -- "$install_prefix/bin/gisland-audio-control"
 rm -rf -- "$install_prefix/share/gisland/audio/gisland_audio"

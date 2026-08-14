@@ -18,6 +18,10 @@ struct LuaValueLimits {
   static constexpr std::size_t max_object_key_bytes = 4096;
 };
 
+struct LuaValueConversionLimits {
+  std::size_t max_items{LuaValueLimits::max_items};
+};
+
 enum class LuaValueErrorCode {
   invalid_state,
   invalid_index,
@@ -46,8 +50,10 @@ struct LuaValueError {
 using LuaValueResult = std::expected<nlohmann::json, LuaValueError>;
 using LuaPushResult = std::expected<void, LuaValueError>;
 
-[[nodiscard]] LuaValueResult lua_value_to_json(lua_State *state, int index);
-[[nodiscard]] LuaPushResult push_json_to_lua(lua_State *state, const nlohmann::json &value);
+[[nodiscard]] LuaValueResult lua_value_to_json(lua_State *state, int index,
+                                               LuaValueConversionLimits limits = {});
+[[nodiscard]] LuaPushResult push_json_to_lua(lua_State *state, const nlohmann::json &value,
+                                             LuaValueConversionLimits limits = {});
 
 // Marks a table so an empty value converts to [] rather than the default {}.
 [[nodiscard]] LuaPushResult mark_lua_table_as_array(lua_State *state, int index);

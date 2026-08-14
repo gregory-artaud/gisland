@@ -142,6 +142,23 @@ return gisland.module {
   CHECK(records[3] == Json{{"type", "log"}, {"level", "warning"}, {"message", "volume changed"}});
 }
 
+TEST_CASE("lua publish conversion retains the default 256-item budget", "[lua_scene]") {
+  const auto [result, records] = run_script(R"lua(
+return gisland.module {
+  init = function()
+    local context = { context_id = "large", priority = 0 }
+    for index = 1, 255 do context["extra" .. index] = index end
+    gisland.publish(context)
+  end,
+}
+)lua");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().code == gisland::LuaHostErrorCode::callback_error);
+  CHECK(result.error().message.find("256") != std::string::npos);
+  CHECK(records.empty());
+}
+
 TEST_CASE("lua scene constructors emit every protocol primitive exactly", "[lua_scene]") {
   struct Case {
     std::string_view expression;

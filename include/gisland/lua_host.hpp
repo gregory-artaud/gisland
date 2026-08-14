@@ -39,6 +39,7 @@ struct LuaModuleDefinition {
   bool has_update{};
   bool has_visibility{};
   bool has_shutdown{};
+  bool has_fallback_action{};
   std::vector<std::string> actions;
 };
 

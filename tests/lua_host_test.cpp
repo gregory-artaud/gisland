@@ -688,6 +688,39 @@ TEST_CASE("lua_host_lifecycle advertises the implemented offered scene capabilit
                        "progress-transitions"});
 }
 
+TEST_CASE("lua_host_lifecycle passes core locale and timezone to init metadata",
+          "[lua_host_lifecycle]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "metadata.lua";
+  write_file(entry, R"lua(return gisland.module {
+  init = function(configuration, metadata)
+    gisland.data {
+      answer = configuration.answer,
+      instance_id = metadata.instance_id,
+      locale = metadata.locale,
+      timezone = metadata.timezone,
+    }
+  end,
+})lua");
+  auto host = gisland::LuaHost::load(entry.string());
+  REQUIRE(host.has_value());
+  Records records;
+
+  REQUIRE((*host)->handle(init_record(), collect_into(records), {}).has_value());
+
+  REQUIRE(records.size() == 2);
+  CHECK(records[0] == nlohmann::json{{"type", "ready"},
+                                     {"protocol_major", 1},
+                                     {"protocol_minor", 8},
+                                     {"capabilities", {"data-snapshots"}}});
+  CHECK(records[1] == nlohmann::json{{"type", "data"},
+                                     {"value",
+                                      {{"answer", 42},
+                                       {"instance_id", "test"},
+                                       {"locale", "en_US.UTF-8"},
+                                       {"timezone", "UTC"}}}});
+}
+
 TEST_CASE("lua_host_lifecycle treats init callback failure as fatal", "[lua_host_lifecycle]") {
   auto host = gisland::LuaHost::load(
       (std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "init_error.lua").string());
@@ -744,6 +777,86 @@ TEST_CASE("lua host bounds output buffered during init by serialized bytes",
   CHECK(result.error().code == gisland::LuaHostErrorCode::callback_error);
   CHECK(result.error().message.find("output queue limit exceeded") != std::string::npos);
   CHECK(records.empty());
+}
+
+TEST_CASE("lua host reserves the expanded item budget for explicit data output",
+          "[lua_host_lifecycle][lua_host_data]") {
+  const auto entry = std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "generated-data-items.lua";
+  write_file(entry, R"lua(local function object(size)
+  local value = {}
+  for index = 1, size do value[tostring(index)] = index end
+  return value
+end
+return gisland.module {
+  init = function()
+    gisland.data(object(512))
+    assert(not pcall(gisland.data, object(513)))
+  end,
+})lua");
+  auto host = gisland::LuaHost::load(entry.string());
+  std::filesystem::remove(entry);
+  REQUIRE(host.has_value());
+  Records records;
+
+  REQUIRE((*host)->handle(init_record(), collect_into(records), {}).has_value());
+  REQUIRE(records.size() == 2);
+  CHECK(records[1].at("value").size() == 512);
+}
+
+TEST_CASE("lua host keeps configuration action and update values at 256 items",
+          "[lua_host_lifecycle][lua_host_data]") {
+  const auto object = [] {
+    nlohmann::json value = nlohmann::json::object();
+    for (int index = 1; index <= 257; ++index) {
+      value[std::to_string(index)] = index;
+    }
+    return value;
+  }();
+
+  SECTION("configuration") {
+    auto host = gisland::LuaHost::load("config-items.lua", R"lua(return gisland.module {
+      init = function() error('configuration should be rejected before init') end,
+    })lua");
+    REQUIRE(host.has_value());
+    Records records;
+    const auto result = (*host)->handle(init_record(object), collect_into(records), {});
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::LuaHostErrorCode::value_error);
+    CHECK(result.error().message.find("256") != std::string::npos);
+  }
+
+  SECTION("action") {
+    auto host = gisland::LuaHost::load("action-items.lua", R"lua(return gisland.module {
+      actions = { inspect = function() return true end },
+    })lua");
+    REQUIRE(host.has_value());
+    Records records;
+    const auto emit = collect_into(records);
+    REQUIRE((*host)->handle(init_record(), emit, {}).has_value());
+    const auto result = (*host)->handle(
+        {{"type", "action"}, {"action_id", "inspect"}, {"value", object}}, emit, {});
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::LuaHostErrorCode::value_error);
+    CHECK(result.error().message.find("256") != std::string::npos);
+  }
+
+  SECTION("update return") {
+    auto host = gisland::LuaHost::load("update-items.lua", R"lua(local function object(size)
+      local value = {}
+      for index = 1, size do value[tostring(index)] = index end
+      return value
+    end
+    return gisland.module { every = '1ms', update = function() return object(257) end })lua");
+    REQUIRE(host.has_value());
+    Records records;
+    const auto emit = collect_into(records);
+    REQUIRE((*host)->handle(init_record(), emit, {}).has_value());
+    const auto result =
+        (*host)->run_due(gisland::LuaHost::TimePoint{} + std::chrono::milliseconds{1}, emit);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::LuaHostErrorCode::value_error);
+    CHECK(result.error().message.find("256") != std::string::npos);
+  }
 }
 
 TEST_CASE("lua callbacks report invalid values and timer requests without leaking",
@@ -959,6 +1072,36 @@ TEST_CASE("lua_host_action failures log and reject one invocation without stoppi
     CHECK(records.back().at("accepted") == true);
     CHECK_FALSE(records.back().contains("invocation_id"));
   }
+}
+
+TEST_CASE("lua_host_action fallback can reject unknown actions without a diagnostic",
+          "[lua_host_action]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "fallback.lua";
+  write_file(entry, R"lua(return gisland.module {
+  fallback_action = function(action_id, value)
+    if action_id ~= "missing" or value.answer ~= 42 then error("wrong fallback arguments") end
+    return false
+  end,
+})lua");
+  auto host = gisland::LuaHost::load(entry.string());
+  REQUIRE(host.has_value());
+  Records records;
+  const auto emit = collect_into(records);
+  REQUIRE((*host)->handle(init_record(), emit, {}).has_value());
+  records.clear();
+
+  REQUIRE((*host)->handle({{"type", "action"},
+                           {"action_id", "missing"},
+                           {"value", {{"answer", 42}}},
+                           {"invocation_id", "7"}},
+                          emit, {}) == gisland::LuaHostState::running);
+
+  REQUIRE(records.size() == 1);
+  CHECK(records[0] == nlohmann::json{{"type", "action_result"},
+                                     {"action_id", "missing"},
+                                     {"accepted", false},
+                                     {"invocation_id", "7"}});
 }
 
 TEST_CASE("lua_host_action validates the public action envelope", "[lua_host_action]") {
