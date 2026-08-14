@@ -1,3 +1,4 @@
+#include "fixtures/primitive_gallery.hpp"
 #include "gisland/island.hpp"
 #include "gisland/layout.hpp"
 #include "gisland/raylib_renderer.hpp"
@@ -87,37 +88,6 @@ public:
 
 [[nodiscard]] gisland::SceneNode icon(std::string name, std::string label) {
   return gisland::SceneNode{gisland::Icon{std::move(name), std::move(label)}};
-}
-
-[[nodiscard]] gisland::SceneNode all_primitives_gallery() {
-  return gisland::SceneNode{gisland::Column{
-      {text("Primitive gallery", "title"),
-       gisland::SceneNode{
-           gisland::Row{{icon("calendar", "Calendar"), text("Text and icon"),
-                         gisland::SceneNode{gisland::Spacer{true, {}}}, text("Muted", "muted")},
-                        "center",
-                        "small"}},
-       gisland::SceneNode{gisland::Progress{0.68, "Progress", "success"}},
-       gisland::SceneNode{
-           gisland::Row{{text("Indicators", "caption"),
-                         gisland::SceneNode{gisland::Indicator{"success", "Available"}},
-                         gisland::SceneNode{gisland::Indicator{"warning", "Delayed"}},
-                         gisland::SceneNode{gisland::Indicator{"error", "Failed"}},
-                         gisland::SceneNode{gisland::Indicator{"muted", "Inactive"}}},
-                        "center",
-                        "small"}},
-       gisland::SceneNode{
-           gisland::Row{{gisland::SceneNode{gisland::Spacer{false, "small"}},
-                         gisland::SceneNode{gisland::Button{icon("chevron-left", "Previous"),
-                                                            "previous", true, "Previous item"}},
-                         gisland::SceneNode{gisland::Button{text("Disabled", "caption"), "disabled",
-                                                            false, "Disabled action"}},
-                         gisland::SceneNode{gisland::Button{icon("chevron-right", "Next"), "next",
-                                                            true, "Next item"}}},
-                        "center",
-                        "small"}}},
-      "start",
-      "normal"}};
 }
 
 [[nodiscard]] gisland::SceneNode compact_time_date() {
@@ -378,7 +348,7 @@ void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisla
 } // namespace
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: all v1 primitives gallery") {
-  check_fixture("all-primitives", all_primitives_gallery(), gisland::ViewMode::expanded);
+  check_fixture("all-primitives", gisland::test::primitive_gallery(), gisland::ViewMode::expanded);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: compact time and date capsule") {

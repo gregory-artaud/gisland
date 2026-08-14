@@ -27,11 +27,6 @@ struct RendererError {
   std::string message;
 };
 
-struct RenderOrigin {
-  int x{};
-  int y{};
-};
-
 class RaylibPainter;
 class RaylibImageBook;
 class RaylibRichTextBook;

@@ -59,6 +59,11 @@ struct RectInsets {
   bool operator==(const RectInsets &) const = default;
 };
 
+struct RenderOrigin {
+  int x{};
+  int y{};
+};
+
 struct ViewShadow {
   int offset_x{};
   int offset_y{};

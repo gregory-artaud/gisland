@@ -1,10 +1,13 @@
 #include "wayland_prototype_runtime.hpp"
 
+#include "gisland/layout.hpp"
+#include "gisland/rlgl_painter.hpp"
+#include "gisland/rlgl_texture_books.hpp"
+#include "gisland/theme.hpp"
 #include "layer_shell_protocol.hpp"
-#include "rlgl_probe.hpp"
+#include "primitive_gallery.hpp"
 
 #include <EGL/egl.h>
-#include <rlgl.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
 
@@ -12,8 +15,15 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gisland::wayland_prototype {
@@ -41,7 +51,6 @@ struct State {
   int height{};
   bool configured{false};
   bool closed{false};
-  bool rlgl_ready{false};
   int frames{0};
   std::vector<std::uint32_t> outputs;
 };
@@ -130,9 +139,6 @@ void seat_name(void *, wl_seat *, const char *) {}
 constexpr wl_seat_listener seat_listener{seat_capabilities, seat_name};
 
 void destroy(State &state) {
-  if (state.rlgl_ready) {
-    rlglClose();
-  }
   if (state.egl_display != EGL_NO_DISPLAY) {
     eglMakeCurrent(state.egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (state.egl_surface != EGL_NO_SURFACE) {
@@ -239,34 +245,132 @@ int display_failure(State &state, std::string_view operation) {
     }
   }
   std::cerr << '\n';
-  destroy(state);
   return 1;
 }
 
-void render(State &state) {
-  rlSetFramebufferWidth(state.width);
-  rlSetFramebufferHeight(state.height);
-  rlViewport(0, 0, state.width, state.height);
-  rlClearColor(0, 0, 0, 0);
-  rlClearScreenBuffers();
-  rlMatrixMode(RL_PROJECTION);
-  rlLoadIdentity();
-  rlOrtho(0.0, static_cast<double>(state.width), static_cast<double>(state.height), 0.0, -1.0, 1.0);
-  rlMatrixMode(RL_MODELVIEW);
-  rlLoadIdentity();
-  const float left = 20.0F;
-  const float top = 20.0F;
-  const float right = static_cast<float>(state.width - 20);
-  const float bottom = static_cast<float>(state.height - 20);
-  rlBegin(RL_QUADS);
-  rlColor4ub(10, 12, 18, 245);
-  rlVertex2f(left, top);
-  rlVertex2f(left, bottom);
-  rlColor4ub(40, 100, 255, 245);
-  rlVertex2f(right, bottom);
-  rlVertex2f(right, top);
-  rlEnd();
-  rlDrawRenderBatchActive();
+[[nodiscard]] std::string read_file(const std::filesystem::path &path) {
+  std::ifstream stream{path, std::ios::binary};
+  if (!stream) {
+    throw std::runtime_error{"failed to read " + path.string()};
+  }
+  return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+}
+
+[[nodiscard]] bool matches_x11_reference(const std::vector<std::uint8_t> &pixels) {
+  const char *path = std::getenv("GISLAND_EXPECTED_RGBA_PATH");
+  if (path == nullptr) {
+    return false;
+  }
+  std::ifstream stream{path, std::ios::binary};
+  if (!stream) {
+    return false;
+  }
+  const std::vector<std::uint8_t> expected{std::istreambuf_iterator<char>{stream},
+                                           std::istreambuf_iterator<char>{}};
+  return pixels == expected;
+}
+
+[[nodiscard]] int render_gallery(State &state) {
+  auto session =
+      RlglSession::open(reinterpret_cast<void *>(eglGetProcAddress), state.width, state.height,
+                        {state.egl_context, [](void *expected) noexcept {
+                           return eglGetCurrentContext() == static_cast<EGLContext>(expected);
+                         }});
+  if (!session) {
+    std::cerr << "portable rlgl session initialization failed\n";
+    return 1;
+  }
+  const auto theme_path = std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "themes/default.toml";
+  auto theme = parse_theme(read_file(theme_path), theme_path.string());
+  if (!theme) {
+    std::cerr << "portable renderer theme initialization failed\n";
+    return 1;
+  }
+  auto fonts = RlglFontBook::load(*theme, GISLAND_TEST_ASSET_ROOT);
+  auto pango = PangoTextBook::load(*theme, GISLAND_TEST_ASSET_ROOT);
+  if (!fonts || !pango) {
+    std::cerr << "portable renderer font initialization failed\n";
+    return 1;
+  }
+  auto plan = layout_scene(test::primitive_gallery(), *theme, ViewMode::expanded, *fonts, *pango);
+  if (!plan || plan->view.bounds.width > state.width || plan->view.bounds.height > state.height) {
+    std::cerr << "portable renderer gallery layout failed\n";
+    return 1;
+  }
+  auto font_textures = RlglFontTextureBook::load(*session, *fonts);
+  auto images = RlglImageBook::load(*session, {});
+  auto rich_textures = RlglRichTextBook::load(*session, *pango, {});
+  if (!font_textures || !images || !rich_textures || !font_textures->prepare(*plan) ||
+      !images->prepare(*plan) || !rich_textures->prepare(*plan)) {
+    std::cerr << "portable renderer texture preparation failed\n";
+    return 1;
+  }
+  RenderOrigin origin{(state.width - plan->view.bounds.width) / 2,
+                      (state.height - plan->view.bounds.height) / 2};
+  const RlglPainter painter{*session, &*font_textures, &*images, &*rich_textures};
+  auto frame = RlglFrame::create(*session, state.width, state.height);
+  if (!frame) {
+    std::cerr << "portable renderer frame initialization failed\n";
+    return 1;
+  }
+  const auto previous_sigint = std::signal(SIGINT, request_stop);
+  const auto previous_sigterm = std::signal(SIGTERM, request_stop);
+  int result{};
+  while (!state.closed && stop_requested == 0) {
+    update_input_region(state);
+    if (frame->width() != state.width || frame->height() != state.height) {
+      if (plan->view.bounds.width > state.width || plan->view.bounds.height > state.height) {
+        std::cerr << "configured Wayland surface is smaller than the gallery\n";
+        result = 1;
+        break;
+      }
+      auto resized = RlglFrame::create(*session, state.width, state.height);
+      if (!resized) {
+        std::cerr << "portable renderer frame resize failed\n";
+        result = 1;
+        break;
+      }
+      frame = std::move(resized);
+      origin = {(state.width - plan->view.bounds.width) / 2,
+                (state.height - plan->view.bounds.height) / 2};
+    }
+    auto begun = frame->begin({0, 0, 0, 0});
+    auto surface =
+        begun ? painter.draw_surface(*plan, origin)
+              : std::expected<void, RlglPaintError>{std::unexpected(RlglPaintError::gpu_error)};
+    auto content = surface ? painter.draw_content(*plan, origin)
+                           : std::expected<void, RlglPaintError>{std::unexpected(surface.error())};
+    auto ended = frame->end();
+    if (!begun || !surface || !content || !ended || !frame->present()) {
+      std::cerr << "portable renderer frame failed\n";
+      result = 1;
+      break;
+    }
+    if (state.options.automated && state.frames == 0) {
+      auto pixels = frame->read_rgba8();
+      if (!pixels || !matches_x11_reference(*pixels)) {
+        std::cerr << "portable renderer gallery pixel comparison failed\n";
+        result = 1;
+        break;
+      }
+    }
+    if (eglSwapBuffers(state.egl_display, state.egl_surface) == 0) {
+      std::cerr << "Wayland EGL frame presentation failed\n";
+      result = 1;
+      break;
+    }
+    ++state.frames;
+    if (state.options.automated && state.frames >= 3) {
+      break;
+    }
+    if (wl_display_roundtrip(state.display) < 0 || wl_display_flush(state.display) < 0) {
+      result = display_failure(state, "Wayland dispatch");
+      break;
+    }
+  }
+  std::signal(SIGINT, previous_sigint);
+  std::signal(SIGTERM, previous_sigterm);
+  return result;
 }
 
 } // namespace
@@ -309,39 +413,15 @@ int run(const Options &options) {
     destroy(state);
     return 1;
   }
-  rlLoadExtensions(reinterpret_cast<void *>(eglGetProcAddress));
-  rlglInit(state.width, state.height);
-  state.rlgl_ready = true;
-  if (rlGetVersion() != RL_OPENGL_33 || rlGetFramebufferWidth() != state.width ||
-      rlGetFramebufferHeight() != state.height || gisland_rlgl_has_error()) {
-    std::cerr << "rlgl initialization failed\n";
-    destroy(state);
-    return 1;
+  int result{};
+  try {
+    result = render_gallery(state);
+  } catch (const std::exception &exception) {
+    std::cerr << "portable renderer initialization failed: " << exception.what() << '\n';
+    result = 1;
   }
-  const auto previous_sigint = std::signal(SIGINT, request_stop);
-  const auto previous_sigterm = std::signal(SIGTERM, request_stop);
-  while (!state.closed && stop_requested == 0) {
-    update_input_region(state);
-    render(state);
-    if (gisland_rlgl_has_error() || eglSwapBuffers(state.egl_display, state.egl_surface) == 0) {
-      std::cerr << "Wayland EGL frame presentation failed\n";
-      destroy(state);
-      return 1;
-    }
-    ++state.frames;
-    if (options.automated && state.frames >= 3) {
-      break;
-    }
-    if (wl_display_roundtrip(state.display) < 0 || wl_display_flush(state.display) < 0) {
-      std::signal(SIGINT, previous_sigint);
-      std::signal(SIGTERM, previous_sigterm);
-      return display_failure(state, "Wayland dispatch");
-    }
-  }
-  std::signal(SIGINT, previous_sigint);
-  std::signal(SIGTERM, previous_sigterm);
   destroy(state);
-  return 0;
+  return result;
 }
 
 } // namespace gisland::wayland_prototype

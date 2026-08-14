@@ -43,4 +43,4 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export LC_ALL=C
 export TZ=UTC
 dbus-run-session -- ctest --test-dir "${build_dir}" --output-on-failure \
-  -R 'input shape does not clip|^application_x11::|^x11_window::|^raylib_renderer::|^visual_regression::'
+  -R 'input shape does not clip|^application_x11::|^x11_window::|^raylib_renderer::|^rlgl_gpu::|^visual_regression::'
