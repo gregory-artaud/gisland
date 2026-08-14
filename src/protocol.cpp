@@ -409,7 +409,35 @@ parse_emphasis(const Json &object, const std::string &path) {
   if (!label) {
     return std::unexpected(label.error());
   }
-  return SceneNode{Indicator{std::move(*state), std::move(*label)}};
+  std::vector<IndicatorEffect> effects;
+  if (const auto iterator = object.find("effects"); iterator != object.end()) {
+    if (!iterator->is_array()) {
+      return std::unexpected(error_at(path + "/effects", "expected an array"));
+    }
+    std::set<std::string> unique;
+    effects.reserve(iterator->size());
+    for (std::size_t index = 0; index < iterator->size(); ++index) {
+      const auto item_path = path + "/effects/" + std::to_string(index);
+      const auto &entry = iterator->at(index);
+      if (!entry.is_string()) {
+        return std::unexpected(error_at(item_path, "expected a string"));
+      }
+      const auto value = entry.get<std::string>();
+      if (!unique.insert(value).second) {
+        return std::unexpected(error_at(item_path, "indicator effect must be unique"));
+      }
+      if (value == "shadow") {
+        effects.push_back(IndicatorEffect::shadow);
+      } else if (value == "glow") {
+        effects.push_back(IndicatorEffect::glow);
+      } else if (value == "breathe") {
+        effects.push_back(IndicatorEffect::breathe);
+      } else {
+        return std::unexpected(error_at(item_path, "unknown indicator effect"));
+      }
+    }
+  }
+  return SceneNode{Indicator{std::move(*state), std::move(*label), std::move(effects)}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_row(const Json &object,

@@ -74,6 +74,9 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
     capabilities.emplace_back("icon-roles");
     capabilities.emplace_back("progress-transitions");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 9}) {
+    capabilities.emplace_back("indicator-effects");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =

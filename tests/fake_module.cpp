@@ -293,7 +293,7 @@ void read_init() {
 }
 
 [[nodiscard]] int spawn_descendant() {
-  struct sigaction action{};
+  struct sigaction action {};
   action.sa_handler = request_termination;
   ::sigemptyset(&action.sa_mask);
   if (::sigaction(SIGTERM, &action, nullptr) != 0) {
@@ -313,7 +313,7 @@ void read_init() {
   }
   if (child == 0) {
     static_cast<void>(::close(ready_pipe[0]));
-    struct sigaction default_action{};
+    struct sigaction default_action {};
     default_action.sa_handler = SIG_DFL;
     ::sigemptyset(&default_action.sa_mask);
     if (::sigaction(SIGTERM, &default_action, nullptr) != 0) {
@@ -541,6 +541,37 @@ void read_init() {
       publish["compact"] = indicator;
     }
     write_json(publish);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
+  if (mode == "indicator-effects" || mode == "indicator-effects-without-capability" ||
+      mode == "indicator-effects-legacy" || mode == "indicator-effects-capability-on-1.8") {
+    read_init();
+    const bool legacy =
+        mode == "indicator-effects-legacy" || mode == "indicator-effects-capability-on-1.8";
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", legacy ? 8 : 9}};
+    ready["capabilities"] = {"status-indicator"};
+    if (mode == "indicator-effects" || mode == "indicator-effects-capability-on-1.8") {
+      ready["capabilities"].push_back("indicator-effects");
+    }
+    write_json(ready);
+    write_json({
+        {"type", "publish"},
+        {"context_id", "indicator-effects"},
+        {"priority", 20},
+        {"compact",
+         {{"type", "indicator"},
+          {"state", "success"},
+          {"accessible_label", "Running"},
+          {"effects", {"glow", "breathe"}}}},
+    });
     std::string line;
     while (std::getline(std::cin, line)) {
       const auto message = nlohmann::json::parse(line, nullptr, false);

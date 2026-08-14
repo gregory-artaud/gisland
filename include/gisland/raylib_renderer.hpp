@@ -32,6 +32,11 @@ struct RenderOrigin {
   int y{};
 };
 
+struct IndicatorAnimationState {
+  double elapsed_seconds{};
+  bool reduced_motion{};
+};
+
 class RaylibPainter;
 class RaylibImageBook;
 class RaylibRichTextBook;
@@ -130,8 +135,9 @@ public:
 
   [[nodiscard]] std::expected<void, RendererError> draw_surface(const LayoutPlan &plan,
                                                                 RenderOrigin origin = {}) const;
-  [[nodiscard]] std::expected<void, RendererError> draw_content(const LayoutPlan &plan,
-                                                                RenderOrigin origin = {}) const;
+  [[nodiscard]] std::expected<void, RendererError>
+  draw_content(const LayoutPlan &plan, RenderOrigin origin = {},
+               IndicatorAnimationState indicator = {}) const;
 
 private:
   const RaylibFontBook &fonts_;

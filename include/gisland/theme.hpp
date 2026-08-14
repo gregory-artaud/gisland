@@ -63,8 +63,42 @@ struct ProgressStyle {
   std::optional<double> ring_track_opacity;
 };
 
+enum class Easing { linear, ease_in, ease_out, ease_in_out };
+
+struct IndicatorShadowStyle {
+  double offset_x;
+  double offset_y;
+  double radius;
+  double opacity;
+};
+
+struct IndicatorAuraStyle {
+  double radius;
+  double intensity;
+  double opacity;
+};
+
+struct IndicatorBreatheStyle {
+  double radius;
+  double minimum_intensity;
+  double maximum_intensity;
+  double minimum_opacity;
+  double maximum_opacity;
+  std::chrono::milliseconds duration;
+  Easing easing;
+};
+
+struct IndicatorReducedMotionStyle {
+  double breathe_intensity;
+  double breathe_opacity;
+};
+
 struct IndicatorStyle {
   double diameter;
+  IndicatorShadowStyle shadow;
+  IndicatorAuraStyle glow;
+  IndicatorBreatheStyle breathe;
+  IndicatorReducedMotionStyle reduced_motion;
 };
 
 struct ShadowStyle {
@@ -74,8 +108,6 @@ struct ShadowStyle {
   double spread;
   ThemeColor color;
 };
-
-enum class Easing { linear, ease_in, ease_out, ease_in_out };
 
 struct ReducedMotionStyle {
   std::chrono::milliseconds compact_to_expanded_ms;

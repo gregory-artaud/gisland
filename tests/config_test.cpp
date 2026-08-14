@@ -113,12 +113,14 @@ enabled = false
 TEST_CASE("interaction timing parses explicit values and accepted boundaries") {
   SECTION("explicit values") {
     const auto result = gisland::parse_config(
-        config_with_interaction("animation_speed = 2.0\nhover_exit_ms = 450\n"),
+        config_with_interaction(
+            "animation_speed = 2.0\nhover_exit_ms = 450\nreduced_motion = true\n"),
         "interaction.toml");
 
     REQUIRE(result.has_value());
     CHECK(result->interaction.animation_speed == 2.0);
     CHECK(result->interaction.hover_exit == std::chrono::milliseconds{450});
+    CHECK(result->interaction.reduced_motion);
   }
 
   SECTION("minimum values") {
@@ -154,6 +156,9 @@ TEST_CASE("invalid interaction timing is rejected at the TOML boundary") {
   }
   SECTION("hover exit type") {
     check_error_path("hover_exit_ms = 120.0\n", "interaction.hover_exit_ms");
+  }
+  SECTION("reduced motion type") {
+    check_error_path("reduced_motion = \"yes\"\n", "interaction.reduced_motion");
   }
   SECTION("non-finite animation speed") {
     check_error_path("animation_speed = inf\n", "interaction.animation_speed");

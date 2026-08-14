@@ -204,6 +204,65 @@ TEST_CASE("indicator theme diameter is optional and bounded") {
   }
 }
 
+TEST_CASE("theme owns bounded indicator effect and reduced-motion parameters") {
+  const auto themed = replace_once(std::string{valid_theme}, "[shadow]",
+                                   R"([indicator]
+diameter = 9
+
+[indicator.shadow]
+offset_x = 1
+offset_y = 2
+radius = 3
+opacity = 0.25
+
+[indicator.glow]
+radius = 6
+intensity = 0.8
+opacity = 0.4
+
+[indicator.breathe]
+radius = 8
+minimum_intensity = 0.3
+maximum_intensity = 0.9
+minimum_opacity = 0.1
+maximum_opacity = 0.5
+duration_ms = 1800
+easing = "ease-in-out"
+
+[indicator.reduced_motion]
+breathe_intensity = 0.6
+breathe_opacity = 0.25
+
+[shadow])");
+  const auto result = gisland::parse_theme(themed, "indicator-effects.toml");
+
+  REQUIRE(result.has_value());
+  CHECK(result->indicator().diameter == 9.0);
+  CHECK(result->indicator().shadow.radius == 3.0);
+  CHECK(result->indicator().glow.intensity == 0.8);
+  CHECK(result->indicator().breathe.duration == std::chrono::milliseconds{1800});
+  CHECK(result->indicator().breathe.easing == gisland::Easing::ease_in_out);
+  CHECK(result->indicator().reduced_motion.breathe_opacity == 0.25);
+}
+
+TEST_CASE("theme rejects inconsistent indicator breathe ranges") {
+  const auto themed = replace_once(std::string{valid_theme}, "[shadow]",
+                                   R"([indicator.breathe]
+radius = 8
+minimum_intensity = 1
+maximum_intensity = 0.2
+minimum_opacity = 0.1
+maximum_opacity = 0.5
+duration_ms = 1800
+easing = "linear"
+
+[shadow])");
+  const auto result = gisland::parse_theme(themed, "indicator-effects.toml");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "indicator.breathe.minimum_intensity");
+}
+
 TEST_CASE("fixed native canvas covers theme maxima and shadow") {
   const auto theme = gisland::parse_theme(valid_theme, "theme.toml");
   REQUIRE(theme.has_value());

@@ -144,6 +144,8 @@ struct IndicatorDrawCommand {
   Rect clip;
   Rgba color;
   std::string accessible_label;
+  std::vector<IndicatorEffect> effects{};
+  std::optional<IndicatorStyle> style{};
 };
 
 struct ButtonDecorationDrawCommand {

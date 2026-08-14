@@ -693,6 +693,14 @@ week_start = "sunday"
   REQUIRE(resolved_1_8.has_value());
   CHECK(resolved_1_8->modules.front().minimum_protocol == gisland::ProtocolVersion{1, 8});
   CHECK(resolved_1_8->modules.front().maximum_protocol == gisland::ProtocolVersion{1, 8});
+
+  auto protocol_1_9 = catalog;
+  protocol_1_9.manifests.at("clock-calendar").minimum_protocol = {1, 9};
+  protocol_1_9.manifests.at("clock-calendar").maximum_protocol = {1, 9};
+  const auto resolved_1_9 = gisland::parse_config(config, "config.toml", protocol_1_9);
+  REQUIRE(resolved_1_9.has_value());
+  CHECK(resolved_1_9->modules.front().minimum_protocol == gisland::ProtocolVersion{1, 9});
+  CHECK(resolved_1_9->modules.front().maximum_protocol == gisland::ProtocolVersion{1, 9});
 }
 
 TEST_CASE("manifest-backed config rejects unknown options and incompatible protocols") {

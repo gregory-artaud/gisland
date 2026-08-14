@@ -63,7 +63,7 @@ struct ModuleInstanceConfig {
   std::optional<std::filesystem::path> manifest_path;
   std::vector<std::string> command;
   ProtocolVersion minimum_protocol{1, 0};
-  ProtocolVersion maximum_protocol{1, 8};
+  ProtocolVersion maximum_protocol{1, 9};
   bool enabled{true};
   ConfigValue::Table options;
   RestartPolicy restart{RestartPolicy::on_failure};
@@ -81,6 +81,7 @@ struct ModuleInstanceConfig {
 struct InteractionConfig {
   double animation_speed{1.25};
   std::chrono::milliseconds hover_exit{120};
+  bool reduced_motion{false};
 };
 
 struct AppConfig {
