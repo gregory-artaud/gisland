@@ -13,8 +13,6 @@ include(FetchContent)
 include(GNUInstallDirs)
 include(cmake/ProjectOptions.cmake)
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
 set(GISLAND_LGI_ROOT "" CACHE PATH "Optional root containing a Lua 5.4-compatible lgi")
 
@@ -48,6 +46,7 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -132,12 +131,12 @@ endif()
 if(NOT GISLAND_LGI_CHECK_RESULT EQUAL 0)
   message(
     FATAL_ERROR
-      "gisland requires Lua 5.4-compatible lgi with GLib, Gio, and Json-GLib 1.0; install lgi and the Json typelib for "
+      "gisland requires Lua 5.4-compatible lgi with GLib, Gio, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0; install lgi and the required typelibs for "
       "${LUA54_EXECUTABLE} or set GISLAND_LGI_ROOT to a staged installation. "
       "Probe error: ${GISLAND_LGI_CHECK_ERROR}"
   )
 endif()
-message(STATUS "Found a Lua 5.4-compatible lgi with GLib, Gio, and Json-GLib 1.0")
+message(STATUS "Found a Lua 5.4-compatible lgi with GLib, Gio, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0")
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -298,39 +297,6 @@ configure_file(
   "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
   @ONLY
 )
-set(GISLAND_NOTIFICATION_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/notifications")
-configure_file(
-  packaging/gisland-notifications.in
-  "${PROJECT_BINARY_DIR}/gisland-notifications"
-  @ONLY
-)
-configure_file(
-  packaging/gisland-notification-history.in
-  "${PROJECT_BINARY_DIR}/gisland-notification-history"
-  @ONLY
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-notifications"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-notification-history"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
-set(
-  GISLAND_NOTIFICATION_PYTHON_ROOT
-  "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
-)
-configure_file(
-  packaging/gisland-notifications.in
-  "${PROJECT_BINARY_DIR}/install/gisland-notifications"
-  @ONLY
-)
-configure_file(
-  packaging/gisland-notification-history.in
-  "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
-  @ONLY
-)
 configure_file(
   packaging/gisland.service.in
   "${PROJECT_BINARY_DIR}/install/gisland.service"
@@ -357,6 +323,10 @@ install(
 install(
   FILES "${PROJECT_BINARY_DIR}/install/notifications.module.toml"
   RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
+)
+install(
+  FILES assets/modules/notifications/notifications.lua
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
 )
 install(
@@ -396,17 +366,6 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/lua-example"
 )
 install(
-  PROGRAMS
-    "${PROJECT_BINARY_DIR}/install/gisland-notifications"
-    "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
-  DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)
-install(
-  DIRECTORY modules/notifications/gisland_notifications
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/notifications"
-  PATTERN "__pycache__" EXCLUDE
-)
-install(
   FILES "${PROJECT_BINARY_DIR}/install/gisland.service"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/systemd/user"
 )
@@ -426,13 +385,26 @@ if(BUILD_TESTING)
       COMMAND "${LUA54_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
     )
   endif()
-  add_test(
-    NAME notifications_python
-    COMMAND
-      dbus-run-session -- env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/notifications"
-      "${Python3_EXECUTABLE}" -m unittest discover -s
-      "${PROJECT_SOURCE_DIR}/tests/notifications" -p "test_*.py" -v
-  )
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME notifications_contract_lua
+      COMMAND
+        dbus-run-session -- env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/notifications/notifications_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/notifications/notifications.lua\"]"
+        --protocol-minor 8
+    )
+  else()
+    add_test(
+      NAME notifications_contract_lua
+      COMMAND
+        dbus-run-session -- "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/notifications/notifications_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/notifications/notifications.lua\"]"
+        --protocol-minor 8
+    )
+  endif()
   if(GISLAND_LGI_ROOT)
     add_test(
       NAME battery_contract_lua
@@ -668,7 +640,7 @@ if(BUILD_TESTING)
         GISLAND_AUDIO_LUA_PATH="${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua"
         GISLAND_AUDIO_FAKE_PACTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-pactl"
         GISLAND_AUDIO_FAKE_GISLANDCTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-gislandctl"
-        GISLAND_NOTIFICATION_HISTORY_PATH="${PROJECT_BINARY_DIR}/gisland-notification-history"
+        GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
     )
     if(GISLAND_LGI_PREFIX)
       target_compile_definitions(

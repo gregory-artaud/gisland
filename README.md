@@ -19,8 +19,9 @@ user's XDG directories and does not need to be added to this repository.
 - Git
 - clang-format and clang-tidy for optional quality checks
 - Lua 5.4 interpreter and development files for Lua modules and tests
-- A Lua 5.4-compatible `lgi`, plus GLib, Gio, and Json-GLib 1.0 typelibs, for Lua modules
-- Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
+- A Lua 5.4-compatible `lgi`, plus GLib, Gio, Json-GLib 1.0, GdkPixbuf 2.0, and
+  librsvg 2.0, and GTK 3.0 typelibs, for Lua modules
+- Python 3 and PyGObject for the D-Bus contract tests
 - `pactl` for default output mute and volume controls
 - `timeout` for bounded audio module commands
 - UPower for event-driven battery status and charge alerts
@@ -34,7 +35,8 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
   libpango1.0-dev libfontconfig1-dev lua5.4 liblua5.4-dev python3 python3-gi \
-  gir1.2-gtk-3.0 gir1.2-json-1.0 lua-lgi pulseaudio-utils
+  gir1.2-json-1.0 gir1.2-gdkpixbuf-2.0 gir1.2-rsvg-2.0 gir1.2-gtk-3.0 \
+  lua-lgi pulseaudio-utils
 ```
 
 ### Fedora
@@ -43,7 +45,8 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel lua-devel lua-lgi json-glib python3 python3-gobject gtk3 pulseaudio-utils
+  fontconfig-devel lua-devel lua-lgi json-glib gdk-pixbuf2 librsvg2 gtk3 \
+  python3 python3-gobject pulseaudio-utils
 ```
 
 ### Arch Linux
@@ -51,7 +54,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  lua54 lua54-lgi glib2 json-glib python-gobject gtk3 libpulse
+  lua54 lua54-lgi glib2 json-glib gdk-pixbuf2 librsvg gtk3 python-gobject libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -442,15 +445,17 @@ notification module beside it. A user
 
 ## Desktop Notifications
 
-The shipped `gisland-notifications` process owns `org.freedesktop.Notifications` on the user session
-bus and exposes the standard freedesktop notification interface. It runs as an ordinary supervised
-protocol-1.4 module; a missing Python or GI dependency stops only this module and does not terminate
-the graphical core. Another notification daemon must not already own the bus name.
+The shipped single-entry `notifications.lua` module owns `org.freedesktop.Notifications` on the user
+session bus and exposes the standard freedesktop notification interface. It runs through
+`gisland-lua-host` as an ordinary supervised protocol-1.8 module. A missing lgi or typelib dependency
+stops only this module and does not terminate the graphical core. Another notification daemon must
+not already own the bus name.
 
 The daemon supports application names and icons, summaries, freedesktop body markup, default and
 named actions, resident notifications, urgency, replacement IDs, and local image data. Body markup
 is converted to typed rich text rather than passed to the renderer. Images may come from RGB8 or
-RGBA8 `image-data`, local paths or `file:` URIs, and GTK icon-theme names. They are normalized to
+RGBA8 `image-data`, local paths or `file:` URIs, desktop entries, and local icon names. GdkPixbuf and
+librsvg decode raster and SVG files. Images are normalized to
 straight-alpha RGBA8 and downscaled to at most 512 pixels per axis. Remote image URLs are rejected.
 
 An explicit positive timeout is honored and zero disables automatic expiration. A negative timeout
@@ -485,15 +490,19 @@ History stores bounded plain-text notification content under
 `$HOME/.local/state/gisland/notifications-history.json`. It does not retain actions, links, images,
 or arbitrary hints.
 
-Run `gisland-notification-history` to open the newest historical notification. Repeating the command
-adds one older entry below it, up to `history_visible_limit`. Clicking an entry masks it for the
+The public history action ID is `show-more`. Run `gislandctl action notifications show-more`, then
+atomically select and open it with `gislandctl activate-open notifications` after the correlated
+action succeeds. Repeating the pair adds one older entry below
+it, up to `history_visible_limit`. Rendered entries use
+`history:<session>:hide:<sequence>` and the close icon uses
+`history:<session>:close-all`; these remain module-owned scene actions. Clicking an entry masks it for the
 current opening without deleting persisted history; the close icon masks the complete current stack.
 Masking the final visible entry, using the close icon, or waiting eight seconds without interaction
 closes the overlay. Every invocation and click resets that inactivity deadline. The next opening
 restores all session-masked entries and starts again with one entry. A direct i3 binding is:
 
 ```i3
-bindsym $mod+n exec --no-startup-id ~/.local/bin/gisland-notification-history
+bindsym $mod+n exec --no-startup-id sh -c 'gislandctl action notifications show-more && gislandctl activate-open notifications'
 ```
 
 Links are opened through Gio only for `http`, `https`, and `mailto` URIs. The daemon never invokes a

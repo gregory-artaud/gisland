@@ -7,6 +7,7 @@ test_root=$(mktemp -d)
 trap 'rm -rf "$test_root"' EXIT
 source_dir="$test_root/source"
 mkdir -p "$source_dir/scripts" "$source_dir/assets/modules/battery" \
+  "$source_dir/assets/modules/notifications" \
   "$source_dir/build/release/install"
 cp "$project_source_dir/scripts/install-local.sh" "$source_dir/scripts/install-local.sh"
 cp "$project_source_dir/assets/modules/battery/config.toml" \
@@ -14,6 +15,10 @@ cp "$project_source_dir/assets/modules/battery/config.toml" \
   "$project_source_dir/assets/modules/battery/battery.lua" \
   "$source_dir/assets/modules/battery/"
 printf 'current-battery-manifest\n' >"$source_dir/build/release/install/battery.module.toml"
+cp "$project_source_dir/assets/modules/notifications/notifications.lua" \
+  "$source_dir/assets/modules/notifications/notifications.lua"
+printf 'current-notifications-manifest\n' \
+  >"$source_dir/build/release/install/notifications.module.toml"
 printf 'current-lua-host\n' >"$source_dir/build/release/gisland-lua-host"
 
 fail() {
@@ -76,6 +81,9 @@ make_case() {
     "$case_dir/home/.local/bin" \
     "$case_dir/home/.local/share/gisland/audio/gisland_audio" \
     "$case_dir/home/.local/share/gisland/battery/gisland_battery" \
+    "$case_dir/home/.local/share/gisland/notifications/gisland_notifications" \
+    "$case_dir/home/.local/share/gisland/distributed/modules/notifications" \
+    "$case_dir/home/.local/state/gisland" \
     "$case_dir/home/.local/share/gisland/distributed/modules/battery" \
     "$case_dir/home/.local/share/gisland/distributed/modules/clock-calendar" \
     "$case_dir/home/.local/share/gisland/distributed/modules/audio-lua" \
@@ -88,6 +96,8 @@ make_case() {
   printf 'legacy-control\n' >"$case_dir/home/.local/bin/gisland-audio-control"
   printf 'legacy-clock\n' >"$case_dir/home/.local/bin/gisland-clock-calendar"
   printf 'legacy-battery\n' >"$case_dir/home/.local/bin/gisland-battery"
+  printf 'legacy-notifications\n' >"$case_dir/home/.local/bin/gisland-notifications"
+  printf 'legacy-history\n' >"$case_dir/home/.local/bin/gisland-notification-history"
   printf 'unfingerprinted-clock-helper\n' \
     >"$case_dir/home/.local/share/gisland/distributed/modules/clock-calendar/calendar.lua"
   printf 'legacy-package\n' \
@@ -101,12 +111,22 @@ make_case() {
     >"$case_dir/home/.local/share/gisland/battery/gisland_battery/application.py"
   printf 'keep-battery-sibling\n' \
     >"$case_dir/home/.local/share/gisland/battery/sentinel"
+  printf 'legacy-notification-package\n' \
+    >"$case_dir/home/.local/share/gisland/notifications/gisland_notifications/application.py"
+  printf 'keep-notification-sibling\n' \
+    >"$case_dir/home/.local/share/gisland/notifications/sentinel"
+  printf 'preserved-history\n' \
+    >"$case_dir/home/.local/state/gisland/notifications-history.json"
   for package_file in module.toml config.toml view.toml battery.lua; do
     printf 'stale-battery\n' \
       >"$case_dir/home/.local/share/gisland/distributed/modules/battery/$package_file"
   done
   printf 'legacy-candidate\n' \
     >"$case_dir/home/.local/share/gisland/distributed/modules/audio-lua/module.toml"
+  printf 'stale-notification-manifest\n' \
+    >"$case_dir/home/.local/share/gisland/distributed/modules/notifications/module.toml"
+  printf 'stale-notification-module\n' \
+    >"$case_dir/home/.local/share/gisland/distributed/modules/notifications/notifications.lua"
   printf 'keep-bin\n' >"$case_dir/home/.local/bin/unrelated-tool"
   : >"$case_dir/commands.log"
 
@@ -149,6 +169,13 @@ fi
       cp assets/modules/battery/config.toml assets/modules/battery/view.toml \
         assets/modules/battery/battery.lua \
         "$HOME/.local/share/gisland/distributed/modules/battery/"
+    fi
+    if [[ ${FAKE_CMAKE_MISSING_NOTIFICATIONS:-0} != 1 ]]; then
+      mkdir -p "$HOME/.local/share/gisland/distributed/modules/notifications"
+      cp build/release/install/notifications.module.toml \
+        "$HOME/.local/share/gisland/distributed/modules/notifications/module.toml"
+      cp assets/modules/notifications/notifications.lua \
+        "$HOME/.local/share/gisland/distributed/modules/notifications/notifications.lua"
     fi
 fi
 EOF
@@ -264,12 +291,15 @@ assert_contains "$success_log" 'systemctl|--user stop gisland.service'
 assert_contains "$success_log" 'cmake|--install build/release'
 assert_contains "$success_log" 'systemctl|--user daemon-reload'
 assert_contains "$success_log" 'systemctl|--user import-environment DISPLAY XAUTHORITY'
-assert_contains "$success_log" 'systemctl|--user enable --now gisland.service'
+assert_contains "$success_log" 'systemctl|--user start gisland.service'
+assert_contains "$success_log" 'systemctl|--user enable gisland.service'
 assert_contains "$success_log" 'gislandctl|status'
 assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio"
 assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio-control"
 assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-clock-calendar"
 assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-battery"
+assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-notifications"
+assert_contains "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-notification-history"
 assert_contains "$success_log" \
   "rm|-f -- $success_case/home/.local/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 assert_contains "$success_log" \
@@ -278,6 +308,8 @@ assert_contains "$success_log" \
   "rm|-rf -- $success_case/home/.local/share/gisland/distributed/modules/audio-lua"
 assert_contains "$success_log" \
   "rm|-rf -- $success_case/home/.local/share/gisland/battery/gisland_battery"
+assert_contains "$success_log" \
+  "rm|-rf -- $success_case/home/.local/share/gisland/notifications/gisland_notifications"
 assert_not_contains "$success_log" 'sudo'
 assert_not_contains "$success_log" '/usr/local'
 assert_service_state "$success_case" 1 enabled
@@ -286,24 +318,35 @@ build_line=$(line_number "$success_log" 'cmake|--build --preset release')
 stop_line=$(line_number "$success_log" 'systemctl|--user stop gisland.service')
 install_line=$(line_number "$success_log" 'cmake|--install build/release')
 cleanup_line=$(line_number "$success_log" "rm|-f -- $success_case/home/.local/bin/gisland-audio")
-start_line=$(line_number "$success_log" 'systemctl|--user enable --now gisland.service')
+start_line=$(line_number "$success_log" 'systemctl|--user start gisland.service')
+health_line=$(line_number "$success_log" 'gislandctl|status')
+enable_line=$(line_number "$success_log" 'systemctl|--user enable gisland.service')
 ((build_line < stop_line)) || fail 'the build must complete before the service stops'
 ((stop_line < install_line && install_line < cleanup_line && cleanup_line < start_line)) ||
   fail 'legacy cleanup must follow install while the service is stopped'
+((start_line < health_line && health_line < enable_line)) ||
+  fail 'the service must become healthy before it is enabled'
 assert_not_exists "$success_case/home/.local/bin/gisland-audio"
 assert_not_exists "$success_case/home/.local/bin/gisland-audio-control"
 assert_not_exists "$success_case/home/.local/bin/gisland-clock-calendar"
 assert_not_exists "$success_case/home/.local/bin/gisland-battery"
+assert_not_exists "$success_case/home/.local/bin/gisland-notifications"
+assert_not_exists "$success_case/home/.local/bin/gisland-notification-history"
 assert_not_exists \
   "$success_case/home/.local/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 assert_not_exists "$success_case/home/.local/share/gisland/audio/gisland_audio"
 assert_not_exists "$success_case/home/.local/share/gisland/distributed/modules/audio-lua"
 assert_not_exists "$success_case/home/.local/share/gisland/battery/gisland_battery"
+assert_not_exists "$success_case/home/.local/share/gisland/notifications/gisland_notifications"
 assert_exists "$success_case/home/.local/bin/unrelated-tool"
 [[ $(<"$success_case/home/.local/share/gisland/audio/sentinel") == keep-audio-sibling ]] ||
   fail 'legacy audio cleanup changed a sibling file'
 [[ $(<"$success_case/home/.local/share/gisland/battery/sentinel") == keep-battery-sibling ]] ||
   fail 'legacy battery cleanup changed a sibling file'
+[[ $(<"$success_case/home/.local/share/gisland/notifications/sentinel") == keep-notification-sibling ]] ||
+  fail 'legacy notification cleanup changed a sibling file'
+[[ $(<"$success_case/home/.local/state/gisland/notifications-history.json") == preserved-history ]] ||
+  fail 'notification cleanup changed persisted history'
 [[ $(<"$success_case/home/.config/gisland/config.toml") == keep-config ]] ||
   fail 'user configuration changed'
 [[ $(<"$success_case/xdg-config/gisland/sentinel") == keep-xdg-config ]] ||
@@ -327,6 +370,8 @@ assert_not_contains "$build_failure_case/commands.log" 'rm|'
 assert_exists "$build_failure_case/home/.local/bin/gisland-audio"
 assert_exists "$build_failure_case/home/.local/bin/gisland-clock-calendar"
 assert_exists "$build_failure_case/home/.local/bin/gisland-battery"
+assert_exists "$build_failure_case/home/.local/bin/gisland-notifications"
+assert_exists "$build_failure_case/home/.local/bin/gisland-notification-history"
 assert_exists "$build_failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
 
 install_failure_case=$(make_case install-failure)
@@ -403,6 +448,25 @@ assert_service_state "$battery_replacement_failure_case" 1 enabled
   fail 'a stale preseeded battery package must not pass replacement verification'
 [[ $(<"$battery_replacement_failure_case/home/.local/share/gisland/battery/sentinel") == keep-battery-sibling ]] ||
   fail 'battery replacement failure changed an unrelated sibling'
+
+notification_replacement_failure_case=$(make_case notification-replacement-failure)
+if run_installer "$notification_replacement_failure_case" FAKE_CMAKE_MISSING_NOTIFICATIONS=1 \
+  FAKE_SERVICE_ACTIVE=1 FAKE_SERVICE_ENABLED=1; then
+  fail 'a missing replacement notifications package must fail the installer'
+fi
+assert_contains "$notification_replacement_failure_case/commands.log" \
+  'systemctl|--user start gisland.service'
+assert_not_contains "$notification_replacement_failure_case/commands.log" 'rm|'
+assert_exists "$notification_replacement_failure_case/home/.local/bin/gisland-notifications"
+assert_exists "$notification_replacement_failure_case/home/.local/bin/gisland-notification-history"
+assert_exists \
+  "$notification_replacement_failure_case/home/.local/share/gisland/notifications/gisland_notifications/application.py"
+[[ $(<"$notification_replacement_failure_case/home/.local/share/gisland/distributed/modules/notifications/module.toml") == stale-notification-manifest ]] ||
+  fail 'a stale preseeded notification manifest must not pass replacement verification'
+[[ $(<"$notification_replacement_failure_case/home/.local/share/gisland/distributed/modules/notifications/notifications.lua") == stale-notification-module ]] ||
+  fail 'a stale preseeded notification module must not pass replacement verification'
+[[ $(<"$notification_replacement_failure_case/home/.local/state/gisland/notifications-history.json") == preserved-history ]] ||
+  fail 'notification replacement failure changed persisted history'
 
 for failure_kind in health cleanup; do
   for active in 0 1; do

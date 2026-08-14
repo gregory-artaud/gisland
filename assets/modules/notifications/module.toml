@@ -1,12 +1,13 @@
 id = "notifications"
 name = "Desktop Notifications"
 description = "Freedesktop notification service for gisland"
-command = ["gisland-notifications"]
+command = ["gisland-lua-host"]
+entry = "notifications.lua"
 
 [protocol]
 major = 1
-minimum_minor = 4
-maximum_minor = 4
+minimum_minor = 8
+maximum_minor = 8
 
 [defaults]
 reveal_duration_ms = 1000

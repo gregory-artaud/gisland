@@ -137,6 +137,34 @@ for index in "${!battery_sources[@]}"; do
   fi
 done
 
+replacement_notification_files=(
+  "$install_prefix/bin/gisland-lua-host"
+  "$install_prefix/share/gisland/distributed/modules/notifications/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/notifications/notifications.lua"
+)
+for replacement_notification_file in "${replacement_notification_files[@]}"; do
+  if [[ ! -f $replacement_notification_file ]]; then
+    printf 'install-local: replacement notification file was not installed: %s\n' \
+      "$replacement_notification_file" >&2
+    exit 1
+  fi
+done
+notification_sources=(
+  "$source_dir/build/release/install/notifications.module.toml"
+  "$source_dir/assets/modules/notifications/notifications.lua"
+)
+notification_destinations=(
+  "$install_prefix/share/gisland/distributed/modules/notifications/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/notifications/notifications.lua"
+)
+for index in "${!notification_sources[@]}"; do
+  if ! cmp -s -- "${notification_sources[$index]}" "${notification_destinations[$index]}"; then
+    printf 'install-local: installed notification file is not current: %s\n' \
+      "${notification_destinations[$index]}" >&2
+    exit 1
+  fi
+done
+
 rm -f -- "$install_prefix/bin/gisland-clock-calendar"
 rm -f -- "$install_prefix/share/gisland/distributed/modules/clock-calendar/calendar.lua"
 rm -f -- "$install_prefix/bin/gisland-audio"
@@ -147,6 +175,10 @@ rm -rf -- "$install_prefix/share/gisland/distributed/modules/audio-lua"
 rm -f -- "$install_prefix/bin/gisland-battery"
 rm -rf -- "$install_prefix/share/gisland/battery/gisland_battery"
 rmdir -- "$install_prefix/share/gisland/battery" 2>/dev/null || true
+rm -f -- "$install_prefix/bin/gisland-notifications"
+rm -f -- "$install_prefix/bin/gisland-notification-history"
+rm -rf -- "$install_prefix/share/gisland/notifications/gisland_notifications"
+rmdir -- "$install_prefix/share/gisland/notifications" 2>/dev/null || true
 
 systemctl --user daemon-reload
 
@@ -161,10 +193,11 @@ if ((${#environment_names[@]} > 0)); then
   systemctl --user import-environment "${environment_names[@]}"
 fi
 
-systemctl --user enable --now gisland.service
+systemctl --user start gisland.service
 
 for ((attempt = 0; attempt < 20; ++attempt)); do
   if "$installed_control" status >/dev/null 2>&1; then
+    systemctl --user enable gisland.service
     service_state_captured=false
     printf 'gisland installed successfully under %s\n' "$install_prefix"
     exit 0

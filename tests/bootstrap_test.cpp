@@ -171,7 +171,14 @@ TEST_CASE(
   CHECK(std::get<std::string>(bootstrap->config.modules.front().options.at("week_start").value) ==
         "monday");
   CHECK(bootstrap->config.modules[1].module_id == "notifications");
-  CHECK(bootstrap->config.modules[1].command.front() == "gisland-notifications");
+  const auto notification_package =
+      std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "modules/notifications";
+  CHECK(bootstrap->config.modules[1].command.front() == "gisland-lua-host");
+  REQUIRE(bootstrap->config.modules[1].command.size() == 3);
+  CHECK(bootstrap->config.modules[1].command[1] ==
+        std::filesystem::canonical(notification_package / "notifications.lua"));
+  CHECK(bootstrap->config.modules[1].minimum_protocol == gisland::ProtocolVersion{1, 8});
+  CHECK(bootstrap->config.modules[1].maximum_protocol == gisland::ProtocolVersion{1, 8});
   CHECK(std::get<std::int64_t>(
             bootstrap->config.modules[1].options.at("reveal_duration_ms").value) == 1000);
   CHECK(std::get<std::int64_t>(bootstrap->config.modules[1].options.at("history_limit").value) ==

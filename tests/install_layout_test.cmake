@@ -21,8 +21,6 @@ set(required_files
     "${root}/${BINDIR}/gisland"
     "${root}/${BINDIR}/gislandctl"
     "${root}/${BINDIR}/gisland-lua-host"
-    "${root}/${BINDIR}/gisland-notifications"
-    "${root}/${BINDIR}/gisland-notification-history"
     "${root}/${DATADIR}/gisland/distributed/config.toml"
     "${root}/${DATADIR}/gisland/distributed/themes/default.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/module.toml"
@@ -30,6 +28,7 @@ set(required_files
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/view.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/clock-calendar/clock_calendar.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/notifications/notifications.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/module.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/config.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/battery/view.toml"
@@ -42,7 +41,6 @@ set(required_files
     "${root}/${DATADIR}/gisland/distributed/modules/audio/config.toml"
     "${root}/${DATADIR}/gisland/distributed/modules/audio/audio.lua"
     "${root}/${DATADIR}/gisland/distributed/modules/audio/command.lua"
-    "${root}/${DATADIR}/gisland/notifications/gisland_notifications/application.py"
     "${root}/${DATADIR}/systemd/user/gisland.service")
 foreach(required_file IN LISTS required_files)
   if(NOT EXISTS "${required_file}")
@@ -68,6 +66,9 @@ set(forbidden_paths
     "${root}/${DATADIR}/gisland/distributed/modules/audio-lua"
     "${root}/${BINDIR}/gisland-battery"
     "${root}/${DATADIR}/gisland/battery"
+    "${root}/${BINDIR}/gisland-notifications"
+    "${root}/${BINDIR}/gisland-notification-history"
+    "${root}/${DATADIR}/gisland/notifications"
     "${root}/${DATADIR}/dbus-1/services/org.gisland.Audio.service"
     "${root}/${DATADIR}/systemd/user/gisland-audio.service")
 foreach(forbidden_path IN LISTS forbidden_paths)
@@ -164,13 +165,14 @@ endif()
 
 file(READ "${root}/${DATADIR}/gisland/distributed/modules/notifications/module.toml"
      notification_manifest)
-set(notification_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-notifications\"]")
+set(notification_command "command = [\"${INSTALL_PREFIX}/${BINDIR}/gisland-lua-host\"]")
 string(FIND "${notification_manifest}" "${notification_command}" notification_command_position)
-if(notification_command_position EQUAL -1)
+string(FIND "${notification_manifest}" "entry = \"notifications.lua\"" notification_entry_position)
+if(notification_command_position EQUAL -1 OR notification_entry_position EQUAL -1)
   message(FATAL_ERROR "installed notification manifest has the wrong command: ${notification_manifest}")
 endif()
-string(FIND "${notification_manifest}" "minimum_minor = 4" notification_minimum_position)
-string(FIND "${notification_manifest}" "maximum_minor = 4" notification_maximum_position)
+string(FIND "${notification_manifest}" "minimum_minor = 8" notification_minimum_position)
+string(FIND "${notification_manifest}" "maximum_minor = 8" notification_maximum_position)
 if(notification_minimum_position EQUAL -1 OR notification_maximum_position EQUAL -1)
   message(FATAL_ERROR "installed notification manifest has the wrong protocol: ${notification_manifest}")
 endif()
@@ -184,16 +186,13 @@ if(notification_default_position EQUAL -1 OR notification_schema_position EQUAL 
   message(FATAL_ERROR "installed notification manifest lacks reveal duration configuration: ${notification_manifest}")
 endif()
 
-file(READ "${root}/${BINDIR}/gisland-notifications" notification_executable)
-string(FIND "${notification_executable}" "main(\"1.0.0\")" notification_version_position)
-if(notification_version_position EQUAL -1)
-  message(FATAL_ERROR "installed notification daemon has the wrong project version")
-endif()
-
-file(READ "${root}/${BINDIR}/gisland-notification-history" history_executable)
-string(FIND "${history_executable}" "main()" history_entrypoint_position)
-if(history_entrypoint_position EQUAL -1)
-  message(FATAL_ERROR "installed notification history helper has the wrong entry point")
+file(GLOB installed_notification_lua_files LIST_DIRECTORIES false
+     "${root}/${DATADIR}/gisland/distributed/modules/notifications/*.lua")
+set(expected_notification_lua_file
+    "${root}/${DATADIR}/gisland/distributed/modules/notifications/notifications.lua")
+if(NOT installed_notification_lua_files STREQUAL expected_notification_lua_file)
+  message(FATAL_ERROR
+          "notifications must install only its entry Lua file: ${installed_notification_lua_files}")
 endif()
 
 file(READ "${root}/${DATADIR}/systemd/user/gisland.service" service)
