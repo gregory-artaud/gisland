@@ -653,7 +653,9 @@ int Application::run() {
             animation.context_change_ms.count() > 0 && !suppress_context_crossfade) {
           const auto transition_visual = context_transition.visual();
           auto captured =
-              snapshot_content(outgoing_content, transition_visual.outgoing_opacity, *rendered,
+              snapshot_content(outgoing_content,
+                               context_outgoing_opacity(context_transition_kind, transition_visual),
+                               *rendered,
                                context_incoming_opacity(context_transition_kind, transition_visual),
                                content_crossfade, current, blur_shader, texture_size_location,
                                blur_radius_location, context_content_alignment);
@@ -1072,7 +1074,8 @@ int Application::run() {
     if (next_mode != mode) {
       mode = next_mode;
       spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);
-      content_crossfade.set_mode(mode);
+      content_crossfade.set_mode(mode,
+                                 bootstrap_.theme.animation().compact_to_expanded_ms);
     }
     for (const auto &update : runtime.visibility_updates(now, mode)) {
       if (auto sent = supervisor.send(update.instance_id, VisibilityMessage{update.visibility});
@@ -1129,7 +1132,7 @@ int Application::run() {
       RoundedView surface = visible_surface(*rendered, spring.value());
       if (context_transition.active() && transition_source_surface && transition_target_surface) {
         surface = interpolate(*transition_source_surface, *transition_target_surface,
-                              transition_visual.incoming_opacity);
+                              transition_visual.surface_progress);
       }
       current_surface = surface;
       current = geometry(surface);
@@ -1148,7 +1151,10 @@ int Application::run() {
       }
       if (outgoing_content) {
         draw_content(*outgoing_content,
-                     ContentVisual{transition_visual.outgoing_opacity, 0.0F, 1.0F}, current,
+                     ContentVisual{context_outgoing_opacity(context_transition_kind,
+                                                            transition_visual),
+                                   0.0F, 1.0F},
+                     current,
                      placement, blur_shader, texture_size_location, blur_radius_location,
                      context_content_alignment);
       }
