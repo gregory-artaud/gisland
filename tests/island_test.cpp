@@ -264,11 +264,11 @@ TEST_CASE("hover re-entry cancels collapse and preserves animation continuity") 
   gisland::ContentCrossfade crossfade;
   hover.update(true, 0.0F);
   spring.set_target(1.0F);
-  crossfade.set_mode(hover.mode());
+  crossfade.set_mode(hover.mode(), 325ms);
   spring.update(0.05F);
   crossfade.update(0.15F);
   const float spring_before = spring.value();
-  const auto compact_before = crossfade.compact();
+  const auto expanded_before = crossfade.expanded();
 
   hover.update(false, 0.10F);
   CHECK(hover.mode() == gisland::IslandMode::expanded);
@@ -280,10 +280,11 @@ TEST_CASE("hover re-entry cancels collapse and preserves animation continuity") 
   hover.update(false, 0.001F);
   REQUIRE(hover.mode() == gisland::IslandMode::compact);
   spring.set_target(0.0F);
-  crossfade.set_mode(hover.mode());
+  crossfade.set_mode(hover.mode(), 325ms);
 
   CHECK(spring.value() == Approx(spring_before));
-  CHECK(crossfade.compact().opacity == Approx(compact_before.opacity));
+  CHECK(crossfade.compact().opacity == Approx(0.0F));
+  CHECK(crossfade.expanded().opacity == Approx(expanded_before.opacity));
   spring.update(0.001F);
   CHECK(spring.value() > spring_before);
 }
@@ -435,75 +436,116 @@ TEST_CASE("content crossfade starts with only compact content visible") {
 
   const auto expanded = crossfade.expanded();
   CHECK(expanded.opacity == Approx(0.0F));
-  CHECK(expanded.blur == Approx(6.0F));
-  CHECK(expanded.scale == Approx(0.96F));
+  CHECK(expanded.blur == Approx(0.0F));
+  CHECK(expanded.scale == Approx(1.0F));
 }
 
-TEST_CASE("content crossfade delays the incoming layer while outgoing content leaves") {
+TEST_CASE("black fade opacity has exact phase boundaries and no overlap") {
+  const gisland::IslandGeometry geometry{340.0F, 32.0F, 16.0F};
+  gisland::ContextTransition transition;
+  transition.start(geometry, geometry, 100ms, gisland::Easing::linear);
+  auto visual = transition.visual();
+  CHECK(visual.outgoing_opacity == Approx(1.0F));
+  CHECK(visual.incoming_opacity == Approx(0.0F));
+
+  transition.update(0.038F);
+  visual = transition.visual();
+  CHECK(visual.outgoing_opacity == Approx(0.0F));
+  CHECK(visual.incoming_opacity == Approx(0.0F));
+
+  transition.update(0.01F);
+  visual = transition.visual();
+  CHECK(visual.outgoing_opacity == Approx(0.0F));
+  CHECK(visual.incoming_opacity == Approx(0.0F));
+
+  transition.update(0.052F);
+  visual = transition.visual();
+  CHECK(visual.outgoing_opacity == Approx(0.0F));
+  CHECK(visual.incoming_opacity == Approx(1.0F));
+
+  gisland::ContextTransition curved;
+  curved.start(geometry, geometry, 100ms, gisland::Easing::linear);
+  curved.update(0.019F);
+  CHECK(curved.visual().outgoing_opacity > 0.5F);
+  curved.update(0.055F);
+  CHECK(curved.visual().incoming_opacity > 0.5F);
+
+  for (int sample = -20; sample <= 120; ++sample) {
+    gisland::ContextTransition sampled;
+    sampled.start(geometry, geometry, 100ms, gisland::Easing::linear);
+    sampled.update(static_cast<float>(sample) / 1000.0F);
+    const auto opacity = sampled.visual();
+    CHECK(opacity.outgoing_opacity >= 0.0F);
+    CHECK(opacity.outgoing_opacity <= 1.0F);
+    CHECK(opacity.incoming_opacity >= 0.0F);
+    CHECK(opacity.incoming_opacity <= 1.0F);
+    CHECK(opacity.outgoing_opacity * opacity.incoming_opacity == Approx(0.0F));
+  }
+}
+
+TEST_CASE("content mode changes use opacity-only black fade in both directions") {
   gisland::ContentCrossfade crossfade;
-  crossfade.set_mode(gisland::IslandMode::expanded);
-  crossfade.update(0.05F);
+  crossfade.set_mode(gisland::IslandMode::expanded, 100ms);
+  crossfade.update(0.038F);
 
   const auto outgoing = crossfade.compact();
-  CHECK(outgoing.opacity < 1.0F);
-  CHECK(outgoing.blur > 0.0F);
-  CHECK(outgoing.scale < 1.0F);
+  CHECK(outgoing.opacity == Approx(0.0F));
+  CHECK(outgoing.blur == Approx(0.0F));
+  CHECK(outgoing.scale == Approx(1.0F));
 
-  const auto delayed = crossfade.expanded();
-  CHECK(delayed.opacity == Approx(0.0F));
-  CHECK(delayed.blur == Approx(6.0F));
-  CHECK(delayed.scale == Approx(0.96F));
+  const auto black = crossfade.expanded();
+  CHECK(black.opacity == Approx(0.0F));
+  CHECK(black.blur == Approx(0.0F));
+  CHECK(black.scale == Approx(1.0F));
 
-  crossfade.update(0.02F);
+  crossfade.update(0.062F);
   const auto incoming = crossfade.expanded();
-  CHECK(incoming.opacity > 0.0F);
-  CHECK(incoming.blur < 6.0F);
-  CHECK(incoming.scale > 0.96F);
+  CHECK(incoming.opacity == Approx(1.0F));
+
+  crossfade.set_mode(gisland::IslandMode::compact, 100ms);
+  crossfade.update(0.038F);
+  CHECK(crossfade.expanded().opacity == Approx(0.0F));
+  CHECK(crossfade.compact().opacity == Approx(0.0F));
+  crossfade.update(0.062F);
+  CHECK(crossfade.compact().opacity == Approx(1.0F));
 }
 
-TEST_CASE("content crossfade settles and reverses from its current values") {
+TEST_CASE("content mode changes clamp frame deltas and snap at zero duration") {
   gisland::ContentCrossfade crossfade;
-  crossfade.set_mode(gisland::IslandMode::expanded);
-  crossfade.update(0.41F);
-
+  crossfade.set_mode(gisland::IslandMode::expanded, 325ms);
+  crossfade.update(-1.0F);
+  CHECK(crossfade.compact().opacity == Approx(1.0F));
+  CHECK(crossfade.expanded().opacity == Approx(0.0F));
+  crossfade.update(10.0F);
   CHECK(crossfade.compact().opacity == Approx(0.0F));
   CHECK(crossfade.expanded().opacity == Approx(1.0F));
-  CHECK(crossfade.expanded().blur == Approx(0.0F));
-  CHECK(crossfade.expanded().scale == Approx(1.0F));
 
-  crossfade.set_mode(gisland::IslandMode::compact);
-  const auto compact_before_delay = crossfade.compact();
-  crossfade.update(0.03F);
-  CHECK(crossfade.compact().opacity == Approx(compact_before_delay.opacity));
-  CHECK(crossfade.expanded().opacity < 1.0F);
-
-  crossfade.update(0.38F);
+  crossfade.set_mode(gisland::IslandMode::compact, 0ms);
   CHECK(crossfade.compact().opacity == Approx(1.0F));
   CHECK(crossfade.expanded().opacity == Approx(0.0F));
 }
 
-TEST_CASE("content crossfade preserves continuity when reversed mid-flight") {
+TEST_CASE("content mode reversal fades from displayed destination without flashing old content") {
   gisland::ContentCrossfade crossfade;
-  crossfade.set_mode(gisland::IslandMode::expanded);
-  crossfade.update(0.15F);
+  crossfade.set_mode(gisland::IslandMode::expanded, 100ms);
+  crossfade.update(0.075F);
 
-  const auto compact_before_reversal = crossfade.compact();
   const auto expanded_before_reversal = crossfade.expanded();
-  crossfade.set_mode(gisland::IslandMode::compact);
+  REQUIRE(expanded_before_reversal.opacity > 0.0F);
+  crossfade.set_mode(gisland::IslandMode::compact, 100ms);
 
-  CHECK(crossfade.compact().opacity == Approx(compact_before_reversal.opacity));
-  CHECK(crossfade.compact().blur == Approx(compact_before_reversal.blur));
-  CHECK(crossfade.compact().scale == Approx(compact_before_reversal.scale));
+  CHECK(crossfade.compact().opacity == Approx(0.0F));
   CHECK(crossfade.expanded().opacity == Approx(expanded_before_reversal.opacity));
-  CHECK(crossfade.expanded().blur == Approx(expanded_before_reversal.blur));
-  CHECK(crossfade.expanded().scale == Approx(expanded_before_reversal.scale));
-
-  crossfade.update(0.03F);
-  CHECK(crossfade.compact().opacity == Approx(compact_before_reversal.opacity));
+  crossfade.update(0.01F);
   CHECK(crossfade.expanded().opacity < expanded_before_reversal.opacity);
+
+  crossfade.update(0.028F);
+  crossfade.set_mode(gisland::IslandMode::expanded, 100ms);
+  CHECK(crossfade.compact().opacity == Approx(0.0F));
+  CHECK(crossfade.expanded().opacity == Approx(0.0F));
 }
 
-TEST_CASE("context transition interpolates geometry and crossfades content") {
+TEST_CASE("context transition eases geometry independently and fades content through black") {
   gisland::ContextTransition transition;
   const gisland::IslandGeometry compact{230.0F, 32.0F, 16.0F};
   const gisland::IslandGeometry notification{340.0F, 32.0F, 16.0F};
@@ -521,8 +563,10 @@ TEST_CASE("context transition interpolates geometry and crossfades content") {
   visual = transition.visual();
   CHECK(visual.geometry.width == Approx(285.0F));
   CHECK(visual.geometry.height == Approx(32.0F));
-  CHECK(visual.outgoing_opacity == Approx(0.5F));
-  CHECK(visual.incoming_opacity == Approx(0.5F));
+  CHECK(visual.outgoing_opacity == Approx(0.0F));
+  CHECK(visual.incoming_opacity > 0.0F);
+  CHECK(visual.incoming_opacity < 1.0F);
+  CHECK(visual.surface_progress == Approx(0.5F));
 
   transition.update(0.125F);
   visual = transition.visual();
@@ -569,15 +613,31 @@ TEST_CASE("context transition retargets from the visible geometry") {
   CHECK(transition.visual().geometry.height == Approx((visible.height + second.height) / 2.0F));
 }
 
-TEST_CASE("context transition crossfades content when geometry is unchanged") {
+TEST_CASE("interrupted context fades preserve the captured visible opacity") {
+  const gisland::IslandGeometry geometry{340.0F, 32.0F, 16.0F};
+  for (const float interruption_progress : {0.2F, 0.43F, 0.7F}) {
+    gisland::ContextTransition transition;
+    transition.start(geometry, geometry, 100ms, gisland::Easing::linear);
+    transition.update(interruption_progress * 0.1F);
+    const auto interrupted = transition.visual();
+    const float captured_opacity = interrupted.outgoing_opacity + interrupted.incoming_opacity;
+
+    transition.start(interrupted.geometry, geometry, 100ms, gisland::Easing::linear);
+    const auto restarted = transition.visual();
+    CHECK(captured_opacity * restarted.outgoing_opacity == Approx(captured_opacity));
+    CHECK(restarted.incoming_opacity == Approx(0.0F));
+  }
+}
+
+TEST_CASE("context transition holds content black when geometry is unchanged") {
   gisland::ContextTransition transition;
   const gisland::IslandGeometry geometry{340.0F, 32.0F, 16.0F};
 
   transition.start(geometry, geometry, 250ms, gisland::Easing::linear);
   REQUIRE(transition.active());
-  transition.update(0.125F);
-  CHECK(transition.visual().outgoing_opacity == Approx(0.5F));
-  CHECK(transition.visual().incoming_opacity == Approx(0.5F));
+  transition.update(0.1F);
+  CHECK(transition.visual().outgoing_opacity == Approx(0.0F));
+  CHECK(transition.visual().incoming_opacity == Approx(0.0F));
 }
 
 TEST_CASE("context transition policy aligns revisions with stable identity") {
@@ -600,11 +660,14 @@ TEST_CASE("aligned content transition keeps incoming content fully opaque") {
   transition.update(0.125F);
 
   const auto visual = transition.visual();
-  CHECK(visual.outgoing_opacity == Approx(0.5F));
+  CHECK(gisland::context_outgoing_opacity(
+            gisland::ContextTransitionKind::aligned_content_crossfade, visual) == Approx(0.5F));
   CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::aligned_content_crossfade,
                                           visual) == Approx(1.0F));
-  CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::full_crossfade, visual) ==
-        Approx(0.5F));
+  CHECK(gisland::context_outgoing_opacity(gisland::ContextTransitionKind::full_crossfade, visual) ==
+        Approx(0.0F));
+  CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::full_crossfade, visual) >
+        0.0F);
 }
 
 TEST_CASE("expanded owner switch preserves outgoing compact content") {

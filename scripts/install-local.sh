@@ -20,14 +20,24 @@ install_prefix="$HOME/.local"
 installed_control="$install_prefix/bin/gislandctl"
 
 service_was_active=false
-service_stopped=false
+service_was_enabled=unknown
+service_state_captured=false
 
 recover_service() {
   local status=$?
   trap - EXIT
-  if ((status != 0)) && [[ $service_was_active == true && $service_stopped == true ]]; then
+  if ((status != 0)) && [[ $service_state_captured == true ]]; then
     printf 'install-local: attempting to restore gisland.service\n' >&2
-    systemctl --user start gisland.service || true
+    if [[ $service_was_enabled == true ]]; then
+      systemctl --user enable gisland.service || true
+    elif [[ $service_was_enabled == false ]]; then
+      systemctl --user disable gisland.service || true
+    fi
+    if [[ $service_was_active == true ]]; then
+      systemctl --user start gisland.service || true
+    else
+      systemctl --user stop gisland.service || true
+    fi
   fi
   exit "$status"
 }
@@ -40,11 +50,42 @@ cmake --build --preset release
 
 if systemctl --user is-active --quiet gisland.service; then
   service_was_active=true
+fi
+service_enabled_state=$(systemctl --user is-enabled gisland.service 2>/dev/null || true)
+if [[ $service_enabled_state == enabled ]]; then
+  service_was_enabled=true
+elif [[ $service_enabled_state == disabled ]]; then
+  service_was_enabled=false
+fi
+service_state_captured=true
+
+if [[ $service_was_active == true ]]; then
   systemctl --user stop gisland.service
-  service_stopped=true
 fi
 
 cmake --install build/release
+
+replacement_audio_files=(
+  "$install_prefix/bin/gisland-lua-host"
+  "$install_prefix/share/gisland/distributed/modules/audio/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/audio/config.toml"
+  "$install_prefix/share/gisland/distributed/modules/audio/audio.lua"
+  "$install_prefix/share/gisland/distributed/modules/audio/command.lua"
+)
+for replacement_audio_file in "${replacement_audio_files[@]}"; do
+  if [[ ! -f $replacement_audio_file ]]; then
+    printf 'install-local: replacement audio file was not installed: %s\n' \
+      "$replacement_audio_file" >&2
+    exit 1
+  fi
+done
+
+rm -f -- "$install_prefix/bin/gisland-audio"
+rm -f -- "$install_prefix/bin/gisland-audio-control"
+rm -rf -- "$install_prefix/share/gisland/audio/gisland_audio"
+rmdir -- "$install_prefix/share/gisland/audio" 2>/dev/null || true
+rm -rf -- "$install_prefix/share/gisland/distributed/modules/audio-lua"
+
 systemctl --user daemon-reload
 
 environment_names=()
@@ -62,7 +103,7 @@ systemctl --user enable --now gisland.service
 
 for ((attempt = 0; attempt < 20; ++attempt)); do
   if "$installed_control" status >/dev/null 2>&1; then
-    service_stopped=false
+    service_state_captured=false
     printf 'gisland installed successfully under %s\n' "$install_prefix"
     exit 0
   fi

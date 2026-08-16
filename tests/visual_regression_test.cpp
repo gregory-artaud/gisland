@@ -1,3 +1,4 @@
+#include "audio/audio_process.hpp"
 #include "fixtures/primitive_gallery.hpp"
 #include "gisland/island.hpp"
 #include "gisland/layout.hpp"
@@ -211,20 +212,6 @@ public:
                                           "deliberately long ending that must be "
                                           "truncated safely",
                                           "body", "end"}};
-}
-
-[[nodiscard]] gisland::SceneNode audio_symbol(std::string name, std::string label,
-                                              std::string role = "hud-mute-icon") {
-  return gisland::SceneNode{gisland::Icon{std::move(name), std::move(label), std::move(role)}};
-}
-
-[[nodiscard]] gisland::SceneNode audio_volume() {
-  return gisland::SceneNode{
-      gisland::Row{{audio_symbol("volume-high", "Volume 120 percent", "hud-volume-icon"),
-                    gisland::SceneNode{gisland::Progress{
-                        0.8, {}, "foreground", gisland::ProgressShape::linear, 0.2}}},
-                   "center",
-                   "small"}};
 }
 
 [[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode,
@@ -448,20 +435,38 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: constrained UTF-8 truncation"
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: audio mute HUD") {
-  check_fixture("audio-muted", audio_symbol("volume-muted", "Muted"), gisland::ViewMode::compact,
-                {}, "hud-symbol");
+  gisland::test::AudioProcess audio{
+      {{"volume_reads", {{50}, {50}}}, {"mute_reads", {false, true}}}};
+  const auto publication = audio.action("toggle-mute");
+  REQUIRE(publication.compact.has_value());
+  REQUIRE(publication.presentation.has_value());
+  REQUIRE(publication.presentation->compact_style.has_value());
+  check_fixture("audio-muted", *publication.compact, gisland::ViewMode::compact, {},
+                *publication.presentation->compact_style);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: audio unmute HUD") {
-  check_fixture("audio-unmuted", audio_symbol("volume-high", "Unmuted"), gisland::ViewMode::compact,
-                {}, "hud-symbol");
+  gisland::test::AudioProcess audio{
+      {{"volume_reads", {{50}, {50}}}, {"mute_reads", {true, false}}}};
+  const auto publication = audio.action("toggle-mute");
+  REQUIRE(publication.compact.has_value());
+  REQUIRE(publication.presentation.has_value());
+  REQUIRE(publication.presentation->compact_style.has_value());
+  check_fixture("audio-unmuted", *publication.compact, gisland::ViewMode::compact, {},
+                *publication.presentation->compact_style);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: audio volume animation") {
-  check_fixture("audio-volume-source", audio_volume(), gisland::ViewMode::compact, {}, "hud-meter",
-                0.0F);
-  check_fixture("audio-volume-intermediate", audio_volume(), gisland::ViewMode::compact, {},
-                "hud-meter", 0.135F);
-  check_fixture("audio-volume-settled", audio_volume(), gisland::ViewMode::compact, {}, "hud-meter",
-                0.27F);
+  gisland::test::AudioProcess audio{
+      {{"volume_reads", {{30}, {120}}}, {"mute_reads", {false, false}}}};
+  const auto publication = audio.action("volume-up");
+  REQUIRE(publication.compact.has_value());
+  REQUIRE(publication.presentation.has_value());
+  REQUIRE(publication.presentation->compact_style.has_value());
+  check_fixture("audio-volume-source", *publication.compact, gisland::ViewMode::compact, {},
+                *publication.presentation->compact_style, 0.0F);
+  check_fixture("audio-volume-intermediate", *publication.compact, gisland::ViewMode::compact, {},
+                *publication.presentation->compact_style, 0.135F);
+  check_fixture("audio-volume-settled", *publication.compact, gisland::ViewMode::compact, {},
+                *publication.presentation->compact_style, 0.27F);
 }

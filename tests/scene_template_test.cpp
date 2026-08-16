@@ -204,3 +204,13 @@ TEST_CASE("module view state replaces compact and expanded views atomically") {
   REQUIRE(updated_snapshot != nullptr);
   CHECK_FALSE(updated_snapshot->contains("old"));
 }
+
+TEST_CASE("missing package view bindings fail only when a snapshot is instantiated") {
+  gisland::ModuleViewState state{text_template(gisland::DataBinding{"missing"})};
+
+  const auto applied = state.apply(nlohmann::json::object());
+
+  REQUIRE_FALSE(applied.has_value());
+  CHECK(applied.error().code == gisland::TemplateErrorCode::missing_data);
+  CHECK(applied.error().data_path == "/missing");
+}

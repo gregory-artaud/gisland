@@ -221,3 +221,113 @@ TEST_CASE("reload candidate rediscovers config-root module manifests") {
         (manifest_path.parent_path() / "second.py").string());
   CHECK(candidate->manifest_paths == std::vector<std::filesystem::path>{manifest_path});
 }
+
+TEST_CASE("package static dependency changes distinguish process restart from view update") {
+  TemporaryDirectory temporary;
+  const auto distributed = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
+  const auto config_home = temporary.path() / "config";
+  const auto package = config_home / "gisland/modules/packaged";
+  write_file(config_home / "gisland/config.toml", R"(
+monitor = "primary"
+theme = "default"
+default_module = "packaged"
+[[modules]]
+id = "packaged"
+module = "packaged"
+)");
+  write_file(package / "entry.lua", "return gisland.module {}\n");
+  write_file(package / "config.toml", "[defaults]\nmode = \"one\"\n");
+  write_file(package / "view.toml",
+             "[compact]\ntype = \"text\"\nvalue = \"one\"\nrole = \"body\"\n");
+  const auto manifest = package / "module.toml";
+  const auto manifest_text = R"(id = "packaged"
+name = "Packaged"
+command = ["gisland-lua-host"]
+entry = "entry.lua"
+config = "config.toml"
+view = "view.toml"
+[protocol]
+major = 1
+minimum_minor = 8
+maximum_minor = 8
+[options_schema.mode]
+type = "string"
+)";
+  write_file(manifest, manifest_text);
+  const auto current =
+      gisland::load_runtime_bootstrap({config_home, temporary.path() / "data", distributed});
+  REQUIRE(current.has_value());
+
+  const auto classify = [&](const gisland::RuntimeBootstrap &before) {
+    const auto candidate = gisland::load_reload_candidate(before);
+    REQUIRE(candidate.has_value());
+    const auto plan = gisland::plan_reload(before.config, candidate->config, "C", "UTC");
+    REQUIRE(plan.has_value());
+    REQUIRE(plan->changes.size() == 1);
+    return std::pair{std::move(*candidate), plan->changes.front().kind};
+  };
+
+  write_file(package / "view.toml",
+             "[compact]\ntype = \"text\"\nvalue = \"two\"\nrole = \"body\"\n");
+  auto [view_candidate, view_kind] = classify(*current);
+  CHECK(view_kind == gisland::ModuleReloadKind::view_updated);
+  const auto view_plan = gisland::plan_reload(current->config, view_candidate.config, "C", "UTC");
+  REQUIRE(view_plan.has_value());
+  CHECK(view_plan->supervisor.start_or_replace.empty());
+
+  write_file(package / "entry.lua", "return gisland.module { init = function() end }\n");
+  auto [entry_candidate, entry_kind] = classify(view_candidate);
+  CHECK(entry_kind == gisland::ModuleReloadKind::process_modified);
+
+  write_file(package / "config.toml", "[defaults]\nmode = \"two\"\n");
+  auto [config_candidate, config_kind] = classify(entry_candidate);
+  CHECK(config_kind == gisland::ModuleReloadKind::process_modified);
+
+  std::string changed_manifest{manifest_text};
+  const auto name = changed_manifest.find("name = \"Packaged\"");
+  REQUIRE(name != std::string::npos);
+  changed_manifest.insert(name, "description = \"changed\"\n");
+  write_file(manifest, changed_manifest);
+  auto [manifest_candidate, manifest_kind] = classify(config_candidate);
+  CHECK(manifest_kind == gisland::ModuleReloadKind::process_modified);
+}
+
+TEST_CASE("invalid package static replacement rejects candidate before reconfiguration") {
+  TemporaryDirectory temporary;
+  const auto distributed = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
+  const auto config_home = temporary.path() / "config";
+  const auto package = config_home / "gisland/modules/packaged";
+  write_file(config_home / "gisland/config.toml", R"(
+monitor = "primary"
+theme = "default"
+default_module = "packaged"
+[[modules]]
+id = "packaged"
+module = "packaged"
+)");
+  write_file(package / "view.toml",
+             "[compact]\ntype = \"text\"\nvalue = \"valid\"\nrole = \"body\"\n");
+  write_file(package / "module.toml", R"(
+id = "packaged"
+name = "Packaged"
+command = ["/bin/true"]
+view = "view.toml"
+[protocol]
+major = 1
+minimum_minor = 0
+maximum_minor = 8
+)");
+  const auto current =
+      gisland::load_runtime_bootstrap({config_home, temporary.path() / "data", distributed});
+  REQUIRE(current.has_value());
+
+  write_file(package / "view.toml", "[compact]\ntype = \"unknown\"\n");
+  const auto rejected = gisland::load_reload_candidate(*current);
+
+  REQUIRE_FALSE(rejected.has_value());
+  CHECK(rejected.error().stage == gisland::BootstrapStage::configuration);
+  REQUIRE(current->config.modules.front().view.has_value());
+  CHECK(std::get<std::string>(
+            std::get<gisland::TemplateText>(current->config.modules.front().view->compact.value)
+                .value) == "valid");
+}

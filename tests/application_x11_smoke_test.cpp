@@ -6,6 +6,7 @@
 #include "gisland/control_client.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,7 +17,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +27,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -131,6 +135,117 @@ private:
   std::filesystem::path application_log_;
 };
 
+[[nodiscard]] std::string read_text(const std::filesystem::path &path);
+void write_text(const std::filesystem::path &path, std::string_view content);
+
+void configure_audio(TemporaryConfig &config, std::string_view state,
+                     bool gate_deferred_close = false) {
+  const auto bin = config.home() / "bin";
+  const auto local_bin = config.home() / ".local/bin";
+  std::filesystem::create_directories(bin);
+  std::filesystem::create_directories(local_bin);
+  std::filesystem::create_symlink(GISLAND_AUDIO_FAKE_PACTL_PATH, bin / "pactl");
+  std::filesystem::create_symlink(gate_deferred_close ? GISLAND_AUDIO_FAKE_GISLANDCTL_PATH
+                                                      : GISLANDCTL_BINARY_PATH,
+                                  local_bin / "gislandctl");
+  const auto lua_host = local_bin / "gisland-lua-host";
+  std::filesystem::copy_file(GISLAND_LUA_HOST_PATH, lua_host);
+  write_text(config.home() / "audio-state.json", state);
+  const std::string path = bin.string() + ":/usr/bin:/bin";
+  write_text(config.config_path(),
+             std::string{"monitor = \"primary\"\n"
+                         "theme = \"default\"\n"
+                         "[defaults]\n"
+                         "compact = \"clock\"\n"
+                         "expanded = \"clock\"\n"
+                         "[[modules]]\n"
+                         "id = \"clock\"\n"
+                         "command = [\""} +
+                 GISLAND_FAKE_MODULE_PATH +
+                 "\", \"interactive-data\"]\n"
+                 "restart = \"never\"\n"
+                 "[modules.view.compact]\n"
+                 "type = \"text\"\n"
+                 "value = { bind = \"time\" }\n"
+                 "role = \"body\"\n"
+                 "[modules.view.expanded]\n"
+                 "type = \"text\"\n"
+                 "value = \"Calendar\"\n"
+                 "role = \"body\"\n"
+                 "[[modules]]\n"
+                 "id = \"audio\"\n"
+                 "command = [\"" +
+                 lua_host.string() + "\", \"" + GISLAND_AUDIO_LUA_PATH +
+                 "\"]\n"
+                 "protocol_min = \"1.8\"\n"
+                 "protocol_max = \"1.8\"\n"
+                 "restart = \"never\"\n"
+                 "[modules.environment]\n"
+                 "HOME = \"" +
+                 config.home().string() +
+                 "\"\n"
+                 "PATH = \"" +
+                 path +
+                 "\"\n"
+                 "GISLAND_AUDIO_FAKE_STATE = \"" +
+                 (config.home() / "audio-state.json").string() +
+                 "\"\n"
+                 "GISLAND_AUDIO_COMMAND_LOG = \"" +
+                 (config.home() / "audio-commands.jsonl").string() + "\"\n" +
+                 (gate_deferred_close ? "GISLAND_AUDIO_FAKE_GISLANDCTL_STARTED = \"" +
+                                            (config.home() / "close-started").string() +
+                                            "\"\nGISLAND_AUDIO_FAKE_GISLANDCTL_RELEASE = \"" +
+                                            (config.home() / "close-release").string() +
+                                            "\"\nGISLAND_AUDIO_REAL_GISLANDCTL = \"" +
+                                            GISLANDCTL_BINARY_PATH + "\"\n"
+                                      : std::string{}));
+}
+
+struct CommandResult {
+  int status;
+  std::string output;
+};
+
+[[nodiscard]] CommandResult run_audio_action(const TemporaryConfig &config,
+                                             std::string_view action_id) {
+  const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto output_path = config.home() / ("control-" + std::to_string(suffix) + ".log");
+  const pid_t pid = fork();
+  if (pid == 0) {
+    setenv("XDG_RUNTIME_DIR", config.home().c_str(), 1);
+    if (std::freopen(output_path.c_str(), "w", stdout) == nullptr ||
+        std::freopen(output_path.c_str(), "a", stderr) == nullptr) {
+      _exit(126);
+    }
+    const std::string action{action_id};
+    execl(GISLANDCTL_BINARY_PATH, GISLANDCTL_BINARY_PATH, "action", "audio", action.c_str(),
+          nullptr);
+    _exit(127);
+  }
+  if (pid < 0) {
+    throw std::runtime_error{"could not fork gislandctl audio action"};
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) {
+      throw std::runtime_error{"could not wait for gislandctl audio action"};
+    }
+  }
+  return {status, read_text(output_path)};
+}
+
+[[nodiscard]] bool module_running(const TemporaryConfig &config, std::string_view id) {
+  const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                    gisland::StatusControl{});
+  if (!status) {
+    return false;
+  }
+  const auto &modules = std::get<gisland::ControlStatus>(status->value()).modules;
+  return std::ranges::any_of(modules, [id](const auto &module) {
+    return module.id == id && module.state == gisland::ControlModuleState::running;
+  });
+}
+
 [[nodiscard]] std::string read_text(const std::filesystem::path &path) {
   std::ifstream stream{path};
   return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
@@ -142,6 +257,19 @@ void write_text(const std::filesystem::path &path, std::string_view content) {
     throw std::runtime_error{"could not write application smoke fixture"};
   }
   stream << content;
+}
+
+[[nodiscard]] std::vector<std::vector<std::string>>
+read_pactl_commands(const std::filesystem::path &path) {
+  std::vector<std::vector<std::string>> commands;
+  std::istringstream lines{read_text(path)};
+  for (std::string line; std::getline(lines, line);) {
+    const auto record = nlohmann::json::parse(line);
+    if (record.at("program") == "pactl") {
+      commands.push_back(record.at("argv").get<std::vector<std::string>>());
+    }
+  }
+  return commands;
 }
 
 [[nodiscard]] std::optional<pid_t> first_child_pid(pid_t parent) {
@@ -898,4 +1026,157 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   CHECK(history_application_log.find("[notifications] layout:") == std::string::npos);
 
   XCloseDisplay(display);
+}
+
+TEST_CASE("real control actions drive the Lua audio module through the running application") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+
+  SECTION("successful and rejected actions leave the core responsive") {
+    TemporaryConfig config{false};
+    configure_audio(
+        config,
+        R"({"volume_reads":[[20],[25],[25],[30]],"mute_reads":[false,false,false,false],"fail_once":"get-sink-volume @DEFAULT_SINK@","failure_message":"sink disappeared"})");
+    ChildProcess child{config.home(), config.application_log()};
+    REQUIRE(wait_until([&] { return module_running(config, "audio"); }));
+
+    const auto rejected = run_audio_action(config, "volume-up");
+    CHECK(WIFEXITED(rejected.status));
+    CHECK(WEXITSTATUS(rejected.status) != 0);
+    CHECK(rejected.output.find("sink disappeared") != std::string::npos);
+    REQUIRE(module_running(config, "audio"));
+
+    const auto successful = run_audio_action(config, "volume-up");
+    CHECK(WIFEXITED(successful.status));
+    CHECK(WEXITSTATUS(successful.status) == 0);
+    CHECK(successful.output == "ok\n");
+    REQUIRE(wait_until([&] {
+      const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                        gisland::StatusControl{});
+      return status && std::get<gisland::ControlStatus>(status->value()).compact &&
+             std::get<gisland::ControlStatus>(status->value()).compact->instance_id == "audio";
+    }));
+  }
+
+  SECTION("concurrent actions are correlated independently") {
+    TemporaryConfig config{false};
+    configure_audio(config, R"({"volume_reads":[[50],[55]],"mute_reads":[false,false]})");
+    ChildProcess child{config.home(), config.application_log()};
+    REQUIRE(wait_until([&] { return module_running(config, "audio"); }));
+
+    auto accepted =
+        std::async(std::launch::async, [&] { return run_audio_action(config, "volume-up"); });
+    auto rejected =
+        std::async(std::launch::async, [&] { return run_audio_action(config, "unknown"); });
+    const auto accepted_result = accepted.get();
+    const auto rejected_result = rejected.get();
+    CHECK(WIFEXITED(accepted_result.status));
+    CHECK(WEXITSTATUS(accepted_result.status) == 0);
+    CHECK(accepted_result.output == "ok\n");
+    CHECK(WIFEXITED(rejected_result.status));
+    CHECK(WEXITSTATUS(rejected_result.status) != 0);
+    CHECK(rejected_result.output.find("unknown action") != std::string::npos);
+    const std::vector<std::vector<std::string>> expected_commands{
+        {"get-sink-volume", "@DEFAULT_SINK@"},        {"get-sink-mute", "@DEFAULT_SINK@"},
+        {"set-sink-volume", "@DEFAULT_SINK@", "55%"}, {"get-sink-volume", "@DEFAULT_SINK@"},
+        {"get-sink-mute", "@DEFAULT_SINK@"},
+    };
+    CHECK(read_pactl_commands(config.home() / "audio-commands.jsonl") == expected_commands);
+    REQUIRE(module_running(config, "audio"));
+  }
+
+  SECTION("a callback timeout is bounded and its late result is harmless") {
+    TemporaryConfig config{false};
+    configure_audio(
+        config,
+        R"({"volume_reads":[[20],[25]],"mute_reads":[false,false],"ignore_sigterm_once":"get-sink-volume @DEFAULT_SINK@"})");
+    ChildProcess child{config.home(), config.application_log()};
+    REQUIRE(wait_until([&] { return module_running(config, "audio"); }));
+
+    auto action =
+        std::async(std::launch::async, [&] { return run_audio_action(config, "volume-up"); });
+    REQUIRE(wait_until([&] {
+      return read_text(config.home() / "audio-commands.jsonl").find("get-sink-volume") !=
+             std::string::npos;
+    }));
+    REQUIRE(action.wait_for(std::chrono::milliseconds{0}) == std::future_status::timeout);
+    REQUIRE(module_running(config, "audio"));
+    const auto timed_out = action.get();
+    CHECK(WIFEXITED(timed_out.status));
+    CHECK(WEXITSTATUS(timed_out.status) != 0);
+    CHECK(timed_out.output.find("module action timed out") != std::string::npos);
+    REQUIRE(wait_until([&] {
+      return read_text(config.application_log()).find("timed out after 2.0 seconds") !=
+             std::string::npos;
+    }));
+    REQUIRE(module_running(config, "audio"));
+
+    const auto recovered = run_audio_action(config, "volume-up");
+    CHECK(WIFEXITED(recovered.status));
+    CHECK(WEXITSTATUS(recovered.status) == 0);
+    REQUIRE(module_running(config, "audio"));
+  }
+}
+
+TEST_CASE("Lua audio publication precedes deferred close without a compact fallback frame") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  TemporaryConfig config{false};
+  configure_audio(config, R"({"volume_reads":[[20],[25]],"mute_reads":[false,false]})", true);
+  ChildProcess child{config.home(), config.application_log()};
+  const std::string socket = (config.home() / "gisland.sock").string();
+  REQUIRE(wait_until([&] { return module_running(config, "audio"); }));
+  REQUIRE(gisland::send_control_command(socket, gisland::OpenControl{}).has_value());
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::expanded;
+  }));
+
+  auto action =
+      std::async(std::launch::async, [&] { return run_audio_action(config, "volume-up"); });
+  REQUIRE(wait_until([&] { return std::filesystem::exists(config.home() / "close-started"); }));
+  bool publication_observed_while_expanded = false;
+  bool closed_with_audio = false;
+  std::vector<std::string> compact_owners;
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    if (status.compact) {
+      compact_owners.push_back(status.compact->instance_id);
+    }
+    if (status.compact && status.compact->instance_id == "audio" &&
+        status.mode == gisland::IslandMode::expanded) {
+      publication_observed_while_expanded = true;
+    }
+    return publication_observed_while_expanded;
+  }));
+  write_text(config.home() / "close-release", "release\n");
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    if (status.compact) {
+      compact_owners.push_back(status.compact->instance_id);
+    }
+    closed_with_audio = status.compact && status.compact->instance_id == "audio" &&
+                        status.mode == gisland::IslandMode::compact;
+    return closed_with_audio;
+  }));
+  const auto result = action.get();
+  REQUIRE(WIFEXITED(result.status));
+  REQUIRE(WEXITSTATUS(result.status) == 0);
+  REQUIRE(publication_observed_while_expanded);
+  REQUIRE(closed_with_audio);
+  const auto audio = std::ranges::find(compact_owners, "audio");
+  REQUIRE(audio != compact_owners.end());
+  CHECK(std::ranges::all_of(audio, compact_owners.end(),
+                            [](const auto &owner) { return owner == "audio"; }));
 }

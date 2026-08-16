@@ -38,6 +38,25 @@ struct ModuleTimings {
   std::chrono::milliseconds healthy_reset{60000};
 };
 
+struct ModuleFileDependency {
+  std::filesystem::path path;
+  std::string fingerprint;
+  std::uint64_t device{};
+  std::uint64_t inode{};
+  std::uint64_t size{};
+  std::int64_t modified_seconds{};
+  std::int64_t modified_nanoseconds{};
+
+  bool operator==(const ModuleFileDependency &) const = default;
+};
+
+struct ModuleStaticDependencies {
+  std::optional<ModuleFileDependency> manifest;
+  std::optional<ModuleFileDependency> config;
+  std::optional<ModuleFileDependency> view;
+  std::optional<ModuleFileDependency> entry;
+};
+
 struct ModuleInstanceConfig {
   std::string id;
   std::string module_id;
@@ -56,6 +75,7 @@ struct ModuleInstanceConfig {
     std::optional<SceneTemplate> expanded;
   };
   std::optional<View> view;
+  ModuleStaticDependencies dependencies;
 };
 
 struct InteractionConfig {
@@ -89,5 +109,8 @@ parse_config(std::string_view text, std::string_view source_name, const ModuleCa
 [[nodiscard]] std::expected<AppConfig, ConfigError> load_config(const std::filesystem::path &path);
 [[nodiscard]] std::expected<AppConfig, ConfigError> load_config(const std::filesystem::path &path,
                                                                 const ModuleCatalog &catalog);
+[[nodiscard]] std::expected<ModuleViewConfig, ConfigError>
+parse_module_view_config(std::string_view text, std::string_view source_name);
+[[nodiscard]] bool module_file_dependency_is_current(const ModuleFileDependency &dependency);
 
 } // namespace gisland

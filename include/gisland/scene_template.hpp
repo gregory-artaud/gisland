@@ -83,6 +83,11 @@ struct SceneTemplate {
   Value value;
 };
 
+struct ModuleViewConfig {
+  std::optional<SceneTemplate> compact;
+  std::optional<SceneTemplate> expanded;
+};
+
 enum class TemplateErrorCode {
   invalid_binding,
   missing_data,

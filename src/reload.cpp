@@ -163,7 +163,10 @@ bool equal_template(const SceneTemplate &left, const SceneTemplate &right) {
          left.maximum_protocol == right.maximum_protocol &&
          equal_config_table(left.options, right.options) && left.restart == right.restart &&
          equal_timings(left.timings, right.timings) && left.environment == right.environment &&
-         left.working_directory == right.working_directory;
+         left.working_directory == right.working_directory &&
+         left.dependencies.manifest == right.dependencies.manifest &&
+         left.dependencies.config == right.dependencies.config &&
+         left.dependencies.entry == right.dependencies.entry;
 }
 
 } // namespace
@@ -197,7 +200,8 @@ std::expected<ReloadPlan, ReloadPlanError> plan_reload(const AppConfig &current,
       } else if (!equal_process_config(previous, module)) {
         kind = ModuleReloadKind::process_modified;
         starts = module.enabled;
-      } else if (!equal_view(previous.view, module.view)) {
+      } else if (!equal_view(previous.view, module.view) ||
+                 previous.dependencies.view != module.dependencies.view) {
         kind = ModuleReloadKind::view_updated;
         starts = false;
       } else {

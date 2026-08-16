@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iterator>
 #include <optional>
@@ -27,11 +28,36 @@
 #error "GISLAND_FAKE_MODULE_PATH must name the integration-test helper"
 #endif
 
+#ifndef GISLAND_LUA_HOST_PATH
+#error "GISLAND_LUA_HOST_PATH must name the Lua host executable"
+#endif
+
 namespace {
 
 using namespace std::chrono_literals;
 
 using EventLog = std::vector<gisland::SupervisorEvent>;
+
+class TemporaryDirectory final {
+public:
+  TemporaryDirectory() {
+    const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+    path_ =
+        std::filesystem::temp_directory_path() / ("gisland-supervisor-" + std::to_string(suffix));
+    std::filesystem::create_directories(path_);
+  }
+  ~TemporaryDirectory() { std::filesystem::remove_all(path_); }
+  [[nodiscard]] const std::filesystem::path &path() const { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
+
+void write_file(const std::filesystem::path &path, std::string_view content) {
+  std::ofstream stream{path};
+  REQUIRE(stream.good());
+  stream << content;
+}
 
 [[nodiscard]] gisland::ModuleTimings fast_timings() {
   return gisland::ModuleTimings{
@@ -876,6 +902,46 @@ maximum_backoff_ms = 20
   CHECK(saw_removal_after_active);
 
   stop_and_wait(supervisor, events, "fake");
+}
+
+TEST_CASE("invalid Lua entry replacement follows supervisor failure backoff") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "entry.lua";
+  write_file(entry, "return gisland.module {}\n");
+  auto timings = fast_timings();
+  timings.initial_backoff = 20ms;
+  timings.maximum_backoff = 20ms;
+  auto request = fake_request("lua", "unused", gisland::RestartPolicy::on_failure, timings);
+  request.process.argv = {GISLAND_LUA_HOST_PATH, entry.string()};
+  request.init.minimum = {1, 8};
+  request.init.maximum = {1, 8};
+
+  gisland::ModuleSupervisor supervisor;
+  EventLog events;
+  REQUIRE(supervisor.start(request).has_value());
+  collect_until(supervisor, events, [](const auto &observed) {
+    return has_state(observed, "lua", gisland::ModuleState::running);
+  });
+  const auto old_generation = process_generation(events, "lua");
+
+  write_file(entry, "return gisland.module {\n");
+  REQUIRE(supervisor
+              .reconfigure(gisland::SupervisorReconfiguration{.stop_instances = {},
+                                                              .start_or_replace = {request}})
+              .has_value());
+  collect_until(supervisor, events, [old_generation](const auto &observed) {
+    return count_events<gisland::ProcessStartedEvent>(observed, "lua") >= 2 &&
+           std::ranges::any_of(observed,
+                               [old_generation](const auto &event) {
+                                 const auto *removed =
+                                     std::get_if<gisland::ContextsRemovedEvent>(&event);
+                                 return removed != nullptr && removed->instance_id == "lua" &&
+                                        removed->generation == old_generation;
+                               }) &&
+           has_state(observed, "lua", gisland::ModuleState::backoff);
+  });
+  CHECK(process_generation(events, "lua", 1) > old_generation);
+  stop_and_wait(supervisor, events, "lua");
 }
 
 TEST_CASE("failure lockout and manual restart are supervised asynchronously") {

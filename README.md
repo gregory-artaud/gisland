@@ -2,6 +2,15 @@
 
 A C++23 raylib application for Linux/X11.
 
+## User and extension documentation
+
+- [Write and distribute an external module](docs/modules.md)
+- [Create and install a theme](docs/themes.md)
+- [Control and script gisland with `gislandctl`](docs/gislandctl.md)
+
+These guides describe the installed extension points. A module or theme can live entirely in the
+user's XDG directories and does not need to be added to this repository.
+
 ## Requirements
 
 - CMake 3.28 or newer
@@ -9,8 +18,10 @@ A C++23 raylib application for Linux/X11.
 - GCC or Clang with C++23 support
 - Git
 - clang-format and clang-tidy for optional quality checks
+- Lua 5.4 interpreter and development files for Lua modules and tests
 - Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
 - `pactl` for default output mute and volume controls
+- `timeout` for bounded audio module commands
 - tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
@@ -20,7 +31,8 @@ A C++23 raylib application for Linux/X11.
 sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
-  libpango1.0-dev libfontconfig1-dev python3 python3-gi gir1.2-gtk-3.0 pulseaudio-utils
+  libpango1.0-dev libfontconfig1-dev lua5.4 liblua5.4-dev python3 python3-gi \
+  gir1.2-gtk-3.0 pulseaudio-utils
 ```
 
 ### Fedora
@@ -29,7 +41,7 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel python3 python3-gobject gtk3 pulseaudio-utils
+  fontconfig-devel lua-devel python3 python3-gobject gtk3 pulseaudio-utils
 ```
 
 ### Arch Linux
@@ -37,7 +49,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  python-gobject gtk3 libpulse
+  lua python-gobject gtk3 libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -72,7 +84,8 @@ The script builds the release before interrupting a running instance, installs u
 reloads the systemd user manager, and enables and starts `gisland.service`. It does not use `sudo`,
 update the source checkout, install system packages, or modify user configuration and modules.
 
-For troubleshooting, the equivalent build and installation commands are:
+For troubleshooting or as the basis of a fresh custom-prefix installation, the underlying CMake
+commands are:
 
 ```bash
 cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
@@ -83,6 +96,11 @@ systemctl --user daemon-reload
 systemctl --user import-environment DISPLAY XAUTHORITY
 systemctl --user enable --now gisland.service
 ```
+
+This manual sequence is not an equivalent upgrade path: CMake installs current files but cannot
+safely identify and remove files owned by older releases. Use `./scripts/install-local.sh` for
+user-local updates that require legacy audio migration and cleanup. For another prefix, review and
+remove stale release-owned files explicitly before using the manual sequence.
 
 The installation owns binaries, the user service, and private distributed resources under
 `$HOME/.local/share/gisland/distributed`. It never writes user configuration or custom modules under
@@ -104,10 +122,10 @@ exec --no-startup-id systemctl --user import-environment DISPLAY XAUTHORITY
 exec --no-startup-id systemctl --user start gisland.service
 bindsym $mod+grave exec --no-startup-id gislandctl toggle
 bindsym $mod+Shift+grave exec --no-startup-id gislandctl close
-bindsym $mod+m exec --no-startup-id gisland-audio-control mute
-bindsym XF86AudioMute exec --no-startup-id gisland-audio-control mute
-bindsym XF86AudioRaiseVolume exec --no-startup-id gisland-audio-control up
-bindsym XF86AudioLowerVolume exec --no-startup-id gisland-audio-control down
+bindsym $mod+m exec --no-startup-id gislandctl action audio toggle-mute
+bindsym XF86AudioMute exec --no-startup-id gislandctl action audio toggle-mute
+bindsym XF86AudioRaiseVolume exec --no-startup-id gislandctl action audio volume-up
+bindsym XF86AudioLowerVolume exec --no-startup-id gislandctl action audio volume-down
 ```
 
 Equivalent sxhkd bindings are ordinary commands:
@@ -231,11 +249,152 @@ expanded = "clock"
 
 The legacy `default_module = "clock"` form remains supported and sets both fallbacks.
 
-The manifest declares human-readable metadata, a command vector, its supported protocol range,
-default options, and an option schema. Configured values are merged over defaults and validated
-before any process starts. A missing, malformed, or protocol-incompatible referenced manifest
-rejects startup or reload; malformed unreferenced manifests do not terminate gisland. Existing
-instances with an explicit `command` remain supported and bypass discovery.
+Each package requires `module.toml`. It may also contain package-local default options in
+`config.toml`, declarative scene templates in `view.toml`, and implementation files. The manifest
+declares human-readable metadata, a command vector, its supported protocol range, an option schema,
+and optional package file references:
+
+```toml
+id = "example-clock"
+name = "Example clock"
+description = "Publishes local time as template data"
+command = ["gisland-lua-host"]
+entry = "example.lua"
+config = "config.toml"
+view = "view.toml"
+
+[protocol]
+major = 1
+minimum_minor = 8
+maximum_minor = 8
+
+[options_schema.format]
+type = "string"
+```
+
+`entry`, `config`, and `view` are package-relative regular-file paths. Absolute paths, `..`, missing
+files, and symlink escapes outside the package are rejected. `entry` is required when the command's
+executable name is `gisland-lua-host`, is invalid for other commands, and is appended once as an
+absolute canonical argument by gisland. Other command arguments remain explicit array elements and
+are never interpreted by a shell.
+
+`config.toml`, when referenced, has exactly one `[defaults]` table. Every key must exist in
+`options_schema` and satisfy its type, allowed values, and optional inclusive numeric `minimum` and
+`maximum`. Legacy inline manifest `[defaults]` remains valid only when `config` is absent. Resolution
+applies package defaults first and global instance `[modules.options]` overrides second, then validates
+the result before sending it as `init.configuration`.
+
+`view.toml` may define `[compact]`, `[expanded]`, or both using the same declarative template grammar
+as `[modules.view.compact]` and `[modules.view.expanded]`. A global instance view replaces the complete
+matching package slot; trees are not deep-merged, and the other package slot remains unchanged.
+Templates bind data with values such as `{ bind = "time" }`. Packages use semantic roles such as
+`compact-primary`, `body`, and `warning`; concrete colors, fonts, geometry, spacing, and animation
+remain global-theme responsibilities.
+
+Configured values and views are validated before any process starts. A missing, malformed, or
+protocol-incompatible referenced manifest rejects startup or reload; malformed unreferenced manifests
+do not terminate gisland. Existing instances with an explicit `command` remain supported and bypass
+discovery.
+
+## Lua Modules
+
+`gisland-lua-host` runs trusted Lua 5.4 modules as external processes. Lua code and native Lua
+libraries have the current user's full permissions; gisland does not sandbox them. Each configured
+module instance gets its own supervised host process, Lua state, timers, and failure lifecycle. A
+blocking callback delays only that module instance, not rendering or other modules, but modules
+should still keep synchronous work bounded.
+
+Lua packages name the host in `command` and the script separately in `entry`:
+
+```toml
+id = "example-clock"
+name = "Example clock"
+description = "Publishes local time as template data"
+command = ["gisland-lua-host"]
+entry = "example.lua"
+config = "config.toml"
+view = "view.toml"
+
+[protocol]
+major = 1
+minimum_minor = 8
+maximum_minor = 8
+```
+
+The host accepts exactly one final entry-script argument after gisland resolves the manifest. It
+prepends the entry directory's `?.lua` and `?/init.lua` patterns to inherited Lua 5.4 `package.path`,
+so package-local `require` works before standard locations. Native `package.cpath` remains unchanged.
+The self-contained distributed example under `assets/modules/lua-example` demonstrates package-local
+defaults, bound compact and expanded views, and a one-second `os.date` update. Installation discovers
+it but does not enable it. A global configuration enables it without duplicating its options or view:
+
+```toml
+[[modules]]
+id = "example"
+module = "lua-example"
+enabled = true
+```
+
+A script must return exactly one definition produced by `gisland.module`:
+
+```lua
+return gisland.module {
+  every = "1s",
+  init = function(config) end,
+  update = function() return { value = 42 } end,
+  actions = {
+    refresh = function(value) return true end,
+  },
+  visibility = function(state) end,
+  shutdown = function() end,
+}
+```
+
+All fields and callbacks are optional. `init(config)` runs once after protocol initialization;
+`ready` is emitted only if it succeeds. `update()` runs at the bounded `every` interval and emits one
+`data` record when it returns a non-nil JSON-compatible value. `visibility(state)` receives the
+current visibility string. `shutdown()` runs during graceful shutdown. Callbacks run serially.
+
+The data-oriented API pairs Lua values with declarative views configured by the core. A minimal
+module is available at `tests/fixtures/lua/example_data_module.lua`:
+
+```lua
+return gisland.module {
+  every = "1s",
+  update = function()
+    return { time = os.date("%H:%M"), date = os.date("%A %d") }
+  end,
+}
+```
+
+`gisland.data(value)` emits data explicitly. Lua tables with contiguous integer keys become arrays;
+string-keyed tables become objects. Empty tables are objects unless created with
+`gisland.array()`. Values are bounded and must be JSON-compatible.
+
+Context-oriented modules call `gisland.publish(context)`, `gisland.dismiss(context_id)`, and
+`gisland.log(level, message)`. The `gisland.ui` constructors cover `text`, `icon`, `image`,
+`rich_text`, `row`, `column`, `spacer`, `progress`, `indicator`, `button`, and `action_region`.
+Modules provide semantic roles and action IDs, while the core remains responsible for protocol
+validation, styling, layout, capabilities, and rendering. See the executable counter example in
+`tests/fixtures/lua/example_action_module.lua`.
+
+Rendered interactions and `gislandctl action` both dispatch the same semantic action callback. The
+callback receives the optional JSON-compatible value and returns `true`, `false`, or
+`false, "reason"`. The host creates the protocol 1.8 correlated `action_result`; invocation IDs are
+never exposed to Lua. A missing handler, invalid return, or thrown action error rejects and logs only
+that invocation, leaving the module ready.
+
+Timers use the same positive `ms`, `s`, `m`, or `h` duration syntax as `every`, up to 24 hours:
+
+```lua
+gisland.defer(function() gisland.data { ready = true } end)
+gisland.after("500ms", function() gisland.dismiss("temporary") end)
+```
+
+Timer callbacks run serially and are cancelled on shutdown. Script-load, `init`, periodic `update`,
+timer, visibility, shutdown, transport, queue, and value-conversion errors terminate only that host
+process. gisland removes its contexts and applies the manifest's restart policy and backoff. Scene
+records rejected by the core follow the normal last-valid-context behavior.
 
 The shipped `gisland-clock-calendar` executable uses the same public protocol as third-party
 modules. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at minute
@@ -343,12 +502,20 @@ font, active layout, render-resource, monitor-placement, and supervisor-queue pr
 returns `reload_rejected` and leaves the running configuration, visible frame, and module processes
 unchanged.
 
-gisland also watches the active configuration, selected theme, and referenced module manifests.
-Exact-file events are debounced until a 100 ms quiet period has elapsed, then use the same
-transactional reload path. Parent directories are watched so atomic editor replacements are
-detected while unrelated temporary files are ignored. Invalid candidates are logged and retained
-files remain watched for a later correction. If filesystem watching becomes unavailable, automatic
-reload is disabled without terminating gisland; `gislandctl reload` remains available.
+gisland also watches the active configuration, selected theme, and each enabled package's resolved
+`module.toml`, `config.toml`, `view.toml`, and entry file. Transitively required Lua files are not
+watched. Exact-file events are debounced until a 100 ms quiet period has elapsed, then use the same
+reload path. Parent directories are watched so atomic editor replacements are detected while
+unrelated temporary files are ignored. If filesystem watching becomes unavailable, automatic reload
+is disabled without terminating gisland; `gislandctl reload` remains available.
+
+Static TOML parsing, path containment, schema validation, and view instantiation are transactional:
+an invalid candidate retains the running process and last valid view, and retained files stay watched
+for correction. Manifest, package configuration, and entry changes replace affected processes.
+View-only changes reuse the latest valid data snapshot without restart and independently retain a
+slot that cannot be instantiated. Lua syntax, package `require`, and `init` execute only in the
+replacement process; a runtime script failure therefore occurs after the old process stops and uses
+normal supervisor failure and restart backoff rather than transactional retention.
 
 Unchanged module processes retain their PID and runtime state. Compact or expanded template-only
 changes reuse the latest successful data snapshot without restarting the module. Changes to command,

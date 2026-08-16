@@ -372,8 +372,10 @@ require_keys(const toml::table &table, const std::set<std::string_view> &allowed
              const std::string &path, std::string_view source_name) {
   for (const auto &[key, node] : table) {
     if (!allowed.contains(key.str())) {
-      return std::unexpected(error_at(source_name, path + "." + std::string{key.str()},
-                                      "unknown template property", &node));
+      const auto property_path =
+          path.empty() ? std::string{key.str()} : path + "." + std::string{key.str()};
+      return std::unexpected(
+          error_at(source_name, property_path, "unknown template property", &node));
     }
   }
   return {};
@@ -666,46 +668,63 @@ parse_scene_template(const toml::table &table, const std::string &path,
       error_at(source_name, path + ".type", "unknown template node type", table.get("type")));
 }
 
-[[nodiscard]] std::expected<std::optional<ModuleInstanceConfig::View>, ConfigError>
+[[nodiscard]] std::expected<ModuleViewConfig, ConfigError>
+parse_view_table(const toml::table &view, const std::string &path, std::string_view source_name) {
+  auto keys = require_keys(view, {"compact", "expanded"}, path, source_name);
+  if (!keys) {
+    return std::unexpected(keys.error());
+  }
+  if (!view.contains("compact") && !view.contains("expanded")) {
+    return std::unexpected(error_at(source_name, path, "expected compact or expanded template"));
+  }
+  ModuleViewConfig result;
+  const auto slot_path = [&path](std::string_view slot) {
+    return path.empty() ? std::string{slot} : path + "." + std::string{slot};
+  };
+  const auto *compact_node = view.get("compact");
+  if (compact_node != nullptr) {
+    const auto *compact = compact_node->as_table();
+    if (compact == nullptr) {
+      return std::unexpected(error_at(source_name, slot_path("compact"),
+                                      "expected a compact template table", compact_node));
+    }
+    auto parsed = parse_scene_template(*compact, slot_path("compact"), source_name);
+    if (!parsed) {
+      return std::unexpected(parsed.error());
+    }
+    result.compact = std::move(*parsed);
+  }
+  if (const auto *expanded_node = view.get("expanded"); expanded_node != nullptr) {
+    const auto *expanded = expanded_node->as_table();
+    if (expanded == nullptr) {
+      return std::unexpected(error_at(source_name, slot_path("expanded"),
+                                      "expected an expanded template table", expanded_node));
+    }
+    auto candidate = parse_scene_template(*expanded, slot_path("expanded"), source_name);
+    if (!candidate) {
+      return std::unexpected(candidate.error());
+    }
+    result.expanded = std::move(*candidate);
+  }
+  return result;
+}
+
+[[nodiscard]] std::expected<std::optional<ModuleViewConfig>, ConfigError>
 parse_module_view(const toml::table &module, std::size_t index, std::string_view source_name) {
   const auto *node = module.get("view");
   if (node == nullptr) {
-    return std::optional<ModuleInstanceConfig::View>{};
+    return std::optional<ModuleViewConfig>{};
   }
   const auto *view = node->as_table();
   const auto path = "modules[" + std::to_string(index) + "].view";
   if (view == nullptr) {
     return std::unexpected(error_at(source_name, path, "expected a view table", node));
   }
-  auto keys = require_keys(*view, {"compact", "expanded"}, path, source_name);
-  if (!keys) {
-    return std::unexpected(keys.error());
+  auto parsed = parse_view_table(*view, path, source_name);
+  if (!parsed) {
+    return std::unexpected(parsed.error());
   }
-  const auto *compact_node = view->get("compact");
-  const auto *compact = compact_node == nullptr ? nullptr : compact_node->as_table();
-  if (compact == nullptr) {
-    return std::unexpected(error_at(source_name, path + ".compact",
-                                    "expected a compact template table", compact_node));
-  }
-  auto parsed_compact = parse_scene_template(*compact, path + ".compact", source_name);
-  if (!parsed_compact) {
-    return std::unexpected(parsed_compact.error());
-  }
-  std::optional<SceneTemplate> parsed_expanded;
-  if (const auto *expanded_node = view->get("expanded"); expanded_node != nullptr) {
-    const auto *expanded = expanded_node->as_table();
-    if (expanded == nullptr) {
-      return std::unexpected(error_at(source_name, path + ".expanded",
-                                      "expected an expanded template table", expanded_node));
-    }
-    auto candidate = parse_scene_template(*expanded, path + ".expanded", source_name);
-    if (!candidate) {
-      return std::unexpected(candidate.error());
-    }
-    parsed_expanded = std::move(*candidate);
-  }
-  return std::optional<ModuleInstanceConfig::View>{
-      ModuleInstanceConfig::View{std::move(*parsed_compact), std::move(parsed_expanded)}};
+  return std::optional<ModuleViewConfig>{std::move(*parsed)};
 }
 
 [[nodiscard]] std::expected<std::vector<ModuleInstanceConfig>, ConfigError>
@@ -788,6 +807,15 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
                                         module_table->get("module")));
       }
       manifest = &found->second;
+      for (const auto *dependency :
+           {&manifest->dependencies.manifest, &manifest->dependencies.config,
+            &manifest->dependencies.view, &manifest->dependencies.entry}) {
+        if (*dependency && !module_file_dependency_is_current(**dependency)) {
+          return std::unexpected(error_at(source_name, base_path + ".module",
+                                          "module package changed during configuration",
+                                          module_table->get("module")));
+        }
+      }
       if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
           manifest->minimum_protocol.minor > 8 || manifest->maximum_protocol.minor < 0) {
         return std::unexpected(error_at(source_name, base_path + ".module",
@@ -806,6 +834,12 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
         resolved_command.front() =
             (manifest->path.parent_path() / resolved_command.front()).lexically_normal().string();
       }
+      if (manifest->entry_path) {
+        resolved_command.insert(resolved_command.begin() + 1, manifest->entry_path->string());
+        resolved_command.insert(resolved_command.begin() + 2,
+                                "--gisland-entry-fingerprint=" +
+                                    manifest->dependencies.entry->fingerprint);
+      }
       resolved_command.insert(resolved_command.end(), arguments->begin(), arguments->end());
       command = std::move(resolved_command);
       manifest_path = manifest->path;
@@ -816,7 +850,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     auto timings = parse_timings(*module_table, index, source_name);
     auto environment = parse_environment(*module_table, index, source_name);
     auto working_directory = parse_working_directory(*module_table, index, source_name);
-    auto view = parse_module_view(*module_table, index, source_name);
+    auto view_override = parse_module_view(*module_table, index, source_name);
     if (!command.has_value()) {
       return std::unexpected(command.error());
     }
@@ -860,11 +894,39 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     if (!environment.has_value()) {
       return std::unexpected(environment.error());
     }
+    if (manifest != nullptr && manifest->dependencies.entry) {
+      const auto &entry = *manifest->dependencies.entry;
+      environment->insert_or_assign(
+          "GISLAND_LUA_ENTRY_IDENTITY",
+          std::to_string(entry.device) + ':' + std::to_string(entry.inode) + ':' +
+              std::to_string(entry.size) + ':' + std::to_string(entry.modified_seconds) + ':' +
+              std::to_string(entry.modified_nanoseconds));
+    }
     if (!working_directory.has_value()) {
       return std::unexpected(working_directory.error());
     }
-    if (!view.has_value()) {
-      return std::unexpected(view.error());
+    if (!view_override.has_value()) {
+      return std::unexpected(view_override.error());
+    }
+    ModuleViewConfig resolved_view;
+    if (manifest != nullptr && manifest->view) {
+      resolved_view = *manifest->view;
+    }
+    if (*view_override) {
+      if ((*view_override)->compact) {
+        resolved_view.compact = std::move((*view_override)->compact);
+      }
+      if ((*view_override)->expanded) {
+        resolved_view.expanded = std::move((*view_override)->expanded);
+      }
+    }
+    std::optional<ModuleInstanceConfig::View> view;
+    if (resolved_view.compact) {
+      view = ModuleInstanceConfig::View{std::move(*resolved_view.compact),
+                                        std::move(resolved_view.expanded)};
+    } else if (resolved_view.expanded) {
+      return std::unexpected(error_at(source_name, base_path + ".view.compact",
+                                      "expanded template requires a compact template"));
     }
 
     modules.push_back(ModuleInstanceConfig{
@@ -880,7 +942,8 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
         .timings = *timings,
         .environment = std::move(*environment),
         .working_directory = std::move(*working_directory),
-        .view = std::move(*view),
+        .view = std::move(view),
+        .dependencies = manifest != nullptr ? manifest->dependencies : ModuleStaticDependencies{},
     });
   }
   return modules;
@@ -1045,6 +1108,22 @@ parse_config(std::string_view text, std::string_view source_name, const ModuleCa
   try {
     const auto root = toml::parse(text, source_name);
     return parse_table(root, source_name, &catalog);
+  } catch (const toml::parse_error &error) {
+    return std::unexpected(ConfigError{
+        std::string{source_name},
+        "",
+        std::string{error.description()},
+        static_cast<std::size_t>(error.source().begin.line),
+        static_cast<std::size_t>(error.source().begin.column),
+    });
+  }
+}
+
+std::expected<ModuleViewConfig, ConfigError>
+parse_module_view_config(std::string_view text, std::string_view source_name) {
+  try {
+    const auto root = toml::parse(text, source_name);
+    return parse_view_table(root, "", source_name);
   } catch (const toml::parse_error &error) {
     return std::unexpected(ConfigError{
         std::string{source_name},

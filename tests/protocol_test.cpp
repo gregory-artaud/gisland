@@ -226,6 +226,22 @@ TEST_CASE("a publish line decodes context-owned RGBA8 image resources") {
   CHECK(image->role == "notification-icon");
 }
 
+TEST_CASE("core parser accepts image base64 larger than generic scene text") {
+  const std::string encoded(8192, 'A');
+  const std::string line =
+      R"({"type":"publish","context_id":"x","priority":0,"resources":[{"id":"image","format":"rgba8","width":64,"height":24,"data":")" +
+      encoded +
+      R"("}],"compact":{"type":"image","resource_id":"image","role":"image","accessible_label":"Image"}})";
+
+  const auto result = gisland::parse_module_message(line);
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  REQUIRE(publish->resources.size() == 1);
+  CHECK(publish->resources[0].pixels->size() == 64U * 24U * 4U);
+}
+
 TEST_CASE("a publish line parses structured rich content and action regions") {
   constexpr auto line = R"({
     "type":"publish",

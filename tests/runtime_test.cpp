@@ -1,9 +1,11 @@
+#include "gisland/module_manifest.hpp"
 #include "gisland/runtime.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -261,6 +263,66 @@ TEST_CASE("runtime start requests preserve process config and offer snapshot cap
   CHECK(request.init.configuration == nlohmann::json{{"format", "24h"}, {"week_start", 1}});
   CHECK(request.init.locale == "fr_FR.UTF-8");
   CHECK(request.init.timezone == "Europe/Paris");
+}
+
+TEST_CASE("runtime forwards a materialized Lua command independently of process cwd") {
+  gisland::ModuleInstanceConfig module;
+  module.id = "lua";
+  module.command = {"gisland-lua-host", "/packages/lua/entry.lua", "--manifest-option",
+                    "--user-option"};
+  module.working_directory = "/unrelated/runtime-cwd";
+
+  const auto request = gisland::make_module_start_request(module, "C", "UTC");
+
+  CHECK(request.process.argv == module.command);
+  CHECK(request.process.working_directory == std::filesystem::path{"/unrelated/runtime-cwd"});
+}
+
+TEST_CASE("distributed Lua example runs through supervision and instantiates both views") {
+  using namespace std::chrono_literals;
+  const auto assets = std::filesystem::path{GISLAND_TEST_ASSET_ROOT};
+  const auto package = assets / "modules/lua-example";
+  const auto catalog =
+      gisland::discover_module_catalog("/missing/config", "/missing/data", assets / "modules");
+  const auto parsed = gisland::parse_config(R"(
+monitor = "primary"
+theme = "default"
+default_module = "example"
+[[modules]]
+id = "example"
+module = "lua-example"
+restart = "never"
+[modules.timings]
+handshake_ms = 500
+graceful_shutdown_ms = 50
+terminate_grace_ms = 30
+)",
+                                            "config.toml", catalog);
+  REQUIRE(parsed.has_value());
+  auto application = *parsed;
+  auto &module = application.modules.front();
+  module.command.front() = GISLAND_LUA_HOST_PATH;
+  REQUIRE(module.command.at(1) == std::filesystem::canonical(package / "example.lua"));
+  gisland::RuntimeCoordinator runtime{application};
+  gisland::ModuleSupervisor supervisor;
+  REQUIRE(supervisor.start(gisland::make_module_start_request(module, "C", "UTC")).has_value());
+
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  const gisland::PublishedContext *active = nullptr;
+  while (active == nullptr && std::chrono::steady_clock::now() < deadline) {
+    for (const auto &event : supervisor.wait_for_events(50ms)) {
+      REQUIRE(runtime.consume(event).has_value());
+    }
+    active = runtime.active(std::chrono::steady_clock::now()).context;
+  }
+  REQUIRE(active != nullptr);
+  REQUIRE(active->expanded.has_value());
+  CHECK_FALSE(text(*active->compact).value.empty());
+  const auto &expanded = std::get<gisland::Column>(active->expanded->value);
+  REQUIRE(expanded.children.size() == 2);
+  CHECK_FALSE(text(*expanded.children[0]).value.empty());
+  CHECK_FALSE(text(*expanded.children[1]).value.empty());
+  supervisor.shutdown();
 }
 
 TEST_CASE("supervised data flows through runtime into an active configured context") {
