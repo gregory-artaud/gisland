@@ -113,8 +113,7 @@ enum class ContentAlignment { centered, top_centered };
 void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
                   const IslandGeometry &geometry, const IslandPlacement &placement,
                   Shader blur_shader, int texture_size_location, int blur_radius_location,
-                  ContentAlignment alignment = ContentAlignment::centered,
-                  float offset_x = 0.0F) {
+                  ContentAlignment alignment = ContentAlignment::centered, float offset_x = 0.0F) {
   if (visual.opacity <= 0.001F) {
     return;
   }
@@ -453,15 +452,14 @@ render_context(const RuntimeSelection &compact_selection,
 [[nodiscard]] AnimationStyle effective_animation(const Theme &theme) {
   AnimationStyle animation = theme.animation();
   const char *requested = std::getenv("GISLAND_REDUCED_MOTION");
-  if (requested == nullptr || (std::string_view{requested} != "1" &&
-                               std::string_view{requested} != "true")) {
+  if (requested == nullptr ||
+      (std::string_view{requested} != "1" && std::string_view{requested} != "true")) {
     return animation;
   }
   animation.compact_to_expanded_ms = animation.reduced_motion.compact_to_expanded_ms;
   animation.context_change_ms = animation.reduced_motion.context_change_ms;
   animation.progress.duration = animation.reduced_motion.progress_duration;
-  animation.content_transition.duration =
-      animation.reduced_motion.content_transition_duration;
+  animation.content_transition.duration = animation.reduced_motion.content_transition_duration;
   return animation;
 }
 
@@ -644,126 +642,126 @@ int Application::run() {
     }
   };
 
-  const auto replace_rendered =
-      [&](RenderedContext candidate, bool preserve_expanded, const AnimationStyle &animation,
-          ContextTransitionKind transition_kind, bool preserve_compact_content = false) {
-        const bool compact_updated =
-            rendered && rendered->compact_revision != candidate.compact_revision;
-        const bool expanded_updated =
-            rendered && rendered->expanded_revision != candidate.expanded_revision;
-        const bool has_declared_transition =
-            (compact_updated && candidate.compact_transitions.compact) ||
-            (expanded_updated && candidate.expanded_transitions.expanded);
-        const std::optional<ContentTransition> requested_transition =
-            mode == IslandMode::compact
-                ? (compact_updated ? candidate.compact_transitions.compact : std::nullopt)
-                : (expanded_updated ? candidate.expanded_transitions.expanded : std::nullopt);
-        const auto transition_duration =
-            has_declared_transition
-                ? (requested_transition ? animation.content_transition.duration
-                                        : std::chrono::milliseconds{0})
-                : animation.context_change_ms;
-        if (preserve_compact_content && rendered) {
-          std::swap(candidate.compact, rendered->compact);
-          std::swap(candidate.compact_images, rendered->compact_images);
-          std::swap(candidate.compact_rich_text, rendered->compact_rich_text);
-          std::swap(candidate.compact_content, rendered->compact_content);
-        }
-        compact_refresh_deferred = preserve_compact_content;
-        const bool preserve_compact_progress =
-            rendered && rendered->compact_key == candidate.compact_key;
-        const bool preserve_expanded_progress =
-            rendered && rendered->expanded_key == candidate.expanded_key;
-        compact_progress.retarget(candidate.compact, animation.progress.duration,
-                                  animation.progress.easing, preserve_compact_progress);
-        if (candidate.expanded) {
-          expanded_progress.retarget(*candidate.expanded, animation.progress.duration,
-                                     animation.progress.easing, preserve_expanded_progress);
-        } else {
-          expanded_progress.retarget(LayoutPlan{}, animation.progress.duration,
-                                     animation.progress.easing, false);
-        }
-        const bool suppress_context_crossfade =
-            transition_kind == ContextTransitionKind::aligned_content_crossfade &&
-            (has_progress_transition(candidate.compact) ||
-             (candidate.expanded && has_progress_transition(*candidate.expanded)));
+  const auto replace_rendered = [&](RenderedContext candidate, bool preserve_expanded,
+                                    const AnimationStyle &animation,
+                                    ContextTransitionKind transition_kind,
+                                    bool preserve_compact_content = false) {
+    const bool compact_updated =
+        rendered && rendered->compact_revision != candidate.compact_revision;
+    const bool expanded_updated =
+        rendered && rendered->expanded_revision != candidate.expanded_revision;
+    const bool has_declared_transition =
+        (compact_updated && candidate.compact_transitions.compact) ||
+        (expanded_updated && candidate.expanded_transitions.expanded);
+    const std::optional<ContentTransition> requested_transition =
+        mode == IslandMode::compact
+            ? (compact_updated ? candidate.compact_transitions.compact : std::nullopt)
+            : (expanded_updated ? candidate.expanded_transitions.expanded : std::nullopt);
+    const auto transition_duration =
+        has_declared_transition ? (requested_transition ? animation.content_transition.duration
+                                                        : std::chrono::milliseconds{0})
+                                : animation.context_change_ms;
+    if (preserve_compact_content && rendered) {
+      std::swap(candidate.compact, rendered->compact);
+      std::swap(candidate.compact_images, rendered->compact_images);
+      std::swap(candidate.compact_rich_text, rendered->compact_rich_text);
+      std::swap(candidate.compact_content, rendered->compact_content);
+    }
+    compact_refresh_deferred = preserve_compact_content;
+    const bool preserve_compact_progress =
+        rendered && rendered->compact_key == candidate.compact_key;
+    const bool preserve_expanded_progress =
+        rendered && rendered->expanded_key == candidate.expanded_key;
+    compact_progress.retarget(candidate.compact, animation.progress.duration,
+                              animation.progress.easing, preserve_compact_progress);
+    if (candidate.expanded) {
+      expanded_progress.retarget(*candidate.expanded, animation.progress.duration,
+                                 animation.progress.easing, preserve_expanded_progress);
+    } else {
+      expanded_progress.retarget(LayoutPlan{}, animation.progress.duration,
+                                 animation.progress.easing, false);
+    }
+    const bool suppress_context_crossfade =
+        transition_kind == ContextTransitionKind::aligned_content_crossfade &&
+        (has_progress_transition(candidate.compact) ||
+         (candidate.expanded && has_progress_transition(*candidate.expanded)));
 
-        std::optional<RenderTexture2D> snapshot;
-        if (!preserve_compact_content && rendered && current_surface &&
-            transition_duration.count() > 0 && !suppress_context_crossfade) {
-          const auto transition_visual = context_transition.visual();
-          auto captured =
-              snapshot_content(outgoing_content, transition_visual.outgoing_opacity, *rendered,
-                               context_incoming_opacity(context_transition_kind, transition_visual),
-                               content_crossfade, current, blur_shader, texture_size_location,
-                               blur_radius_location, context_content_alignment);
-          if (captured) {
-            snapshot = *captured;
-          } else {
-            std::cerr << captured.error() << '\n';
-          }
-        }
+    std::optional<RenderTexture2D> snapshot;
+    if (!preserve_compact_content && rendered && current_surface &&
+        transition_duration.count() > 0 && !suppress_context_crossfade) {
+      const auto transition_visual = context_transition.visual();
+      auto captured = snapshot_content(
+          outgoing_content, context_outgoing_opacity(context_transition_kind, transition_visual),
+          *rendered, context_incoming_opacity(context_transition_kind, transition_visual),
+          content_crossfade, current, blur_shader, texture_size_location, blur_radius_location,
+          context_content_alignment);
+      if (captured) {
+        snapshot = *captured;
+      } else {
+        std::cerr << captured.error() << '\n';
+      }
+    }
 
-        clear_outgoing();
-        if (rendered) {
-          unload(*rendered);
-        }
-        rendered.emplace(std::move(candidate));
-        if (compact_progress.active()) {
-          const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
-                                           *rendered->compact_rich_text};
-          if (auto redrawn = redraw_content(compact_progress.apply(rendered->compact), slot_painter,
-                                            rendered->compact_content);
-              !redrawn) {
-            std::cerr << redrawn.error() << '\n';
-          }
-        }
-        if (expanded_progress.active() && rendered->expanded && rendered->expanded_content &&
-            rendered->expanded_images && rendered->expanded_rich_text) {
-          const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
-                                           *rendered->expanded_rich_text};
-          if (auto redrawn = redraw_content(expanded_progress.apply(*rendered->expanded),
-                                            slot_painter, *rendered->expanded_content);
-              !redrawn) {
-            std::cerr << redrawn.error() << '\n';
-          }
-        }
-        actions_ready = false;
-        if (!preserve_expanded) {
-          mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
-          mode = IslandMode::compact;
-          spring = SpringProgress{};
-          content_crossfade = ContentCrossfade{};
-        }
+    clear_outgoing();
+    if (rendered) {
+      unload(*rendered);
+    }
+    rendered.emplace(std::move(candidate));
+    if (compact_progress.active()) {
+      const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
+                                       *rendered->compact_rich_text};
+      if (auto redrawn = redraw_content(compact_progress.apply(rendered->compact), slot_painter,
+                                        rendered->compact_content);
+          !redrawn) {
+        std::cerr << redrawn.error() << '\n';
+      }
+    }
+    if (expanded_progress.active() && rendered->expanded && rendered->expanded_content &&
+        rendered->expanded_images && rendered->expanded_rich_text) {
+      const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
+                                       *rendered->expanded_rich_text};
+      if (auto redrawn = redraw_content(expanded_progress.apply(*rendered->expanded), slot_painter,
+                                        *rendered->expanded_content);
+          !redrawn) {
+        std::cerr << redrawn.error() << '\n';
+      }
+    }
+    actions_ready = false;
+    if (!preserve_expanded) {
+      mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+      mode = IslandMode::compact;
+      spring = SpringProgress{};
+      content_crossfade = ContentCrossfade{};
+    }
 
-        const RoundedView target = visible_surface(*rendered, spring.value());
-        if (snapshot && current_surface) {
-          outgoing_content = *snapshot;
-          transition_source_surface = *current_surface;
-          transition_target_surface = target;
-          context_transition_kind = transition_kind;
-          context_content_alignment =
-              transition_kind == ContextTransitionKind::aligned_content_crossfade
-                  ? ContentAlignment::top_centered
-                  : ContentAlignment::centered;
-          context_transition.start(
-              current, geometry(target), transition_duration,
-              requested_transition ? animation.content_transition.easing : animation.easing,
-              requested_transition.value_or(ContentTransition::crossfade),
-              static_cast<float>(animation.content_transition.distance));
-        } else {
-          transition_source_surface.reset();
-          transition_target_surface.reset();
-          context_transition.start(geometry(target), geometry(target), std::chrono::milliseconds{0},
-                                   animation.easing);
-          current_surface = target;
-          current = geometry(target);
-          context_transition_kind = ContextTransitionKind::full_crossfade;
-          context_content_alignment = ContentAlignment::centered;
-        }
-        placement = place_at_top_center(current, canvas);
-        apply_native_canvas();
-      };
+    const RoundedView target = visible_surface(*rendered, spring.value());
+    if (snapshot && current_surface) {
+      outgoing_content = *snapshot;
+      transition_source_surface = *current_surface;
+      transition_target_surface = target;
+      context_transition_kind = transition_kind;
+      context_content_alignment =
+          transition_kind == ContextTransitionKind::aligned_content_crossfade
+              ? ContentAlignment::top_centered
+              : ContentAlignment::centered;
+      context_transition.start(current, geometry(target), transition_duration,
+                               requested_transition ? animation.content_transition.easing
+                                                    : animation.easing,
+                               requested_transition.value_or(ContentTransition::crossfade),
+                               static_cast<float>(animation.content_transition.distance));
+    } else {
+      transition_source_surface.reset();
+      transition_target_surface.reset();
+      context_transition.start(geometry(target), geometry(target), std::chrono::milliseconds{0},
+                               animation.easing);
+      current_surface = target;
+      current = geometry(target);
+      context_transition_kind = ContextTransitionKind::full_crossfade;
+      context_content_alignment = ContentAlignment::centered;
+    }
+    placement = place_at_top_center(current, canvas);
+    apply_native_canvas();
+  };
 
   std::optional<FileWatcher> watcher;
   if (auto created = FileWatcher::create(reload_watch_paths(bootstrap_)); created) {
@@ -1036,8 +1034,8 @@ int Application::run() {
                             mode, mode_controller.mode(), rendered->compact_key,
                             rendered->expanded_key, compact_key, expanded_key);
         replace_rendered(std::move(*candidate), preserve_expanded,
-                         effective_animation(bootstrap_.theme),
-                         transition_kind, preserve_compact_content);
+                         effective_animation(bootstrap_.theme), transition_kind,
+                         preserve_compact_content);
         if (expanded_changed) {
           if (selection.expanded.context != nullptr &&
               selection.expanded.context->presentation.has_value() &&
@@ -1117,7 +1115,7 @@ int Application::run() {
     if (next_mode != mode) {
       mode = next_mode;
       spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);
-      content_crossfade.set_mode(mode);
+      content_crossfade.set_mode(mode, bootstrap_.theme.animation().compact_to_expanded_ms);
     }
     for (const auto &update : runtime.visibility_updates(now, mode)) {
       if (auto sent = supervisor.send(update.instance_id, VisibilityMessage{update.visibility});
@@ -1174,7 +1172,7 @@ int Application::run() {
       RoundedView surface = visible_surface(*rendered, spring.value());
       if (context_transition.active() && transition_source_surface && transition_target_surface) {
         surface = interpolate(*transition_source_surface, *transition_target_surface,
-                              transition_visual.progress);
+                              transition_visual.surface_progress);
       }
       current_surface = surface;
       current = geometry(surface);
@@ -1196,10 +1194,12 @@ int Application::run() {
                          static_cast<int>(std::lround(placement.y)),
                          std::max(1, static_cast<int>(std::lround(current.width))),
                          std::max(1, static_cast<int>(std::lround(current.height))));
-        draw_content(*outgoing_content,
-                     ContentVisual{transition_visual.outgoing_opacity, 0.0F, 1.0F}, current,
-                     placement, blur_shader, texture_size_location, blur_radius_location,
-                     context_content_alignment, transition_visual.outgoing_offset_x);
+        draw_content(
+            *outgoing_content,
+            ContentVisual{context_outgoing_opacity(context_transition_kind, transition_visual),
+                          0.0F, 1.0F},
+            current, placement, blur_shader, texture_size_location, blur_radius_location,
+            context_content_alignment, transition_visual.outgoing_offset_x);
         EndScissorMode();
       }
       const float incoming_opacity =
