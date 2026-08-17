@@ -344,9 +344,8 @@ TEST_CASE_METHOD(HiddenWindow, "painter keeps surface and ordered content operat
   CHECK(mirrored.b == 0);
   UnloadImage(oriented);
 
-  Image surface = render_image([&] {
-    REQUIRE(painter.draw_surface(plan, gisland::RenderOrigin{8, 8}).has_value());
-  });
+  Image surface = render_image(
+      [&] { REQUIRE(painter.draw_surface(plan, gisland::RenderOrigin{8, 8}).has_value()); });
   CHECK(same_color(GetImageColor(surface, 52, 48), plan.view.surface));
   const Color surface_corner = GetImageColor(surface, 8, 8);
   CHECK(surface_corner.r == 0);
@@ -355,9 +354,8 @@ TEST_CASE_METHOD(HiddenWindow, "painter keeps surface and ordered content operat
   CHECK(colored_pixels(surface, gisland::Rect{8, 20, 88, 60}) > 0);
   UnloadImage(surface);
 
-  Image content = render_image([&] {
-    REQUIRE(painter.draw_content(plan, gisland::RenderOrigin{8, 8}).has_value());
-  });
+  Image content = render_image(
+      [&] { REQUIRE(painter.draw_content(plan, gisland::RenderOrigin{8, 8}).has_value()); });
   const Color clipped_progress = GetImageColor(content, 16, 48);
   CHECK(clipped_progress.r == 0);
   CHECK(clipped_progress.g == 0);

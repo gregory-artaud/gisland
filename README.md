@@ -2,6 +2,15 @@
 
 A C++23 raylib application for Linux/X11.
 
+## User and extension documentation
+
+- [Write and distribute an external module](docs/modules.md)
+- [Create and install a theme](docs/themes.md)
+- [Control and script gisland with `gislandctl`](docs/gislandctl.md)
+
+These guides describe the installed extension points. A module or theme can live entirely in the
+user's XDG directories and does not need to be added to this repository.
+
 ## Requirements
 
 - CMake 3.28 or newer

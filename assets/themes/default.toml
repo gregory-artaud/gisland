@@ -215,8 +215,8 @@ spread = 0
 color = "#00000066"
 
 [animation]
-compact_to_expanded_ms = 350
-context_change_ms = 250
+compact_to_expanded_ms = 325
+context_change_ms = 325
 easing = "ease-in-out"
 
 [animation.progress]

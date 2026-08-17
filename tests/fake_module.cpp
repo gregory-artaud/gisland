@@ -293,7 +293,7 @@ void read_init() {
 }
 
 [[nodiscard]] int spawn_descendant() {
-  struct sigaction action {};
+  struct sigaction action{};
   action.sa_handler = request_termination;
   ::sigemptyset(&action.sa_mask);
   if (::sigaction(SIGTERM, &action, nullptr) != 0) {
@@ -313,7 +313,7 @@ void read_init() {
   }
   if (child == 0) {
     static_cast<void>(::close(ready_pipe[0]));
-    struct sigaction default_action {};
+    struct sigaction default_action{};
     default_action.sa_handler = SIG_DFL;
     ::sigemptyset(&default_action.sa_mask);
     if (::sigaction(SIGTERM, &default_action, nullptr) != 0) {

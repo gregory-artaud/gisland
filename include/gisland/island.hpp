@@ -129,33 +129,27 @@ struct ContentVisual {
 
 class ContentCrossfade {
 public:
-  void set_mode(IslandMode mode);
+  void set_mode(IslandMode mode, std::chrono::milliseconds duration);
   void update(float delta_seconds);
   [[nodiscard]] ContentVisual compact() const;
   [[nodiscard]] ContentVisual expanded() const;
 
 private:
-  struct LayerTransition {
-    ContentVisual value;
-    ContentVisual start;
-    ContentVisual target;
-    float elapsed;
-    float delay;
-  };
-
-  static void retarget(LayerTransition &layer, bool active);
-  static void update_layer(LayerTransition &layer, float delta_seconds);
-
   IslandMode mode_{IslandMode::compact};
-  LayerTransition compact_{{1.0F, 0.0F, 1.0F}, {1.0F, 0.0F, 1.0F}, {1.0F, 0.0F, 1.0F}, 0.0F, 0.0F};
-  LayerTransition expanded_{
-      {0.0F, 6.0F, 0.96F}, {0.0F, 6.0F, 0.96F}, {0.0F, 6.0F, 0.96F}, 0.0F, 0.0F};
+  IslandMode outgoing_mode_{IslandMode::compact};
+  ContentVisual compact_{1.0F, 0.0F, 1.0F};
+  ContentVisual expanded_{0.0F, 0.0F, 1.0F};
+  float outgoing_start_opacity_{1.0F};
+  float elapsed_seconds_{0.0F};
+  float duration_seconds_{0.0F};
 };
 
 struct ContextTransitionVisual {
   IslandGeometry geometry;
   float outgoing_opacity;
   float incoming_opacity;
+  float local_outgoing_opacity;
+  float surface_progress;
 };
 
 enum class ContextTransitionKind { full_crossfade, aligned_content_crossfade };
@@ -166,6 +160,8 @@ classify_context_transition(const std::optional<ContextKey> &current_compact,
                             const std::optional<ContextKey> &next_compact,
                             const std::optional<ContextKey> &next_expanded);
 [[nodiscard]] float context_incoming_opacity(ContextTransitionKind kind,
+                                             const ContextTransitionVisual &visual);
+[[nodiscard]] float context_outgoing_opacity(ContextTransitionKind kind,
                                              const ContextTransitionVisual &visual);
 [[nodiscard]] bool
 preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requested_mode,
@@ -187,6 +183,7 @@ private:
   IslandGeometry target_{};
   float elapsed_seconds_{0.0F};
   float duration_seconds_{0.0F};
+  float linear_progress_{1.0F};
   float progress_{1.0F};
   Easing easing_{Easing::linear};
   bool active_{false};
