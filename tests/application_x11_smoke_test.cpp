@@ -31,6 +31,18 @@
 
 namespace {
 
+void configure_lgi_test_environment() {
+#ifdef GISLAND_TEST_LGI_PREFIX
+  const std::string prefix = GISLAND_TEST_LGI_PREFIX;
+  const auto lua_path = prefix + "/share/lua/5.4/?.lua;" + prefix + "/share/lua/5.4/?/init.lua;;";
+  const auto lua_cpath = prefix + "/lib/lua/5.4/?.so;;";
+  if (::setenv("LUA_PATH", lua_path.c_str(), 1) != 0 ||
+      ::setenv("LUA_CPATH", lua_cpath.c_str(), 1) != 0) {
+    _exit(126);
+  }
+#endif
+}
+
 class ChildProcess {
 public:
   ChildProcess(const std::filesystem::path &config_home,
@@ -41,7 +53,8 @@ public:
       setenv("XDG_RUNTIME_DIR", config_home.c_str(), 1);
       setenv("XDG_STATE_HOME", config_home.c_str(), 1);
       setenv("TZ", "UTC", 1);
-      std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
+      configure_lgi_test_environment();
+      std::string path = std::filesystem::path{GISLAND_LUA_HOST_PATH}.parent_path().string();
       path += ':';
       if (const char *existing_path = std::getenv("PATH"); existing_path != nullptr) {
         path += existing_path;
@@ -416,29 +429,14 @@ struct WindowPosition {
 }
 
 [[nodiscard]] bool open_notification_history(const std::filesystem::path &runtime_directory) {
-  const pid_t pid = fork();
-  if (pid == 0) {
-    setenv("XDG_RUNTIME_DIR", runtime_directory.c_str(), 1);
-    setenv("XDG_STATE_HOME", runtime_directory.c_str(), 1);
-    std::string path = std::filesystem::path{GISLAND_CLOCK_CALENDAR_PATH}.parent_path().string();
-    path += ':';
-    if (const char *existing_path = std::getenv("PATH"); existing_path != nullptr) {
-      path += existing_path;
-    }
-    setenv("PATH", path.c_str(), 1);
-    execl(GISLAND_NOTIFICATION_HISTORY_PATH, GISLAND_NOTIFICATION_HISTORY_PATH, nullptr);
-    _exit(127);
-  }
-  if (pid < 0) {
+  const auto socket = (runtime_directory / "gisland.sock").string();
+  const auto action = gisland::send_control_command(
+      socket, gisland::ActionControl{"notifications", "show-more", std::nullopt});
+  if (!action) {
     return false;
   }
-  int status = 0;
-  while (waitpid(pid, &status, 0) < 0) {
-    if (errno != EINTR) {
-      return false;
-    }
-  }
-  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  return gisland::send_control_command(socket, gisland::ActivateOpenControl{"notifications"})
+      .has_value();
 }
 
 } // namespace
@@ -722,6 +720,8 @@ TEST_CASE("application renders protocol 1.3 rich notification scenes from an ext
   }
   Display *display = XOpenDisplay(nullptr);
   REQUIRE(display != nullptr);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
   TemporaryConfig config;
   write_text(config.config_path(),
              "monitor = \"primary\"\n"
@@ -769,6 +769,11 @@ TEST_CASE("application renders protocol 1.3 rich notification scenes from an ext
 }
 
 TEST_CASE("application keeps compact and expanded owners independent for protocol 1.4") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
   TemporaryConfig config{false};
   write_text(config.config_path(), std::string{"monitor = \"primary\"\n"
                                                "theme = \"default\"\n"
@@ -808,6 +813,8 @@ TEST_CASE("application keeps compact and expanded owners independent for protoco
     return status.mode == gisland::IslandMode::expanded && status.compact && status.expanded &&
            status.compact->instance_id == "clock" && status.expanded->instance_id == "details";
   }));
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
 
   REQUIRE(wait_until([&] {
     const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
@@ -819,6 +826,7 @@ TEST_CASE("application keeps compact and expanded owners independent for protoco
            status.compact->instance_id == "clock" && status.expanded->instance_id == "details";
   }));
   CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
+  XCloseDisplay(display);
 }
 
 TEST_CASE("application renders a freedesktop notification from the shipped daemon") {
@@ -865,6 +873,8 @@ TEST_CASE("application renders a freedesktop notification from the shipped daemo
     const auto shape = input_shape_bounds(display, *window);
     return shape && shape->width >= 360 && shape->height >= 96 && shape->height < 300;
   }));
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
   REQUIRE(wait_until([&] {
     const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
     return status &&
@@ -891,6 +901,14 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   Display *display = XOpenDisplay(nullptr);
   REQUIRE(display != nullptr);
   TemporaryConfig config{false};
+  write_text(config.config_path(),
+             read_text(std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml") +
+                 "\n[[modules]]\n"
+                 "id = \"competitor\"\n"
+                 "command = [\"" GISLAND_FAKE_MODULE_PATH "\", \"independent-high\"]\n"
+                 "protocol_min = \"1.4\"\n"
+                 "protocol_max = \"1.4\"\n"
+                 "restart = \"never\"\n");
   ChildProcess child{config.home(), config.application_log()};
 
   std::optional<Window> window;
@@ -917,6 +935,8 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   REQUIRE(send_history_notification("Fourth"));
   REQUIRE(send_history_notification("Fifth"));
   REQUIRE(send_history_notification("Sixth"));
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
   REQUIRE(wait_until([&] {
     const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
     return status &&
@@ -939,7 +959,7 @@ TEST_CASE("external notification history grows on repeated commands and resets a
              snapshot.expanded->instance_id == "notifications" &&
              snapshot.expanded->context_id == "history";
     }));
-    std::this_thread::sleep_for(std::chrono::milliseconds{400});
+    std::this_thread::sleep_for(std::chrono::milliseconds{800});
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
     REQUIRE(shape.has_value());
@@ -952,6 +972,16 @@ TEST_CASE("external notification history grows on repeated commands and resets a
       CHECK(heights[index] > heights[index - 1]);
     }
   }
+  std::this_thread::sleep_for(std::chrono::milliseconds{2300});
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!status) {
+      return false;
+    }
+    const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+    return snapshot.mode == gisland::IslandMode::expanded && snapshot.expanded &&
+           snapshot.expanded->instance_id == "notifications";
+  }));
 
   auto shape = input_shape_bounds(display, *window);
   REQUIRE(shape.has_value());
@@ -988,7 +1018,7 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   CHECK(saw_intermediate_mask_height);
 
   REQUIRE(open_notification_history(config.home()));
-  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+  std::this_thread::sleep_for(std::chrono::milliseconds{800});
   shape = input_shape_bounds(display, *window);
   REQUIRE(shape.has_value());
   CHECK(shape->height == heights.back());
@@ -1015,7 +1045,7 @@ TEST_CASE("external notification history grows on repeated commands and resets a
            snapshot.expanded->context_id != "history";
   }));
   REQUIRE(open_notification_history(config.home()));
-  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+  std::this_thread::sleep_for(std::chrono::milliseconds{800});
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto reset_shape = input_shape_bounds(display, *window);

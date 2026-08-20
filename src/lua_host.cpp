@@ -26,7 +26,14 @@ namespace {
 
 constexpr std::size_t maximum_identifier_bytes = 128;
 constexpr std::size_t maximum_diagnostic_bytes = 4096;
+constexpr std::size_t maximum_timer_count = 256;
 constexpr std::size_t maximum_buffered_output_messages = 256;
+constexpr LuaValueConversionLimits data_output_limits{.max_items = 512};
+constexpr std::array implemented_capabilities{
+    "data-snapshots",      "context-images", "rich-content",
+    "independent-views",   "ring-progress",  "status-indicator",
+    "compact-view-styles", "icon-roles",     "progress-transitions",
+};
 // Module-to-core publish records can be 8 MiB, so this intentionally exceeds the core-to-module
 // WriteQueue's 1 MiB limit.
 constexpr std::size_t maximum_buffered_output_bytes = std::size_t{16} * 1024U * 1024U;
@@ -289,6 +296,12 @@ public:
       release_references(references);
       return result;
     }
+    if (auto result = retain_callback("fallback_action", candidate.has_fallback_action,
+                                      fallback_action_reference_);
+        !result) {
+      release_references(references);
+      return result;
+    }
 
     lua_getfield(state_, table_index, "actions");
     if (!lua_isnil(state_, -1)) {
@@ -409,6 +422,7 @@ public:
     }
     current_emit_ = &emit;
     current_time_ = now;
+    emitted_this_dispatch_ = false;
     const std::uint64_t maximum_sequence = next_timer_sequence_;
     while (true) {
       auto iterator = timers_.end();
@@ -432,8 +446,11 @@ public:
         current_emit_ = nullptr;
         return std::unexpected(called.error());
       }
+      if (emitted_this_dispatch_) {
+        break;
+      }
     }
-    if (periodic_deadline_ && *periodic_deadline_ <= now) {
+    if (!emitted_this_dispatch_ && periodic_deadline_ && *periodic_deadline_ <= now) {
       auto updated = invoke_update();
       if (!updated) {
         current_emit_ = nullptr;
@@ -442,6 +459,24 @@ public:
       *periodic_deadline_ = now + *every_;
     }
     current_emit_ = nullptr;
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LuaHostError>
+  run_external_callbacks(TimePoint now, const Emit &emit, const std::function<void()> &dispatch) {
+    if (stopped_) {
+      return {};
+    }
+    external_dispatch_error_.reset();
+    external_dispatch_ = true;
+    current_emit_ = &emit;
+    current_time_ = now;
+    dispatch();
+    current_emit_ = nullptr;
+    external_dispatch_ = false;
+    if (external_dispatch_error_) {
+      return std::unexpected(std::move(*external_dispatch_error_));
+    }
     return {};
   }
 
@@ -499,12 +534,15 @@ private:
     }
     const auto &minimum = protocol->at("minimum");
     const auto &maximum = protocol->at("maximum");
+    const int minimum_minor = minimum.at("minor").get<int>();
+    const int maximum_minor = maximum.at("minor").get<int>();
     if (minimum.at("major").get<int>() != 1 || maximum.at("major").get<int>() != 1 ||
-        minimum.at("minor").get<int>() < 0 || minimum.at("minor").get<int>() > 8 ||
-        maximum.at("minor").get<int>() < 8) {
+        minimum_minor < 0 || minimum_minor > maximum_minor || minimum_minor > 9 ||
+        maximum_minor < 8) {
       return std::unexpected(
           error(LuaHostErrorCode::protocol_error, "core must offer protocol 1.8"));
     }
+    selected_protocol_minor_ = maximum_minor >= 9 ? 9 : 8;
     for (const auto field : {"instance_id", "locale", "timezone"}) {
       if (!required_string(record, field)) {
         return std::unexpected(
@@ -524,6 +562,20 @@ private:
             error(LuaHostErrorCode::protocol_error, "init capabilities are invalid"));
       }
     }
+    negotiated_capabilities_.clear();
+    content_transitions_negotiated_ = false;
+    for (const auto capability : implemented_capabilities) {
+      if (offered.contains(capability)) {
+        negotiated_capabilities_.emplace_back(capability);
+      }
+    }
+    if (selected_protocol_minor_ >= 9 && offered.contains("indicator-effects")) {
+      negotiated_capabilities_.emplace_back("indicator-effects");
+    }
+    if (selected_protocol_minor_ >= 9 && offered.contains("content-transitions")) {
+      negotiated_capabilities_.emplace_back("content-transitions");
+      content_transitions_negotiated_ = true;
+    }
     const auto configuration = record.find("configuration");
     if (configuration == record.end() || !configuration->is_object()) {
       return std::unexpected(
@@ -535,10 +587,20 @@ private:
         return std::unexpected(
             error(LuaHostErrorCode::value_error, std::move(pushed.error().message)));
       }
+      pushed = push_json_to_lua(state_, nlohmann::json{{"instance_id", record.at("instance_id")},
+                                                       {"locale", record.at("locale")},
+                                                       {"timezone", record.at("timezone")},
+                                                       {"protocol_minor", selected_protocol_minor_},
+                                                       {"capabilities", negotiated_capabilities_}});
+      if (!pushed) {
+        lua_pop(state_, 1);
+        return std::unexpected(
+            error(LuaHostErrorCode::value_error, std::move(pushed.error().message)));
+      }
       initializing_ = true;
       current_emit_ = &emit;
       current_time_ = current_time_for_record_;
-      auto called = invoke(init_reference_, 1, "init");
+      auto called = invoke(init_reference_, 2, "init");
       current_emit_ = nullptr;
       initializing_ = false;
       if (!called) {
@@ -547,21 +609,10 @@ private:
         return std::unexpected(called.error());
       }
     }
-    static const std::array implemented_capabilities{
-        "data-snapshots",      "context-images", "rich-content",
-        "independent-views",   "ring-progress",  "status-indicator",
-        "compact-view-styles", "icon-roles",     "progress-transitions",
-    };
-    std::vector<std::string> negotiated_capabilities;
-    for (const auto capability : implemented_capabilities) {
-      if (offered.contains(capability)) {
-        negotiated_capabilities.emplace_back(capability);
-      }
-    }
     auto sent = emit({{"type", "ready"},
                       {"protocol_major", 1},
-                      {"protocol_minor", 8},
-                      {"capabilities", std::move(negotiated_capabilities)}});
+                      {"protocol_minor", selected_protocol_minor_},
+                      {"capabilities", negotiated_capabilities_}});
     if (!sent) {
       return std::unexpected(sent.error());
     }
@@ -649,12 +700,17 @@ private:
     }
 
     const auto handler = action_references_.find(*action_id);
-    if (handler == action_references_.end()) {
+    const bool fallback =
+        handler == action_references_.end() && fallback_action_reference_ != LUA_NOREF;
+    if (handler == action_references_.end() && !fallback) {
       return reject_action(*action_id, invocation == record.end() ? nullptr : &*invocation,
                            "unknown action", emit);
     }
 
     StackRestore restore{state_};
+    if (fallback) {
+      lua_pushlstring(state_, action_id->data(), action_id->size());
+    }
     const auto value = record.find("value");
     if (value == record.end()) {
       lua_pushnil(state_);
@@ -663,12 +719,13 @@ private:
           error(LuaHostErrorCode::value_error, std::move(pushed.error().message)));
     }
 
-    const int argument_index = lua_gettop(state_);
-    lua_rawgeti(state_, LUA_REGISTRYINDEX, handler->second);
+    const int arguments = fallback ? 2 : 1;
+    const int argument_index = lua_gettop(state_) - arguments + 1;
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, fallback ? fallback_action_reference_ : handler->second);
     lua_insert(state_, argument_index);
     current_emit_ = &emit;
     current_time_ = now;
-    const int status = lua_pcall(state_, 1, LUA_MULTRET, 0);
+    const int status = lua_pcall(state_, arguments, LUA_MULTRET, 0);
     current_emit_ = nullptr;
     if (status != LUA_OK) {
       const auto message = lua_error_message(state_, "action callback failed");
@@ -767,24 +824,41 @@ private:
 
   static int data_callback(lua_State *state) {
     auto *impl = static_cast<Impl *>(lua_touserdata(state, lua_upvalueindex(1)));
-    if (lua_gettop(state) != 1) {
-      lua_pushliteral(state, "gisland.data expects one value");
+    const int arguments = lua_gettop(state);
+    if (arguments < 1 || arguments > 2) {
+      lua_pushliteral(state, "gisland.data expects a value and optional transitions");
       return lua_error(state);
     }
     bool failed = false;
     {
-      auto value = lua_value_to_json(state, 1);
+      auto value = lua_value_to_json(state, 1, data_output_limits);
       if (!value) {
         impl->callback_error_ = value.error().message;
         failed = true;
       } else if (!value->is_object()) {
-        lua_pushliteral(state, "gisland.data expects an object value");
+        impl->callback_error_ = "gisland.data expects an object value";
         failed = true;
       } else {
-        auto sent = impl->emit_record({{"type", "data"}, {"value", std::move(*value)}});
-        if (!sent) {
-          impl->callback_error_ = sent.error().message;
-          failed = true;
+        nlohmann::json record{{"type", "data"}, {"value", std::move(*value)}};
+        if (arguments == 2) {
+          auto transitions = data_transitions(state, 2);
+          if (!transitions) {
+            impl->callback_error_ = std::move(transitions.error());
+            failed = true;
+          } else if (!impl->content_transitions_negotiated_) {
+            impl->callback_error_ =
+                "gisland.data transitions require negotiated content-transitions";
+            failed = true;
+          } else {
+            record["transitions"] = std::move(*transitions);
+          }
+        }
+        if (!failed) {
+          auto sent = impl->emit_record(std::move(record));
+          if (!sent) {
+            impl->callback_error_ = sent.error().message;
+            failed = true;
+          }
         }
       }
     }
@@ -793,6 +867,42 @@ private:
       return lua_error(state);
     }
     return 0;
+  }
+
+  [[nodiscard]] static std::expected<nlohmann::json, std::string> data_transitions(lua_State *state,
+                                                                                   int index) {
+    if (!lua_istable(state, index)) {
+      return std::unexpected("gisland.data transitions must be a non-empty object");
+    }
+    const int table_index = lua_absindex(state, index);
+    nlohmann::json transitions = nlohmann::json::object();
+    lua_pushnil(state);
+    while (lua_next(state, table_index) != 0) {
+      if (lua_type(state, -2) != LUA_TSTRING || lua_type(state, -1) != LUA_TSTRING) {
+        lua_pop(state, 2);
+        return std::unexpected("gisland.data transitions must contain only named string fields");
+      }
+      std::size_t key_size = 0;
+      const char *key_data = lua_tolstring(state, -2, &key_size);
+      const std::string key{key_data, key_size};
+      if (key != "compact" && key != "expanded") {
+        lua_pop(state, 2);
+        return std::unexpected("unknown gisland.data transition field '" + key + "'");
+      }
+      std::size_t value_size = 0;
+      const char *value_data = lua_tolstring(state, -1, &value_size);
+      const std::string value{value_data, value_size};
+      if (value != "crossfade" && value != "slide-left" && value != "slide-right") {
+        lua_pop(state, 2);
+        return std::unexpected("unsupported gisland.data transition '" + value + "'");
+      }
+      transitions[key] = value;
+      lua_pop(state, 1);
+    }
+    if (transitions.empty()) {
+      return std::unexpected("gisland.data transitions must be a non-empty object");
+    }
+    return transitions;
   }
 
   static int defer_callback(lua_State *state) {
@@ -832,7 +942,7 @@ private:
       lua_pushfstring(state, "%s expects a callback", name);
       return lua_error(state);
     }
-    if (timers_.size() >= LuaValueLimits::max_items) {
+    if (timers_.size() >= maximum_timer_count) {
       lua_pushliteral(state, "timer queue limit exceeded");
       return lua_error(state);
     }
@@ -864,7 +974,14 @@ private:
       return std::unexpected(
           error(LuaHostErrorCode::output_error, "Lua API called outside host dispatch"));
     }
-    return (*current_emit_)(std::move(record));
+    auto emitted = (*current_emit_)(std::move(record));
+    if (emitted) {
+      emitted_this_dispatch_ = true;
+    }
+    if (!emitted && external_dispatch_ && !external_dispatch_error_) {
+      external_dispatch_error_ = emitted.error();
+    }
+    return emitted;
   }
 
   [[nodiscard]] std::expected<void, LuaHostError> invoke_update() {
@@ -896,7 +1013,8 @@ private:
   }
 
   [[nodiscard]] static bool is_known_field(std::string_view field) {
-    constexpr std::array fields{"every", "init", "update", "actions", "visibility", "shutdown"};
+    constexpr std::array fields{"every",           "init",       "update",  "actions",
+                                "fallback_action", "visibility", "shutdown"};
     return std::ranges::find(fields, field) != fields.end();
   }
 
@@ -916,20 +1034,27 @@ private:
   int update_reference_{LUA_NOREF};
   int visibility_reference_{LUA_NOREF};
   int shutdown_reference_{LUA_NOREF};
+  int fallback_action_reference_{LUA_NOREF};
   bool module_called_{};
   bool initialized_{};
   bool stopped_{};
   std::string callback_error_;
+  std::optional<LuaHostError> external_dispatch_error_;
   std::optional<std::chrono::milliseconds> every_;
   std::optional<TimePoint> periodic_deadline_;
   std::vector<Timer> timers_;
   std::vector<nlohmann::json> buffered_output_;
   std::size_t buffered_output_bytes_{};
   const Emit *current_emit_{};
+  bool external_dispatch_{};
   TimePoint current_time_{};
   TimePoint current_time_for_record_{};
   std::uint64_t next_timer_sequence_{};
   bool initializing_{};
+  bool emitted_this_dispatch_{};
+  int selected_protocol_minor_{};
+  std::vector<std::string> negotiated_capabilities_;
+  bool content_transitions_negotiated_{};
 };
 
 std::expected<std::unique_ptr<LuaHost>, LuaHostError> LuaHost::load(const std::string &entry_path) {
@@ -1017,6 +1142,12 @@ std::optional<LuaHost::TimePoint> LuaHost::next_deadline() const noexcept {
 
 std::expected<void, LuaHostError> LuaHost::run_due(TimePoint now, const Emit &emit) {
   return impl_->run_due(now, emit);
+}
+
+std::expected<void, LuaHostError>
+LuaHost::run_external_callbacks(TimePoint now, const Emit &emit,
+                                const std::function<void()> &dispatch) {
+  return impl_->run_external_callbacks(now, emit, dispatch);
 }
 
 int lua_host_poll_timeout(std::optional<LuaHost::TimePoint> deadline, LuaHost::TimePoint now) {

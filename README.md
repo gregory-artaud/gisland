@@ -19,9 +19,12 @@ user's XDG directories and does not need to be added to this repository.
 - Git
 - clang-format and clang-tidy for optional quality checks
 - Lua 5.4 interpreter and development files for Lua modules and tests
-- Python 3, PyGObject, GTK 3, and GdkPixbuf for desktop notifications
+- A Lua 5.4-compatible `lgi`, plus GLib, Gio, Json-GLib 1.0, GdkPixbuf 2.0, and
+  librsvg 2.0, and GTK 3.0 typelibs, for Lua modules
+- Python 3 and PyGObject for the D-Bus contract tests
 - `pactl` for default output mute and volume controls
 - `timeout` for bounded audio module commands
+- UPower for event-driven battery status and charge alerts
 - tzdata and the system locales selected for clock-calendar formatting
 - X11, OpenGL, and ALSA development libraries required by raylib
 
@@ -32,7 +35,8 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
   libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
   libglu1-mesa-dev libxcursor-dev libxinerama-dev libcairo2-dev \
   libpango1.0-dev libfontconfig1-dev lua5.4 liblua5.4-dev python3 python3-gi \
-  gir1.2-gtk-3.0 pulseaudio-utils
+  gir1.2-json-1.0 gir1.2-gdkpixbuf-2.0 gir1.2-rsvg-2.0 gir1.2-gtk-3.0 \
+  lua-lgi pulseaudio-utils
 ```
 
 ### Fedora
@@ -41,7 +45,8 @@ sudo apt install build-essential cmake ninja-build git clang-format clang-tidy \
 sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
   alsa-lib-devel mesa-libGL-devel libX11-devel libXrandr-devel libXi-devel \
   libXcursor-devel libXinerama-devel libatomic cairo-devel pango-devel \
-  fontconfig-devel lua-devel python3 python3-gobject gtk3 pulseaudio-utils
+  fontconfig-devel lua-devel lua-lgi json-glib gdk-pixbuf2 librsvg2 gtk3 \
+  python3 python3-gobject pulseaudio-utils
 ```
 
 ### Arch Linux
@@ -49,7 +54,7 @@ sudo dnf install gcc-c++ clang cmake ninja-build git clang-tools-extra \
 ```bash
 sudo pacman -S --needed base-devel clang cmake ninja git alsa-lib mesa libx11 \
   libxrandr libxi libxcursor libxinerama cairo pango fontconfig python \
-  lua python-gobject gtk3 libpulse
+  lua54 lua54-lgi glib2 json-glib gdk-pixbuf2 librsvg gtk3 python-gobject libpulse
 ```
 
 These commands are documentation only. Review packages before running privileged commands.
@@ -64,6 +69,11 @@ cmake --build --preset dev
 ```
 
 raylib 6.0 is fetched automatically during the first configure.
+
+`lgi` is normally loaded from the Lua 5.4 system search path. For tests against an unpacked or
+staged installation, pass `-DGISLAND_LGI_ROOT=/path/to/root`; the root may contain either
+`share/lua/5.4` directly or under `usr/`. This test-only override is not compiled into installed
+binaries.
 
 For an optimized build:
 
@@ -99,8 +109,8 @@ systemctl --user enable --now gisland.service
 
 This manual sequence is not an equivalent upgrade path: CMake installs current files but cannot
 safely identify and remove files owned by older releases. Use `./scripts/install-local.sh` for
-user-local updates that require legacy audio migration and cleanup. For another prefix, review and
-remove stale release-owned files explicitly before using the manual sequence.
+user-local updates that require legacy clock, audio, or battery migration and cleanup. For another
+prefix, review and remove stale release-owned files explicitly before using the manual sequence.
 
 The installation owns binaries, the user service, and private distributed resources under
 `$HOME/.local/share/gisland/distributed`. It never writes user configuration or custom modules under
@@ -340,18 +350,21 @@ A script must return exactly one definition produced by `gisland.module`:
 ```lua
 return gisland.module {
   every = "1s",
-  init = function(config) end,
+  init = function(config, metadata) end,
   update = function() return { value = 42 } end,
   actions = {
     refresh = function(value) return true end,
   },
+  fallback_action = function(action_id, value) return false end,
   visibility = function(state) end,
   shutdown = function() end,
 }
 ```
 
-All fields and callbacks are optional. `init(config)` runs once after protocol initialization;
-`ready` is emitted only if it succeeds. `update()` runs at the bounded `every` interval and emits one
+All fields and callbacks are optional. `init(config, metadata)` runs once after protocol
+initialization; metadata contains the core-supplied instance ID, locale, timezone, selected integer
+`protocol_minor`, and negotiated `capabilities` array. `ready` is emitted only if it succeeds.
+`update()` runs at the bounded `every` interval and emits one
 `data` record when it returns a non-nil JSON-compatible value. `visibility(state)` receives the
 current visibility string. `shutdown()` runs during graceful shutdown. Callbacks run serially.
 
@@ -369,7 +382,10 @@ return gisland.module {
 
 `gisland.data(value)` emits data explicitly. Lua tables with contiguous integer keys become arrays;
 string-keyed tables become objects. Empty tables are objects unless created with
-`gisland.array()`. Values are bounded and must be JSON-compatible.
+`gisland.array()`. Values are bounded and must be JSON-compatible. Core-to-Lua values, action and
+configuration values, scene values, and `update()` return values allow at most 256 table items.
+Explicit `gisland.data` output allows at most 512 items for larger declarative snapshots; the same
+depth and serialized-size limits still apply.
 
 Context-oriented modules call `gisland.publish(context)`, `gisland.dismiss(context_id)`, and
 `gisland.log(level, message)`. The `gisland.ui` constructors cover `text`, `icon`, `image`,
@@ -382,7 +398,8 @@ Rendered interactions and `gislandctl action` both dispatch the same semantic ac
 callback receives the optional JSON-compatible value and returns `true`, `false`, or
 `false, "reason"`. The host creates the protocol 1.8 correlated `action_result`; invocation IDs are
 never exposed to Lua. A missing handler, invalid return, or thrown action error rejects and logs only
-that invocation, leaving the module ready.
+that invocation, leaving the module ready. A module may provide
+`fallback_action(action_id, value)` when unknown actions need module-specific rejection behavior.
 
 Timers use the same positive `ms`, `s`, `m`, or `h` duration syntax as `every`, up to 24 hours:
 
@@ -396,28 +413,50 @@ timer, visibility, shutdown, transport, queue, and value-conversion errors termi
 process. gisland removes its contexts and applies the manifest's restart policy and backoff. Scene
 records rejected by the core follow the normal last-valid-context behavior.
 
-The shipped `gisland-clock-calendar` executable uses the same public protocol as third-party
-modules. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at minute
-boundaries, and handles previous-month, next-month, and today actions. Locale and timezone come
-from the process environment by default. Module options can override `locale`, `timezone`, and
-`week_start` (`monday` or `sunday`).
+The shipped clock-calendar is a self-contained protocol-1.8..1.9 Lua package hosted by
+`gisland-lua-host`. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at
+minute boundaries, and handles previous-month, next-month, and today actions. Locale and timezone
+come from core initialization by default without changing process `TZ`. Module options can override
+`locale`, `timezone`, and `week_start` (`monday` or `sunday`). Its default compact and expanded views
+live in the package's `view.toml` rather than the global configuration.
+
+The shipped battery module is also a self-contained protocol-1.8 Lua package. It creates Gio UPower
+proxies synchronously during initialization and then reacts only to UPower property-change signals on
+the host's shared GLib main context; it does not poll. Its package-local defaults control warning,
+persistent, critical, semantic-color thresholds, and temporary preview duration. The package view
+shows normalized charge, the active charge estimate, battery health, and power draw. An unavailable
+UPower service is logged, while absent or nonfinite readings are ignored; neither terminates the
+graphical core.
+
+Battery percentages use strict ordering: `0 < critical_percent < persistent_percent <
+warning_percent <= 100` and `0 < red_percent < yellow_percent <= 100`. Manifests validate each
+option's integer range but cannot express relations between options, so the Lua module rejects an
+invalid combination during initialization.
+
+Low-battery thresholds fire once per discharge cycle. Plugging in replaces an active persistent or
+critical alert, and unplugging starts a new cycle. Threshold state is stored under
+`$XDG_STATE_HOME/gisland/battery-cycle.json`, falling back to
+`$HOME/.local/state/gisland/battery-cycle.json`; a persistent alert can be dismissed without
+re-enabling duplicate alerts in the same cycle.
 
 When user configuration is absent, gisland loads the distributed `assets/config.toml`, which
-selects this module and its declarative compact and expanded templates and enables the desktop
+selects this module and enables the desktop
 notification module beside it. A user
 `$XDG_CONFIG_HOME/gisland/config.toml` continues to override the distributed default completely.
 
 ## Desktop Notifications
 
-The shipped `gisland-notifications` process owns `org.freedesktop.Notifications` on the user session
-bus and exposes the standard freedesktop notification interface. It runs as an ordinary supervised
-protocol-1.4 module; a missing Python or GI dependency stops only this module and does not terminate
-the graphical core. Another notification daemon must not already own the bus name.
+The shipped single-entry `notifications.lua` module owns `org.freedesktop.Notifications` on the user
+session bus and exposes the standard freedesktop notification interface. It runs through
+`gisland-lua-host` as an ordinary supervised protocol-1.8 module. A missing lgi or typelib dependency
+stops only this module and does not terminate the graphical core. Another notification daemon must
+not already own the bus name.
 
 The daemon supports application names and icons, summaries, freedesktop body markup, default and
 named actions, resident notifications, urgency, replacement IDs, and local image data. Body markup
 is converted to typed rich text rather than passed to the renderer. Images may come from RGB8 or
-RGBA8 `image-data`, local paths or `file:` URIs, and GTK icon-theme names. They are normalized to
+RGBA8 `image-data`, local paths or `file:` URIs, desktop entries, and local icon names. GdkPixbuf and
+librsvg decode raster and SVG files. Images are normalized to
 straight-alpha RGBA8 and downscaled to at most 512 pixels per axis. Remote image URLs are rejected.
 
 An explicit positive timeout is honored and zero disables automatic expiration. A negative timeout
@@ -452,15 +491,19 @@ History stores bounded plain-text notification content under
 `$HOME/.local/state/gisland/notifications-history.json`. It does not retain actions, links, images,
 or arbitrary hints.
 
-Run `gisland-notification-history` to open the newest historical notification. Repeating the command
-adds one older entry below it, up to `history_visible_limit`. Clicking an entry masks it for the
+The public history action ID is `show-more`. Run `gislandctl action notifications show-more`, then
+atomically select and open it with `gislandctl activate-open notifications` after the correlated
+action succeeds. Repeating the pair adds one older entry below
+it, up to `history_visible_limit`. Rendered entries use
+`history:<session>:hide:<sequence>` and the close icon uses
+`history:<session>:close-all`; these remain module-owned scene actions. Clicking an entry masks it for the
 current opening without deleting persisted history; the close icon masks the complete current stack.
 Masking the final visible entry, using the close icon, or waiting eight seconds without interaction
 closes the overlay. Every invocation and click resets that inactivity deadline. The next opening
 restores all session-masked entries and starts again with one entry. A direct i3 binding is:
 
 ```i3
-bindsym $mod+n exec --no-startup-id ~/.local/bin/gisland-notification-history
+bindsym $mod+n exec --no-startup-id sh -c 'gislandctl action notifications show-more && gislandctl activate-open notifications'
 ```
 
 Links are opened through Gio only for `http`, `https`, and `mailto` URIs. The daemon never invokes a

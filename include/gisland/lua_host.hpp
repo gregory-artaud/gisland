@@ -39,6 +39,7 @@ struct LuaModuleDefinition {
   bool has_update{};
   bool has_visibility{};
   bool has_shutdown{};
+  bool has_fallback_action{};
   std::vector<std::string> actions;
 };
 
@@ -72,6 +73,8 @@ public:
   [[nodiscard]] bool stopped() const noexcept;
   [[nodiscard]] std::optional<TimePoint> next_deadline() const noexcept;
   [[nodiscard]] std::expected<void, LuaHostError> run_due(TimePoint now, const Emit &emit);
+  [[nodiscard]] std::expected<void, LuaHostError>
+  run_external_callbacks(TimePoint now, const Emit &emit, const std::function<void()> &dispatch);
 
 private:
   class Impl;

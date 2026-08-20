@@ -46,6 +46,14 @@ void check_lua_rejection(lua_State *state, gisland::LuaValueErrorCode code) {
   CHECK(lua_gettop(state) == top);
 }
 
+void push_integer_array(lua_State *state, std::size_t size) {
+  lua_createtable(state, static_cast<int>(size), 0);
+  for (std::size_t index = 1; index <= size; ++index) {
+    lua_pushinteger(state, static_cast<lua_Integer>(index));
+    lua_rawseti(state, -2, static_cast<lua_Integer>(index));
+  }
+}
+
 } // namespace
 
 TEST_CASE("Lua values convert to JSON scalars and back") {
@@ -154,13 +162,43 @@ TEST_CASE("Lua conversion enforces depth and item bounds") {
 
   SECTION("items") {
     auto state = make_state();
-    lua_createtable(state.get(), static_cast<int>(gisland::LuaValueLimits::max_items + 1), 0);
-    for (std::size_t index = 1; index <= gisland::LuaValueLimits::max_items + 1; ++index) {
-      lua_pushinteger(state.get(), static_cast<lua_Integer>(index));
-      lua_rawseti(state.get(), -2, static_cast<lua_Integer>(index));
-    }
+    push_integer_array(state.get(), gisland::LuaValueLimits::max_items + 1);
     check_lua_rejection(state.get(), gisland::LuaValueErrorCode::too_many_items);
   }
+}
+
+TEST_CASE("Lua conversion uses an explicit item budget without changing defaults") {
+  CHECK(gisland::LuaValueLimits::max_items == 256);
+  auto state = make_state();
+  push_integer_array(state.get(), 257);
+
+  const auto default_result = gisland::lua_value_to_json(state.get(), -1);
+  REQUIRE_FALSE(default_result.has_value());
+  CHECK(default_result.error().code == gisland::LuaValueErrorCode::too_many_items);
+  CHECK(default_result.error().message.find("256") != std::string::npos);
+
+  const auto expanded_result = gisland::lua_value_to_json(
+      state.get(), -1, gisland::LuaValueConversionLimits{.max_items = 512});
+  REQUIRE(expanded_result.has_value());
+  CHECK(expanded_result->size() == 257);
+
+  lua_pop(state.get(), 1);
+  push_integer_array(state.get(), 513);
+  const auto oversized = gisland::lua_value_to_json(
+      state.get(), -1, gisland::LuaValueConversionLimits{.max_items = 512});
+  REQUIRE_FALSE(oversized.has_value());
+  CHECK(oversized.error().code == gisland::LuaValueErrorCode::too_many_items);
+  CHECK(oversized.error().message.find("512") != std::string::npos);
+}
+
+TEST_CASE("JSON conversion diagnostics report the active item budget") {
+  auto state = make_state();
+  const auto result = gisland::push_json_to_lua(state.get(), nlohmann::json::array({1, 2, 3}),
+                                                gisland::LuaValueConversionLimits{.max_items = 2});
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().code == gisland::LuaValueErrorCode::too_many_items);
+  CHECK(result.error().message.find("2") != std::string::npos);
+  CHECK(lua_gettop(state.get()) == 0);
 }
 
 TEST_CASE("JSON to Lua conversion is bounded and stack safe on failure") {

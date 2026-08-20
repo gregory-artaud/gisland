@@ -494,8 +494,7 @@ void read_init() {
   }
   if (mode == "content-transition" || mode == "content-transition-without-capability") {
     read_init();
-    nlohmann::json ready{
-        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 9}};
+    nlohmann::json ready{{"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 9}};
     if (mode == "content-transition") {
       ready["capabilities"] = {"data-snapshots", "content-transitions"};
     } else {
@@ -507,17 +506,18 @@ void read_init() {
                 {"transitions", {{"expanded", "slide-left"}}}});
     return silent();
   }
-  if (mode == "independent" || mode == "independent-without-capability") {
+  if (mode == "independent" || mode == "independent-high" ||
+      mode == "independent-without-capability") {
     read_init();
     nlohmann::json ready{{"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 4}};
-    if (mode == "independent") {
+    if (mode == "independent" || mode == "independent-high") {
       ready["capabilities"] = {"independent-views"};
     }
     write_json(ready);
     write_json({
         {"type", "publish"},
         {"context_id", "independent"},
-        {"priority", 20},
+        {"priority", mode == "independent-high" ? 1000 : 20},
         {"views",
          {{"expanded", {{"type", "text"}, {"value", "Expanded owner"}, {"role", "body"}}}}},
         {"presentation", {{"reveal", "expanded"}, {"duration_ms", 1000}}},

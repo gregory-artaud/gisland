@@ -91,6 +91,7 @@ void push_array_marker_table(lua_State *state) {
 }
 
 struct ConversionContext {
+  LuaValueConversionLimits limits;
   std::size_t items{};
   std::unordered_set<const void *> active_tables;
 };
@@ -151,10 +152,11 @@ private:
   while (lua_next(state, table_index) != 0) {
     ++context.items;
     ++entry_count;
-    if (context.items > LuaValueLimits::max_items) {
+    if (context.items > context.limits.max_items) {
       lua_pop(state, 2);
       return std::unexpected(error(LuaValueErrorCode::too_many_items, path,
-                                   "Lua value exceeds maximum item count of 256"));
+                                   "Lua value exceeds maximum item count of " +
+                                       std::to_string(context.limits.max_items)));
     }
 
     if (lua_type(state, -2) == LUA_TNUMBER && lua_isinteger(state, -2) != 0) {
@@ -276,6 +278,7 @@ private:
 }
 
 struct JsonContext {
+  LuaValueConversionLimits limits;
   std::size_t items{};
 };
 
@@ -330,9 +333,10 @@ struct JsonContext {
     lua_createtable(state, static_cast<int>(value.size()), 0);
     const int table_index = lua_absindex(state, -1);
     for (std::size_t index = 0; index < value.size(); ++index) {
-      if (++context.items > LuaValueLimits::max_items) {
+      if (++context.items > context.limits.max_items) {
         return std::unexpected(error(LuaValueErrorCode::too_many_items, path,
-                                     "JSON value exceeds maximum item count of 256"));
+                                     "JSON value exceeds maximum item count of " +
+                                         std::to_string(context.limits.max_items)));
       }
       auto result = push_json_value(state, value[index], depth + 1,
                                     std::string{path} + '/' + std::to_string(index), context, true);
@@ -351,9 +355,10 @@ struct JsonContext {
     lua_createtable(state, 0, static_cast<int>(value.size()));
     const int table_index = lua_absindex(state, -1);
     for (auto iterator = value.begin(); iterator != value.end(); ++iterator) {
-      if (++context.items > LuaValueLimits::max_items) {
+      if (++context.items > context.limits.max_items) {
         return std::unexpected(error(LuaValueErrorCode::too_many_items, path,
-                                     "JSON value exceeds maximum item count of 256"));
+                                     "JSON value exceeds maximum item count of " +
+                                         std::to_string(context.limits.max_items)));
       }
       if (iterator.key().size() > LuaValueLimits::max_object_key_bytes) {
         return std::unexpected(
@@ -376,7 +381,7 @@ struct JsonContext {
 
 } // namespace
 
-LuaValueResult lua_value_to_json(lua_State *state, int index) {
+LuaValueResult lua_value_to_json(lua_State *state, int index, LuaValueConversionLimits limits) {
   if (state == nullptr) {
     return std::unexpected(
         error(LuaValueErrorCode::invalid_state, "/", "Lua state must not be null"));
@@ -387,7 +392,7 @@ LuaValueResult lua_value_to_json(lua_State *state, int index) {
         error(LuaValueErrorCode::invalid_index, "/", "Lua stack index is invalid"));
   }
 
-  ConversionContext context;
+  ConversionContext context{.limits = limits, .items = 0, .active_tables = {}};
   auto result = convert_lua_value(state, index, 0, "", context);
   if (!result) {
     return result;
@@ -403,7 +408,8 @@ LuaValueResult lua_value_to_json(lua_State *state, int index) {
   return result;
 }
 
-LuaPushResult push_json_to_lua(lua_State *state, const nlohmann::json &value) {
+LuaPushResult push_json_to_lua(lua_State *state, const nlohmann::json &value,
+                               LuaValueConversionLimits limits) {
   if (state == nullptr) {
     return std::unexpected(
         error(LuaValueErrorCode::invalid_state, "/", "Lua state must not be null"));
@@ -422,7 +428,7 @@ LuaPushResult push_json_to_lua(lua_State *state, const nlohmann::json &value) {
         error(LuaValueErrorCode::lua_stack_error, "/", "Lua stack cannot grow for conversion"));
   }
 
-  JsonContext context;
+  JsonContext context{.limits = limits};
   auto result = push_json_value(state, value, 0, "", context, false);
   if (!result) {
     return result;

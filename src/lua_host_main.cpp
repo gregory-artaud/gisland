@@ -1,25 +1,32 @@
 #include "gisland/content_fingerprint.hpp"
+#include "gisland/glib_main_context.hpp"
 #include "gisland/lua_host.hpp"
 #include "gisland/lua_transport.hpp"
+#include "gisland/poll.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <fcntl.h>
 #include <linux/openat2.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <iostream>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -97,6 +104,16 @@ read_expected_entry(const std::filesystem::path &path, std::string_view expected
 
 constexpr std::string_view fingerprint_argument_prefix = "--gisland-entry-fingerprint=";
 
+[[nodiscard]] int minimum_timeout(int left, int right) {
+  if (left < 0) {
+    return right;
+  }
+  if (right < 0) {
+    return left;
+  }
+  return std::min(left, right);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -173,14 +190,63 @@ int main(int argc, char **argv) {
     return {};
   };
 
+  gisland::GlibMainContext glib_context;
+
   while (!(*host)->stopped()) {
-    const int timeout = (*transport)->pending_output_messages() > 0
-                            ? -1
-                            : gisland::lua_host_poll_timeout((*host)->next_deadline(),
-                                                             gisland::LuaHost::Clock::now());
-    auto result = (*transport)->poll_once(timeout);
+    const bool output_pending = (*transport)->pending_output_messages() > 0;
+    auto transport_descriptors = (*transport)->poll_descriptors(!output_pending);
+    std::vector<pollfd> descriptors{transport_descriptors.begin(), transport_descriptors.end()};
+    std::expected<gisland::GlibPollQuery, std::string> glib_query;
+    int timeout = -1;
+    if (!output_pending) {
+      timeout =
+          gisland::lua_host_poll_timeout((*host)->next_deadline(), gisland::LuaHost::Clock::now());
+      glib_query = glib_context.prepare();
+      if (!glib_query) {
+        std::cerr << "gisland-lua-host: " << glib_query.error() << '\n';
+        return EXIT_FAILURE;
+      }
+      timeout = minimum_timeout(timeout, glib_query->timeout_ms);
+      if ((*transport)->has_buffered_input()) {
+        timeout = 0;
+      }
+      descriptors.insert(descriptors.end(), glib_query->descriptors.begin(),
+                         glib_query->descriptors.end());
+    }
+
+    auto polled = gisland::poll_with_timeout(descriptors, timeout);
+    if (!polled) {
+      std::cerr << "gisland-lua-host: " << polled.error() << '\n';
+      return EXIT_FAILURE;
+    }
+    auto result = (*transport)->advance(std::span{descriptors}.first(transport_descriptors.size()));
     if (!result) {
+      if (result.error().code == gisland::LuaTransportErrorCode::input_eof && (*host)->stopped()) {
+        break;
+      }
       std::cerr << "gisland-lua-host: " << result.error().message << '\n';
+      return EXIT_FAILURE;
+    }
+    if ((*transport)->pending_output_messages() > 0) {
+      if (!output_pending) {
+        glib_context.cancel_poll();
+      }
+      continue;
+    }
+    if (output_pending) {
+      continue;
+    }
+    std::expected<void, std::string> dispatched;
+    auto callbacks = (*host)->run_external_callbacks(gisland::LuaHost::Clock::now(), emit, [&] {
+      dispatched = glib_context.check_and_dispatch(
+          std::span{descriptors}.subspan(transport_descriptors.size()));
+    });
+    if (!dispatched) {
+      std::cerr << "gisland-lua-host: " << dispatched.error() << '\n';
+      return EXIT_FAILURE;
+    }
+    if (!callbacks) {
+      std::cerr << "gisland-lua-host: " << callbacks.error().message << '\n';
       return EXIT_FAILURE;
     }
     if ((*transport)->pending_output_messages() > 0) {
@@ -193,7 +259,7 @@ int main(int argc, char **argv) {
     }
   }
   while ((*transport)->pending_output_messages() > 0) {
-    const auto result = (*transport)->poll_once(-1);
+    const auto result = (*transport)->poll_once(-1, false);
     if (!result) {
       std::cerr << "gisland-lua-host: " << result.error().message << '\n';
       return EXIT_FAILURE;

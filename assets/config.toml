@@ -18,37 +18,6 @@ restart = "on-failure"
 [modules.options]
 week_start = "monday"
 
-[modules.view.compact]
-type = "row"
-gap = "small"
-children = [
-  { type = "text", value = { bind = "time" }, role = "compact-primary" },
-  { type = "spacer", flexible = true },
-  { type = "text", value = { bind = "date_short" }, role = "compact-secondary" }
-]
-
-[modules.view.expanded]
-type = "column"
-gap = "small"
-children = [
-  { type = "row", gap = "small", children = [
-    { type = "button", action_id = "previous-month", accessible_label = "Previous month", content = { type = "icon", name = "chevron-left", accessible_label = "Previous month" } },
-    { type = "spacer", flexible = true },
-    { type = "column", gap = "xsmall", children = [
-      { type = "text", value = { bind = "month_label" }, role = "title" },
-      { type = "button", action_id = "today", accessible_label = "Today", content = { type = "text", value = "Today", role = "button" } }
-    ] },
-    { type = "spacer", flexible = true },
-    { type = "button", action_id = "next-month", accessible_label = "Next month", content = { type = "icon", name = "chevron-right", accessible_label = "Next month" } }
-  ] },
-  { type = "row", gap = "small", children = [
-    { repeat = "calendar_columns", as = "calendar_column", template = { type = "column", gap = "small", children = [
-      { type = "text", value = { bind = "calendar_column.weekday" }, role = "caption" },
-      { repeat = "calendar_column.days", as = "calendar_day", template = { type = "text", value = { bind = "calendar_day.label" }, role = { bind = "calendar_day.role" } } }
-    ] } }
-  ] }
-]
-
 [[modules]]
 id = "notifications"
 module = "notifications"
@@ -60,53 +29,6 @@ id = "battery"
 module = "battery"
 enabled = true
 restart = "on-failure"
-protocol_min = "1.5"
-protocol_max = "1.5"
-
-[modules.options]
-warning_percent = 20
-persistent_percent = 10
-critical_percent = 5
-yellow_percent = 30
-red_percent = 15
-preview_duration_ms = 3000
-
-[modules.view.compact]
-type = "row"
-gap = "small"
-children = [
-  { type = "progress", shape = "ring", value = { bind = "level" }, state = { bind = "semantic_state" } },
-  { type = "text", value = { bind = "percent_text" }, role = "compact-primary" },
-  { type = "spacer", flexible = true },
-  { type = "text", value = { bind = "estimate_compact" }, role = "compact-secondary" }
-]
-
-[modules.view.expanded]
-type = "column"
-gap = "normal"
-children = [
-  { type = "row", gap = "normal", children = [
-    { type = "progress", shape = "ring", value = { bind = "level" }, state = { bind = "semantic_state" } },
-    { type = "text", value = { bind = "percent_text" }, role = "title" },
-    { type = "spacer", flexible = true },
-    { type = "text", value = { bind = "state_text" }, role = "body" }
-  ] },
-  { type = "row", gap = "small", children = [
-    { type = "text", value = "Autonomie", role = "caption" },
-    { type = "spacer", flexible = true },
-    { type = "text", value = { bind = "estimate_detail" }, role = "body" }
-  ] },
-  { type = "row", gap = "small", children = [
-    { type = "text", value = "Santé", role = "caption" },
-    { type = "spacer", flexible = true },
-    { type = "text", value = { bind = "health_text" }, role = "body" }
-  ] },
-  { type = "row", gap = "small", children = [
-    { type = "text", value = "Puissance", role = "caption" },
-    { type = "spacer", flexible = true },
-    { type = "text", value = { bind = "power_text" }, role = "body" }
-  ] }
-]
 
 [[modules]]
 id = "audio"

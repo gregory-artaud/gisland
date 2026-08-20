@@ -1,6 +1,7 @@
 #include "gisland/lua_transport.hpp"
 
 #include "gisland/line_buffer.hpp"
+#include "gisland/poll.hpp"
 #include "gisland/write_queue.hpp"
 
 #include <nlohmann/json.hpp>
@@ -13,6 +14,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <expected>
 #include <span>
 #include <string>
@@ -20,6 +22,8 @@
 
 namespace gisland {
 namespace {
+
+constexpr std::size_t max_input_records_per_turn = 64;
 
 [[nodiscard]] LuaTransportError error(LuaTransportErrorCode code, std::string message) {
   return {code, std::move(message)};
@@ -82,39 +86,62 @@ public:
     return {};
   }
 
-  [[nodiscard]] Result poll_once(int timeout_ms) {
-    std::array<pollfd, 2> descriptors{{
-        {.fd = input_fd_, .events = POLLIN, .revents = 0},
+  [[nodiscard]] Result poll_once(int timeout_ms, bool read_enabled) {
+    auto descriptors = poll_descriptors(read_enabled);
+    if (read_enabled && !output_.wants_write() && !buffered_lines_.empty()) {
+      timeout_ms = 0;
+    }
+    const auto polled = poll_with_timeout(descriptors, timeout_ms);
+    if (!polled) {
+      return std::unexpected(error(LuaTransportErrorCode::poll_failed, polled.error()));
+    }
+    return advance(descriptors);
+  }
+
+  [[nodiscard]] std::array<pollfd, 2> poll_descriptors(bool read_enabled) const {
+    return {{
+        {.fd = read_enabled ? input_fd_ : -1,
+         .events = static_cast<short>(read_enabled ? POLLIN : 0),
+         .revents = 0},
         {.fd = output_fd_,
          .events = static_cast<short>(output_.wants_write() ? POLLOUT : 0),
          .revents = 0},
     }};
-    int ready = 0;
-    do {
-      ready = ::poll(descriptors.data(), descriptors.size(), timeout_ms);
-    } while (ready < 0 && errno == EINTR);
-    if (ready < 0) {
-      return std::unexpected(error(LuaTransportErrorCode::poll_failed,
-                                   std::string{"poll failed: "} + std::strerror(errno)));
+  }
+
+  [[nodiscard]] Result advance(std::span<const pollfd> descriptors) {
+    if (descriptors.size() != 2 || (descriptors[0].fd != input_fd_ && descriptors[0].fd != -1) ||
+        descriptors[1].fd != output_fd_) {
+      return std::unexpected(
+          error(LuaTransportErrorCode::invalid_descriptor, "unexpected transport descriptors"));
     }
 
+    if ((descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      return std::unexpected(
+          error(LuaTransportErrorCode::write_failed, "standard output is unavailable"));
+    }
     if ((descriptors[1].revents & POLLOUT) != 0) {
       auto written = write_output();
       if (!written) {
         return written;
       }
     }
-    if ((descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-      return std::unexpected(
-          error(LuaTransportErrorCode::write_failed, "standard output is unavailable"));
+    const bool read_enabled = descriptors[0].fd == input_fd_;
+    std::size_t input_budget = max_input_records_per_turn;
+    if (read_enabled && !output_.wants_write()) {
+      auto processed = process_buffered_lines(input_budget);
+      if (!processed) {
+        return processed;
+      }
     }
-    if ((descriptors[0].revents & (POLLIN | POLLHUP)) != 0) {
-      auto read = read_input();
+    if (read_enabled && !output_.wants_write() &&
+        (descriptors[0].revents & (POLLIN | POLLHUP)) != 0) {
+      auto read = read_input(input_budget);
       if (!read) {
         return read;
       }
     }
-    if ((descriptors[0].revents & (POLLERR | POLLNVAL)) != 0) {
+    if (read_enabled && (descriptors[0].revents & (POLLERR | POLLNVAL)) != 0) {
       return std::unexpected(error(LuaTransportErrorCode::read_failed, "standard input failed"));
     }
     return {};
@@ -122,7 +149,7 @@ public:
 
   [[nodiscard]] Result run() {
     while (true) {
-      auto result = poll_once(-1);
+      auto result = poll_once(-1, !output_.wants_write());
       if (!result) {
         return result;
       }
@@ -137,10 +164,12 @@ public:
     return output_.pending_bytes();
   }
 
+  [[nodiscard]] bool has_buffered_input() const noexcept { return !buffered_lines_.empty(); }
+
 private:
-  [[nodiscard]] Result read_input() {
+  [[nodiscard]] Result read_input(std::size_t &input_budget) {
     std::array<std::byte, 64 * 1024> buffer{};
-    while (true) {
+    while (input_budget > 0) {
       const auto count = ::read(input_fd_, buffer.data(), buffer.size());
       if (count > 0) {
         const auto lines = input_.append(
@@ -148,13 +177,10 @@ private:
         if (!lines) {
           return std::unexpected(line_error(lines.error().code));
         }
-        for (const auto &line : *lines) {
-          auto handled = handle_line(line.text);
-          if (!handled) {
-            return handled;
-          }
+        for (auto &line : *lines) {
+          buffered_lines_.push_back(std::move(line.text));
         }
-        continue;
+        return process_buffered_lines(input_budget);
       }
       if (count == 0) {
         const auto trailing = input_.finish();
@@ -178,6 +204,20 @@ private:
       return std::unexpected(error(LuaTransportErrorCode::read_failed,
                                    std::string{"read failed: "} + std::strerror(errno)));
     }
+    return {};
+  }
+
+  [[nodiscard]] Result process_buffered_lines(std::size_t &input_budget) {
+    while (input_budget > 0 && !buffered_lines_.empty() && !output_.wants_write()) {
+      auto line = std::move(buffered_lines_.front());
+      buffered_lines_.pop_front();
+      --input_budget;
+      auto handled = handle_line(line);
+      if (!handled) {
+        return handled;
+      }
+    }
+    return {};
   }
 
   [[nodiscard]] Result handle_line(const std::string &line) {
@@ -229,6 +269,7 @@ private:
   int output_fd_;
   RecordCallback callback_;
   LineBuffer input_;
+  std::deque<std::string> buffered_lines_;
   WriteQueue output_;
 };
 
@@ -259,8 +300,16 @@ LuaTransport::Result LuaTransport::send(nlohmann::json record) {
   return impl_->send(std::move(record));
 }
 
-LuaTransport::Result LuaTransport::poll_once(int timeout_ms) {
-  return impl_->poll_once(timeout_ms);
+std::array<pollfd, 2> LuaTransport::poll_descriptors(bool read_enabled) const {
+  return impl_->poll_descriptors(read_enabled);
+}
+
+LuaTransport::Result LuaTransport::advance(std::span<const pollfd> descriptors) {
+  return impl_->advance(descriptors);
+}
+
+LuaTransport::Result LuaTransport::poll_once(int timeout_ms, bool read_enabled) {
+  return impl_->poll_once(timeout_ms, read_enabled);
 }
 
 LuaTransport::Result LuaTransport::run() { return impl_->run(); }
@@ -272,5 +321,7 @@ std::size_t LuaTransport::pending_output_messages() const noexcept {
 std::size_t LuaTransport::pending_output_bytes() const noexcept {
   return impl_->pending_output_bytes();
 }
+
+bool LuaTransport::has_buffered_input() const noexcept { return impl_->has_buffered_input(); }
 
 } // namespace gisland

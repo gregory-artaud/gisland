@@ -13,10 +13,9 @@ include(FetchContent)
 include(GNUInstallDirs)
 include(cmake/ProjectOptions.cmake)
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
 option(GISLAND_BUILD_WAYLAND_PROTOTYPE "Build the isolated Wayland/EGL/rlgl prototype" OFF)
+set(GISLAND_LGI_ROOT "" CACHE PATH "Optional root containing a Lua 5.4-compatible lgi")
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
@@ -48,6 +47,7 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -251,9 +251,85 @@ pkg_check_modules(PANGOFT2 REQUIRED IMPORTED_TARGET pangoft2)
 pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 pkg_check_modules(LUA54 REQUIRED IMPORTED_TARGET lua5.4>=5.4)
+pkg_check_modules(GLIB2 REQUIRED IMPORTED_TARGET glib-2.0)
+pkg_check_modules(GIO2 REQUIRED IMPORTED_TARGET gio-2.0)
 if(LUA54_VERSION VERSION_LESS 5.4 OR NOT LUA54_VERSION VERSION_LESS 5.5)
   message(FATAL_ERROR "gisland requires Lua >= 5.4 and < 5.5; found ${LUA54_VERSION}")
 endif()
+
+find_program(LUA54_EXECUTABLE NAMES lua5.4 lua)
+if(NOT LUA54_EXECUTABLE)
+  message(FATAL_ERROR "gisland requires a Lua 5.4 interpreter (lua5.4 or lua)")
+endif()
+execute_process(
+  COMMAND "${LUA54_EXECUTABLE}" -e "io.write(_VERSION)"
+  RESULT_VARIABLE LUA54_VERSION_RESULT
+  OUTPUT_VARIABLE LUA54_INTERPRETER_VERSION
+  ERROR_VARIABLE LUA54_VERSION_ERROR
+)
+if(NOT LUA54_VERSION_RESULT EQUAL 0 OR NOT LUA54_INTERPRETER_VERSION STREQUAL "Lua 5.4")
+  message(
+    FATAL_ERROR
+      "gisland requires a Lua 5.4 interpreter; ${LUA54_EXECUTABLE} reported "
+      "'${LUA54_INTERPRETER_VERSION}' (${LUA54_VERSION_ERROR})"
+  )
+endif()
+
+set(GISLAND_LGI_PREFIX "")
+if(GISLAND_LGI_ROOT)
+  if(EXISTS "${GISLAND_LGI_ROOT}/usr/share/lua/5.4/lgi.lua")
+    set(GISLAND_LGI_PREFIX "${GISLAND_LGI_ROOT}/usr")
+  elseif(EXISTS "${GISLAND_LGI_ROOT}/share/lua/5.4/lgi.lua")
+    set(GISLAND_LGI_PREFIX "${GISLAND_LGI_ROOT}")
+  else()
+    message(
+      FATAL_ERROR
+        "GISLAND_LGI_ROOT does not contain share/lua/5.4/lgi.lua: ${GISLAND_LGI_ROOT}"
+    )
+  endif()
+  set(
+    GISLAND_LGI_LUA_PATH
+    "${GISLAND_LGI_PREFIX}/share/lua/5.4/?.lua;${GISLAND_LGI_PREFIX}/share/lua/5.4/?/init.lua"
+  )
+  set(
+    GISLAND_LGI_NATIVE_PATHS
+    "${GISLAND_LGI_PREFIX}/lib/lua/5.4/?.so"
+    "${GISLAND_LGI_PREFIX}/lib64/lua/5.4/?.so"
+  )
+  file(GLOB GISLAND_LGI_MULTIARCH_LIBDIRS LIST_DIRECTORIES true
+       "${GISLAND_LGI_PREFIX}/lib/*")
+  foreach(GISLAND_LGI_LIBDIR IN LISTS GISLAND_LGI_MULTIARCH_LIBDIRS)
+    if(IS_DIRECTORY "${GISLAND_LGI_LIBDIR}/lua/5.4")
+      list(APPEND GISLAND_LGI_NATIVE_PATHS "${GISLAND_LGI_LIBDIR}/lua/5.4/?.so")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES GISLAND_LGI_NATIVE_PATHS)
+  list(JOIN GISLAND_LGI_NATIVE_PATHS ";" GISLAND_LGI_LUA_CPATH)
+  execute_process(
+    COMMAND
+      ${CMAKE_COMMAND} -E env "GISLAND_LGI_TEST_PREFIX=${GISLAND_LGI_PREFIX}"
+      "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+      "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${LUA54_EXECUTABLE}"
+      "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    RESULT_VARIABLE GISLAND_LGI_CHECK_RESULT
+    ERROR_VARIABLE GISLAND_LGI_CHECK_ERROR
+  )
+else()
+  execute_process(
+    COMMAND "${LUA54_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    RESULT_VARIABLE GISLAND_LGI_CHECK_RESULT
+    ERROR_VARIABLE GISLAND_LGI_CHECK_ERROR
+  )
+endif()
+if(NOT GISLAND_LGI_CHECK_RESULT EQUAL 0)
+  message(
+    FATAL_ERROR
+      "gisland requires Lua 5.4-compatible lgi with GLib, Gio, GioUnix 2.0, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0; install lgi and the required typelibs for "
+      "${LUA54_EXECUTABLE} or set GISLAND_LGI_ROOT to a staged installation. "
+      "Probe error: ${GISLAND_LGI_CHECK_ERROR}"
+  )
+endif()
+message(STATUS "Found a Lua 5.4-compatible lgi with GLib, Gio, GioUnix 2.0, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0")
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -317,16 +393,6 @@ target_include_directories(
 target_link_libraries(gisland_scene_layout PUBLIC gisland::rich_text gisland::theme)
 gisland_set_project_options(gisland_scene_layout)
 
-add_library(gisland_clock_calendar_model STATIC src/clock_calendar.cpp)
-add_library(gisland::clock_calendar_model ALIAS gisland_clock_calendar_model)
-target_compile_features(gisland_clock_calendar_model PUBLIC cxx_std_23)
-target_include_directories(
-  gisland_clock_calendar_model
-  PUBLIC
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-)
-gisland_set_project_options(gisland_clock_calendar_model)
-
 add_library(
   gisland_rlgl_renderer_model STATIC
   src/rlgl_font_book.cpp
@@ -367,7 +433,7 @@ target_link_libraries(
 set_source_files_properties(src/rlgl_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 gisland_set_project_options(gisland_rlgl_gpu)
 
-add_library(gisland_io STATIC src/line_buffer.cpp src/write_queue.cpp)
+add_library(gisland_io STATIC src/line_buffer.cpp src/poll.cpp src/write_queue.cpp)
 add_library(gisland::io ALIAS gisland_io)
 target_compile_features(gisland_io PUBLIC cxx_std_23)
 target_include_directories(
@@ -376,6 +442,17 @@ target_include_directories(
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 gisland_set_project_options(gisland_io)
+
+add_library(gisland_glib_runtime STATIC src/glib_main_context.cpp)
+add_library(gisland::glib_runtime ALIAS gisland_glib_runtime)
+target_compile_features(gisland_glib_runtime PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_glib_runtime
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+target_link_libraries(gisland_glib_runtime PRIVATE PkgConfig::GLIB2 PkgConfig::GIO2)
+gisland_set_project_options(gisland_glib_runtime)
 
 add_library(
   gisland_lua_runtime STATIC
@@ -398,18 +475,9 @@ target_link_libraries(
 )
 gisland_set_project_options(gisland_lua_runtime)
 
-add_executable(gisland_clock_calendar src/clock_calendar_main.cpp)
-set_target_properties(gisland_clock_calendar PROPERTIES OUTPUT_NAME gisland-clock-calendar)
-target_compile_features(gisland_clock_calendar PRIVATE cxx_std_23)
-target_link_libraries(
-  gisland_clock_calendar
-  PRIVATE gisland::clock_calendar_model nlohmann_json::nlohmann_json
-)
-gisland_set_project_options(gisland_clock_calendar)
-
 add_executable(gisland-lua-host src/lua_host_main.cpp)
 target_compile_features(gisland-lua-host PRIVATE cxx_std_23)
-target_link_libraries(gisland-lua-host PRIVATE gisland::lua_runtime)
+target_link_libraries(gisland-lua-host PRIVATE gisland::glib_runtime gisland::lua_runtime)
 gisland_set_project_options(gisland-lua-host)
 
 add_library(
@@ -510,62 +578,13 @@ configure_file(
   "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
   @ONLY
 )
-set(GISLAND_NOTIFICATION_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/notifications")
-configure_file(
-  packaging/gisland-notifications.in
-  "${PROJECT_BINARY_DIR}/gisland-notifications"
-  @ONLY
-)
-configure_file(
-  packaging/gisland-notification-history.in
-  "${PROJECT_BINARY_DIR}/gisland-notification-history"
-  @ONLY
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-notifications"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-notification-history"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
-set(GISLAND_BATTERY_PYTHON_ROOT "${PROJECT_SOURCE_DIR}/modules/battery")
-configure_file(
-  packaging/gisland-battery.in
-  "${PROJECT_BINARY_DIR}/gisland-battery"
-  @ONLY
-)
-file(
-  CHMOD "${PROJECT_BINARY_DIR}/gisland-battery"
-  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
-set(
-  GISLAND_NOTIFICATION_PYTHON_ROOT
-  "${CMAKE_INSTALL_FULL_DATADIR}/gisland/notifications"
-)
-configure_file(
-  packaging/gisland-notifications.in
-  "${PROJECT_BINARY_DIR}/install/gisland-notifications"
-  @ONLY
-)
-configure_file(
-  packaging/gisland-notification-history.in
-  "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
-  @ONLY
-)
-set(GISLAND_BATTERY_PYTHON_ROOT "${CMAKE_INSTALL_FULL_DATADIR}/gisland/battery")
-configure_file(
-  packaging/gisland-battery.in
-  "${PROJECT_BINARY_DIR}/install/gisland-battery"
-  @ONLY
-)
 configure_file(
   packaging/gisland.service.in
   "${PROJECT_BINARY_DIR}/install/gisland.service"
   @ONLY
 )
 install(
-  TARGETS gisland gislandctl gisland-lua-host gisland_clock_calendar
+  TARGETS gisland gislandctl gisland-lua-host
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(FILES assets/config.toml DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}")
@@ -576,13 +595,31 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/clock-calendar"
 )
 install(
+  FILES
+    assets/modules/clock-calendar/config.toml
+    assets/modules/clock-calendar/view.toml
+    assets/modules/clock-calendar/clock_calendar.lua
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/clock-calendar"
+)
+install(
   FILES "${PROJECT_BINARY_DIR}/install/notifications.module.toml"
   RENAME module.toml
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
 )
 install(
+  FILES assets/modules/notifications/notifications.lua
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/notifications"
+)
+install(
   FILES "${PROJECT_BINARY_DIR}/install/battery.module.toml"
   RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/battery"
+)
+install(
+  FILES
+    assets/modules/battery/config.toml
+    assets/modules/battery/view.toml
+    assets/modules/battery/battery.lua
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/battery"
 )
 install(
@@ -610,60 +647,77 @@ install(
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/lua-example"
 )
 install(
-  PROGRAMS
-    "${PROJECT_BINARY_DIR}/install/gisland-notifications"
-    "${PROJECT_BINARY_DIR}/install/gisland-notification-history"
-    "${PROJECT_BINARY_DIR}/install/gisland-battery"
-  DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)
-install(
-  DIRECTORY modules/notifications/gisland_notifications
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/notifications"
-  PATTERN "__pycache__" EXCLUDE
-)
-install(
-  DIRECTORY modules/battery/gisland_battery
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/gisland/battery"
-  PATTERN "__pycache__" EXCLUDE
-)
-install(
   FILES "${PROJECT_BINARY_DIR}/install/gisland.service"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/systemd/user"
 )
 
 if(BUILD_TESTING)
-  find_program(LUA54_EXECUTABLE NAMES lua5.4 lua)
-  if(NOT LUA54_EXECUTABLE)
-    message(FATAL_ERROR "gisland tests require a Lua 5.4 interpreter (lua5.4 or lua)")
-  endif()
-  execute_process(
-    COMMAND "${LUA54_EXECUTABLE}" -e "io.write(_VERSION)"
-    RESULT_VARIABLE LUA54_VERSION_RESULT
-    OUTPUT_VARIABLE LUA54_INTERPRETER_VERSION
-    ERROR_VARIABLE LUA54_VERSION_ERROR
-  )
-  if(NOT LUA54_VERSION_RESULT EQUAL 0 OR NOT LUA54_INTERPRETER_VERSION STREQUAL "Lua 5.4")
-    message(
-      FATAL_ERROR
-        "gisland tests require a Lua 5.4 interpreter; ${LUA54_EXECUTABLE} reported "
-        "'${LUA54_INTERPRETER_VERSION}' (${LUA54_VERSION_ERROR})"
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME lgi_runtime_check
+      COMMAND
+        ${CMAKE_COMMAND} -E env "GISLAND_LGI_TEST_PREFIX=${GISLAND_LGI_PREFIX}"
+        "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${LUA54_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    )
+    add_test(
+      NAME lgi_staged_layouts
+      COMMAND
+        ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DBINARY_DIR=${PROJECT_BINARY_DIR}/lgi-layout-test
+        -DSOURCE_PREFIX=${GISLAND_LGI_PREFIX}
+        -DRAYLIB_SOURCE_DIR=${raylib_SOURCE_DIR}
+        -DNLOHMANN_JSON_SOURCE_DIR=${nlohmann_json_SOURCE_DIR}
+        -DTOMLPLUSPLUS_SOURCE_DIR=${tomlplusplus_SOURCE_DIR} -P
+        ${PROJECT_SOURCE_DIR}/tests/lgi_layout_test.cmake
+    )
+  else()
+    add_test(
+      NAME lgi_runtime_check
+      COMMAND "${LUA54_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
     )
   endif()
-  add_test(
-    NAME notifications_python
-    COMMAND
-      dbus-run-session -- env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/notifications"
-      "${Python3_EXECUTABLE}" -m unittest discover -s
-      "${PROJECT_SOURCE_DIR}/tests/notifications" -p "test_*.py" -v
-  )
-  add_test(
-    NAME battery_python
-    COMMAND
-      env "PYTHONPATH=${PROJECT_SOURCE_DIR}/modules/battery"
-      "GISLAND_BATTERY_PATH=${PROJECT_BINARY_DIR}/gisland-battery"
-      "${Python3_EXECUTABLE}" -m unittest discover -s
-      "${PROJECT_SOURCE_DIR}/tests/battery" -p "test_*.py" -v
-  )
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME notifications_contract_lua
+      COMMAND
+        dbus-run-session -- env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/notifications/notifications_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/notifications/notifications.lua\"]"
+        --protocol-minor 8
+    )
+  else()
+    add_test(
+      NAME notifications_contract_lua
+      COMMAND
+        dbus-run-session -- "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/notifications/notifications_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/notifications/notifications.lua\"]"
+        --protocol-minor 8
+    )
+  endif()
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME battery_contract_lua
+      COMMAND
+        dbus-run-session -- env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/battery/battery_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/battery/battery.lua\"]"
+        --protocol-minor 8
+    )
+  else()
+    add_test(
+      NAME battery_contract_lua
+      COMMAND
+        dbus-run-session -- "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/battery/battery_contract.py" --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/battery/battery.lua\"]"
+        --protocol-minor 8
+    )
+  endif()
   add_test(
     NAME audio_command
     COMMAND
@@ -680,6 +734,43 @@ if(BUILD_TESTING)
       --init
       "{\"type\":\"init\",\"protocol\":{\"minimum\":{\"major\":1,\"minor\":8},\"maximum\":{\"major\":1,\"minor\":8}},\"instance_id\":\"audio-contract\",\"capabilities\":[\"independent-views\",\"compact-view-styles\",\"icon-roles\",\"progress-transitions\"],\"configuration\":{},\"locale\":\"C\",\"timezone\":\"UTC\"}"
   )
+  if(GISLAND_LGI_ROOT)
+    add_test(
+      NAME clock_calendar_contract
+      COMMAND
+        ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_contract.py"
+        --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua\"]"
+    )
+    add_test(
+      NAME clock_calendar_lua_unit
+      COMMAND
+        ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "GISLAND_CLOCK_CALENDAR_HELPER_TEST=1"
+        "${LUA54_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_helpers_test.lua"
+        "${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua"
+    )
+  else()
+    add_test(
+      NAME clock_calendar_contract
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_contract.py"
+        --module-command
+        "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua\"]"
+    )
+    add_test(
+      NAME clock_calendar_lua_unit
+      COMMAND
+        ${CMAKE_COMMAND} -E env "GISLAND_CLOCK_CALENDAR_HELPER_TEST=1"
+        "${LUA54_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/clock_calendar/clock_calendar_helpers_test.lua"
+        "${PROJECT_SOURCE_DIR}/assets/modules/clock-calendar/clock_calendar.lua"
+    )
+  endif()
   add_test(
     NAME install_local_script
     COMMAND bash ${PROJECT_SOURCE_DIR}/tests/install_local_script_test.sh ${PROJECT_SOURCE_DIR}
@@ -731,8 +822,6 @@ if(BUILD_TESTING)
     gisland_tests
     tests/application_config_test.cpp
     tests/bootstrap_test.cpp
-    tests/clock_calendar_test.cpp
-    tests/clock_calendar_process_test.cpp
     tests/config_test.cpp
     tests/control_client_test.cpp
     tests/control_dispatcher_test.cpp
@@ -765,7 +854,6 @@ if(BUILD_TESTING)
     gisland_tests
     PRIVATE
       gisland::app
-      gisland::clock_calendar_model
       Catch2::Catch2WithMain
       X11::X11
       X11::Xext
@@ -775,10 +863,9 @@ if(BUILD_TESTING)
     PRIVATE
       GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
       GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
-      GISLAND_CLOCK_CALENDAR_PATH="${PROJECT_BINARY_DIR}/gisland-clock-calendar"
       GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
   )
-  add_dependencies(gisland_tests fake_module gisland-lua-host gisland_clock_calendar gisland_assets)
+  add_dependencies(gisland_tests fake_module gisland-lua-host gisland_assets)
   gisland_set_project_options(gisland_tests)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
@@ -813,7 +900,11 @@ if(BUILD_TESTING)
   target_compile_features(gisland_lua_host_tests PRIVATE cxx_std_23)
   target_link_libraries(
     gisland_lua_host_tests
-    PRIVATE gisland::lua_runtime Catch2::Catch2WithMain
+    PRIVATE
+      gisland::glib_runtime
+      gisland::lua_runtime
+      Catch2::Catch2WithMain
+      PkgConfig::GLIB2
   )
   target_compile_definitions(
     gisland_lua_host_tests
@@ -821,6 +912,12 @@ if(BUILD_TESTING)
       GISLAND_LUA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/lua"
       GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
   )
+  if(GISLAND_LGI_PREFIX)
+    target_compile_definitions(
+      gisland_lua_host_tests
+      PRIVATE GISLAND_TEST_LGI_PREFIX="${GISLAND_LGI_PREFIX}"
+    )
+  endif()
   add_dependencies(gisland_lua_host_tests gisland-lua-host)
   gisland_set_project_options(gisland_lua_host_tests)
   catch_discover_tests(
@@ -900,21 +997,25 @@ if(BUILD_TESTING)
       PRIVATE
         GISLAND_BINARY_PATH="$<TARGET_FILE:gisland>"
         GISLANDCTL_BINARY_PATH="$<TARGET_FILE:gislandctl>"
-        GISLAND_CLOCK_CALENDAR_PATH="$<TARGET_FILE:gisland_clock_calendar>"
         GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
         GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
         GISLAND_AUDIO_LUA_PATH="${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua"
         GISLAND_AUDIO_FAKE_PACTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-pactl"
         GISLAND_AUDIO_FAKE_GISLANDCTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-gislandctl"
-        GISLAND_NOTIFICATION_HISTORY_PATH="${PROJECT_BINARY_DIR}/gisland-notification-history"
+        GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
     )
+    if(GISLAND_LGI_PREFIX)
+      target_compile_definitions(
+        gisland_application_x11_smoke_tests
+        PRIVATE GISLAND_TEST_LGI_PREFIX="${GISLAND_LGI_PREFIX}"
+      )
+    endif()
     gisland_set_project_options(gisland_application_x11_smoke_tests)
     add_dependencies(
       gisland_application_x11_smoke_tests
       gisland
       gislandctl
       gisland-lua-host
-      gisland_clock_calendar
       fake_module
     )
     catch_discover_tests(
@@ -1001,7 +1102,6 @@ set(
   GISLAND_FORMAT_SOURCES
   include/gisland/application.hpp
   include/gisland/bootstrap.hpp
-  include/gisland/clock_calendar.hpp
   include/gisland/content_fingerprint.hpp
   include/gisland/config.hpp
   include/gisland/control.hpp
@@ -1010,6 +1110,7 @@ set(
   include/gisland/context.hpp
   include/gisland/display.hpp
   include/gisland/file_watcher.hpp
+  include/gisland/glib_main_context.hpp
   include/gisland/interaction.hpp
   include/gisland/ipc_server.hpp
   include/gisland/island.hpp
@@ -1023,6 +1124,7 @@ set(
   include/gisland/module_manifest.hpp
   include/gisland/module_supervisor.hpp
   include/gisland/platform_host.hpp
+  include/gisland/poll.hpp
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
@@ -1049,8 +1151,6 @@ set(
   prototype/wayland/xdg_popup_interface.cpp
   src/application.cpp
   src/bootstrap.cpp
-  src/clock_calendar.cpp
-  src/clock_calendar_main.cpp
   src/config.cpp
   src/control.cpp
   src/control_client.cpp
@@ -1059,6 +1159,7 @@ set(
   src/context.cpp
   src/display.cpp
   src/file_watcher.cpp
+  src/glib_main_context.cpp
   src/interaction.cpp
   src/ipc_server.cpp
   src/island.cpp
@@ -1073,6 +1174,7 @@ set(
   src/module_lifecycle.cpp
   src/module_manifest.cpp
   src/module_supervisor.cpp
+  src/poll.cpp
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp
@@ -1098,8 +1200,6 @@ set(
   tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
   tests/bootstrap_test.cpp
-  tests/clock_calendar_test.cpp
-  tests/clock_calendar_process_test.cpp
   tests/config_test.cpp
   tests/control_client_test.cpp
   tests/control_dispatcher_test.cpp
