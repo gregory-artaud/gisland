@@ -131,6 +131,7 @@ local week_start = "monday"
 local displayed_year
 local displayed_month
 local follows_current_month = true
+local content_transitions = false
 local test_now_file = os.getenv("GISLAND_CLOCK_CALENDAR_TEST_NOW_FILE")
 
 local function current_time()
@@ -160,8 +161,12 @@ local function snapshot()
   return calendar.snapshot(GLib, zone, now, displayed_year, displayed_month, week_start)
 end
 
-local function publish()
-  gisland.data(snapshot())
+local function publish(transitions)
+  if transitions == nil then
+    gisland.data(snapshot())
+  else
+    gisland.data(snapshot(), transitions)
+  end
 end
 
 local function schedule_next_minute()
@@ -182,7 +187,10 @@ local function navigate(delta)
   displayed_year = year
   displayed_month = month
   follows_current_month = false
-  gisland.defer(publish)
+  local transition = delta > 0 and "slide-left" or "slide-right"
+  gisland.defer(function()
+    publish(content_transitions and { expanded = transition } or nil)
+  end)
   return true
 end
 
@@ -204,6 +212,11 @@ return gisland.module {
     end
     local locale = config.locale or metadata.locale
     local timezone_name = config.timezone or metadata.timezone
+    for _, capability in ipairs(metadata.capabilities) do
+      if capability == "content-transitions" then
+        content_transitions = true
+      end
+    end
     week_start = config.week_start or "monday"
     if locale == "" then
       error("locale must not be empty")

@@ -362,8 +362,9 @@ return gisland.module {
 ```
 
 All fields and callbacks are optional. `init(config, metadata)` runs once after protocol
-initialization; metadata contains the core-supplied instance ID, locale, and timezone. `ready` is
-emitted only if it succeeds. `update()` runs at the bounded `every` interval and emits one
+initialization; metadata contains the core-supplied instance ID, locale, timezone, selected integer
+`protocol_minor`, and negotiated `capabilities` array. `ready` is emitted only if it succeeds.
+`update()` runs at the bounded `every` interval and emits one
 `data` record when it returns a non-nil JSON-compatible value. `visibility(state)` receives the
 current visibility string. `shutdown()` runs during graceful shutdown. Callbacks run serially.
 
@@ -412,7 +413,7 @@ timer, visibility, shutdown, transport, queue, and value-conversion errors termi
 process. gisland removes its contexts and applies the manifest's restart policy and backoff. Scene
 records rejected by the core follow the normal last-valid-context behavior.
 
-The shipped clock-calendar is a self-contained protocol-1.8 Lua package hosted by
+The shipped clock-calendar is a self-contained protocol-1.8..1.9 Lua package hosted by
 `gisland-lua-host`. It publishes localized `HH:MM` time and a six-week monthly calendar, updates at
 minute boundaries, and handles previous-month, next-month, and today actions. Locale and timezone
 come from core initialization by default without changing process `TZ`. Module options can override

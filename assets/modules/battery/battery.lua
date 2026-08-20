@@ -321,13 +321,18 @@ local function publish_alert(kind, snapshot)
       compact = compact_view(snapshot),
       expanded = expanded_view(snapshot, persistent),
     },
-    presentation = { reveal = "expanded" },
   }
   if persistent then
+    record.presentation = { reveal = "expanded" }
     active_alert = context_id
   else
     record.expires_in_ms = options.preview_duration_ms
-    record.presentation.duration_ms = options.preview_duration_ms
+    if options.preview_duration_ms > 0 then
+      record.presentation = {
+        reveal = "expanded",
+        duration_ms = options.preview_duration_ms,
+      }
+    end
     active_alert = nil
   end
   gisland.publish(record)

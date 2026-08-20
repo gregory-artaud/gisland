@@ -119,7 +119,7 @@ string(FIND "${manifest}" "entry = \"clock_calendar.lua\"" entry_position)
 string(FIND "${manifest}" "config = \"config.toml\"" config_position)
 string(FIND "${manifest}" "view = \"view.toml\"" view_position)
 string(FIND "${manifest}" "minimum_minor = 8" minimum_position)
-string(FIND "${manifest}" "maximum_minor = 8" maximum_position)
+string(FIND "${manifest}" "maximum_minor = 9" maximum_position)
 string(FIND "${manifest}" "[defaults]" inline_defaults_position)
 if(command_position EQUAL -1 OR entry_position EQUAL -1 OR config_position EQUAL -1 OR
    view_position EQUAL -1 OR minimum_position EQUAL -1 OR maximum_position EQUAL -1 OR

@@ -180,13 +180,16 @@ private:
   };
 }
 
-[[nodiscard]] nlohmann::json init_record(nlohmann::json configuration = {{"answer", 42}}) {
+[[nodiscard]] nlohmann::json init_record(nlohmann::json configuration = {{"answer", 42}},
+                                         int minimum_minor = 0, int maximum_minor = 8,
+                                         nlohmann::json capabilities = {"data-snapshots"}) {
   return {
       {"type", "init"},
       {"protocol",
-       {{"minimum", {{"major", 1}, {"minor", 0}}}, {"maximum", {{"major", 1}, {"minor", 8}}}}},
+       {{"minimum", {{"major", 1}, {"minor", minimum_minor}}},
+        {"maximum", {{"major", 1}, {"minor", maximum_minor}}}}},
       {"instance_id", "test"},
-      {"capabilities", {"data-snapshots"}},
+      {"capabilities", std::move(capabilities)},
       {"configuration", std::move(configuration)},
       {"locale", "en_US.UTF-8"},
       {"timezone", "UTC"},
@@ -644,6 +647,31 @@ TEST_CASE("lua_host_lifecycle initializes before ready with protocol 1.8", "[lua
   CHECK((*host)->initialized());
 }
 
+TEST_CASE("lua_host_lifecycle selects the highest supported protocol overlap",
+          "[lua_host_lifecycle]") {
+  const auto entry = std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "lifecycle.lua";
+
+  for (const auto &[minimum, maximum, selected] : std::array{
+           std::array{0, 9, 9}, std::array{8, 8, 8}, std::array{9, 9, 9}, std::array{8, 12, 9}}) {
+    INFO(minimum << ".." << maximum);
+    auto host = gisland::LuaHost::load(entry.string());
+    REQUIRE(host.has_value());
+    Records records;
+    auto record = init_record(
+        {{"answer", 42}}, minimum, maximum,
+        {"content-transitions", "indicator-effects", "progress-transitions", "data-snapshots"});
+
+    REQUIRE((*host)->handle(record, collect_into(records), {}).has_value());
+
+    REQUIRE(records.size() == 1);
+    CHECK(records[0].at("protocol_minor") == selected);
+    const auto expected = selected == 9 ? nlohmann::json{"data-snapshots", "progress-transitions",
+                                                         "indicator-effects", "content-transitions"}
+                                        : nlohmann::json{"data-snapshots", "progress-transitions"};
+    CHECK(records[0].at("capabilities") == expected);
+  }
+}
+
 TEST_CASE("lua_host_lifecycle rejects invalid records", "[lua_host_lifecycle]") {
   const auto entry = std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "lifecycle.lua";
 
@@ -674,6 +702,17 @@ TEST_CASE("lua_host_lifecycle rejects invalid records", "[lua_host_lifecycle]") 
     const auto result = (*host)->handle(record, collect_into(records), {});
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == gisland::LuaHostErrorCode::protocol_error);
+    CHECK(result.error().message == "core must offer protocol 1.8");
+  }
+  SECTION("minimum above protocol 1.9 has no overlap") {
+    auto host = gisland::LuaHost::load(entry.string());
+    REQUIRE(host.has_value());
+    Records records;
+    auto record = init_record(nlohmann::json::object(), 10, 12);
+    const auto result = (*host)->handle(record, collect_into(records), {});
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == gisland::LuaHostErrorCode::protocol_error);
+    CHECK(result.error().message == "core must offer protocol 1.8");
   }
   SECTION("capabilities used by later emissions are not required at init") {
     auto host = gisland::LuaHost::load(entry.string());
@@ -704,11 +743,11 @@ TEST_CASE("lua_host_lifecycle advertises the implemented offered scene capabilit
       (std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "lifecycle.lua").string());
   REQUIRE(host.has_value());
   Records records;
-  auto record = init_record();
+  auto record = init_record({{"answer", 42}}, 8, 9);
   record["capabilities"] = {
-      "progress-transitions", "not-implemented",  "data-snapshots", "icon-roles",
-      "compact-view-styles",  "status-indicator", "ring-progress",  "independent-views",
-      "rich-content",         "context-images",
+      "content-transitions", "progress-transitions", "not-implemented",     "data-snapshots",
+      "indicator-effects",   "icon-roles",           "compact-view-styles", "status-indicator",
+      "ring-progress",       "independent-views",    "rich-content",        "context-images",
   };
 
   REQUIRE((*host)->handle(record, collect_into(records), {}).has_value());
@@ -717,10 +756,28 @@ TEST_CASE("lua_host_lifecycle advertises the implemented offered scene capabilit
   CHECK(records[0].at("capabilities") ==
         nlohmann::json{"data-snapshots", "context-images", "rich-content", "independent-views",
                        "ring-progress", "status-indicator", "compact-view-styles", "icon-roles",
-                       "progress-transitions"});
+                       "progress-transitions", "indicator-effects", "content-transitions"});
 }
 
-TEST_CASE("lua_host_lifecycle passes core locale and timezone to init metadata",
+TEST_CASE("lua_host_lifecycle omits protocol 1.9 scene capabilities on protocol 1.8",
+          "[lua_host_lifecycle]") {
+  auto host = gisland::LuaHost::load(
+      (std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "lifecycle.lua").string());
+  REQUIRE(host.has_value());
+  Records records;
+
+  REQUIRE((*host)
+              ->handle(
+                  init_record({{"answer", 42}}, 8, 8,
+                              {"progress-transitions", "indicator-effects", "content-transitions"}),
+                  collect_into(records), {})
+              .has_value());
+
+  REQUIRE(records.size() == 1);
+  CHECK(records[0].at("capabilities") == nlohmann::json{"progress-transitions"});
+}
+
+TEST_CASE("lua_host_lifecycle passes negotiated protocol and capabilities to init metadata",
           "[lua_host_lifecycle]") {
   TemporaryDirectory temporary;
   const auto entry = temporary.path() / "metadata.lua";
@@ -731,6 +788,8 @@ TEST_CASE("lua_host_lifecycle passes core locale and timezone to init metadata",
       instance_id = metadata.instance_id,
       locale = metadata.locale,
       timezone = metadata.timezone,
+      protocol_minor = metadata.protocol_minor,
+      capabilities = metadata.capabilities,
     }
   end,
 })lua");
@@ -738,19 +797,82 @@ TEST_CASE("lua_host_lifecycle passes core locale and timezone to init metadata",
   REQUIRE(host.has_value());
   Records records;
 
-  REQUIRE((*host)->handle(init_record(), collect_into(records), {}).has_value());
+  REQUIRE((*host)
+              ->handle(init_record({{"answer", 42}}, 0, 9,
+                                   {"content-transitions", "indicator-effects", "not-implemented",
+                                    "data-snapshots"}),
+                       collect_into(records), {})
+              .has_value());
 
   REQUIRE(records.size() == 2);
-  CHECK(records[0] == nlohmann::json{{"type", "ready"},
-                                     {"protocol_major", 1},
-                                     {"protocol_minor", 8},
-                                     {"capabilities", {"data-snapshots"}}});
-  CHECK(records[1] == nlohmann::json{{"type", "data"},
-                                     {"value",
-                                      {{"answer", 42},
-                                       {"instance_id", "test"},
-                                       {"locale", "en_US.UTF-8"},
-                                       {"timezone", "UTC"}}}});
+  CHECK(records[0] ==
+        nlohmann::json{
+            {"type", "ready"},
+            {"protocol_major", 1},
+            {"protocol_minor", 9},
+            {"capabilities", {"data-snapshots", "indicator-effects", "content-transitions"}}});
+  const nlohmann::json expected_value = {
+      {"answer", 42},
+      {"instance_id", "test"},
+      {"locale", "en_US.UTF-8"},
+      {"timezone", "UTC"},
+      {"protocol_minor", 9},
+      {"capabilities",
+       nlohmann::json::array({"data-snapshots", "indicator-effects", "content-transitions"})},
+  };
+  CHECK(records[1] == nlohmann::json{{"type", "data"}, {"value", expected_value}});
+}
+
+TEST_CASE("lua host data transitions require strict negotiated metadata",
+          "[lua_host_lifecycle][lua_host_data]") {
+  auto host = gisland::LuaHost::load("data-transitions.lua", R"lua(return gisland.module {
+    init = function(_, metadata)
+      gisland.data { plain = true }
+      gisland.data({ animated = true }, { compact = "crossfade", expanded = "slide-left" })
+      assert(not pcall(gisland.data, { invalid = true }, nil))
+      assert(not pcall(gisland.data, { invalid = true }, {}))
+      assert(not pcall(gisland.data, { invalid = true }, gisland.array()))
+      assert(not pcall(gisland.data, { invalid = true }, { "crossfade" }))
+      assert(not pcall(gisland.data, { invalid = true }, { other = "crossfade" }))
+      assert(not pcall(gisland.data, { invalid = true }, { expanded = "zoom" }))
+      assert(not pcall(gisland.data, { invalid = true }, { compact = 1 }))
+      assert(metadata.protocol_minor == 9)
+    end,
+  })lua");
+  REQUIRE(host.has_value());
+  Records records;
+
+  REQUIRE((*host)
+              ->handle(init_record(nlohmann::json::object(), 8, 9,
+                                   {"data-snapshots", "content-transitions"}),
+                       collect_into(records), {})
+              .has_value());
+
+  REQUIRE(records.size() == 3);
+  CHECK(records[1] == nlohmann::json{{"type", "data"}, {"value", {{"plain", true}}}});
+  CHECK(records[2] ==
+        nlohmann::json{{"type", "data"},
+                       {"value", {{"animated", true}}},
+                       {"transitions", {{"compact", "crossfade"}, {"expanded", "slide-left"}}}});
+}
+
+TEST_CASE("lua host rejects requested data transitions when they were not negotiated",
+          "[lua_host_lifecycle][lua_host_data]") {
+  auto host = gisland::LuaHost::load("unnegotiated-data-transition.lua", R"lua(
+    return gisland.module { init = function()
+      gisland.data({ animated = true }, { expanded = "slide-right" })
+    end }
+  )lua");
+  REQUIRE(host.has_value());
+  Records records;
+
+  const auto result =
+      (*host)->handle(init_record(nlohmann::json::object(), 8, 9), collect_into(records), {});
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().code == gisland::LuaHostErrorCode::callback_error);
+  CHECK(result.error().message.find("content-transitions") != std::string::npos);
+  CHECK(records.empty());
 }
 
 TEST_CASE("lua_host_lifecycle treats init callback failure as fatal", "[lua_host_lifecycle]") {
@@ -1212,6 +1334,66 @@ TEST_CASE("lua_host_action process echoes correlation and remains ready after ca
   int status = 0;
   REQUIRE(::waitpid(child, &status, 0) == child);
   CHECK(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("lua host process exposes negotiated 1.9 metadata and data transitions",
+          "[lua_host_lifecycle][lua_host_data][lua_host_process]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "protocol-1.9.lua";
+  write_file(entry, R"lua(return gisland.module {
+    init = function(_, metadata)
+      assert(metadata.protocol_minor == 9)
+      assert(#metadata.capabilities == 2)
+      assert(metadata.capabilities[1] == "data-snapshots")
+      assert(metadata.capabilities[2] == "content-transitions")
+      gisland.data { plain = true }
+      gisland.data({ animated = true }, { expanded = "slide-right" })
+    end,
+  })lua");
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(),
+            init_record(nlohmann::json::object(), 8, 9, {"content-transitions", "data-snapshots"})
+                    .dump() +
+                "\n");
+  std::string text;
+  for (int attempt = 0; attempt < 100 && std::ranges::count(text, '\n') < 3; ++attempt) {
+    text += read_available(output.read_fd());
+    ::usleep(1000);
+  }
+  std::vector<nlohmann::json> records;
+  std::size_t start = 0;
+  for (auto end = text.find('\n'); end != std::string::npos; end = text.find('\n', start)) {
+    records.push_back(nlohmann::json::parse(text.substr(start, end - start)));
+    start = end + 1;
+  }
+
+  REQUIRE(records.size() == 3);
+  CHECK(records[0] == nlohmann::json{{"type", "ready"},
+                                     {"protocol_major", 1},
+                                     {"protocol_minor", 9},
+                                     {"capabilities", {"data-snapshots", "content-transitions"}}});
+  CHECK(records[1] == nlohmann::json{{"type", "data"}, {"value", {{"plain", true}}}});
+  CHECK(records[2] == nlohmann::json{{"type", "data"},
+                                     {"value", {{"animated", true}}},
+                                     {"transitions", {{"expanded", "slide-right"}}}});
+
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
   CHECK(WEXITSTATUS(status) == 0);
 }
 

@@ -44,11 +44,12 @@ private:
   std::filesystem::path path_;
 };
 
-[[nodiscard]] Json init_record(Json capabilities = Json::array()) {
+[[nodiscard]] Json init_record(Json capabilities = Json::array(), int maximum_minor = 8) {
   return {
       {"type", "init"},
       {"protocol",
-       {{"minimum", {{"major", 1}, {"minor", 0}}}, {"maximum", {{"major", 1}, {"minor", 8}}}}},
+       {{"minimum", {{"major", 1}, {"minor", 0}}},
+        {"maximum", {{"major", 1}, {"minor", maximum_minor}}}}},
       {"instance_id", "scene-test"},
       {"capabilities", std::move(capabilities)},
       {"configuration", Json::object()},
@@ -65,12 +66,13 @@ private:
 }
 
 [[nodiscard]] std::pair<std::expected<gisland::LuaHostState, gisland::LuaHostError>, Records>
-run_script(std::string_view body, Json capabilities = Json::array()) {
+run_script(std::string_view body, Json capabilities = Json::array(), int maximum_minor = 8) {
   LuaScript script{body};
   auto host = gisland::LuaHost::load(script.path().string());
   REQUIRE(host.has_value());
   Records records;
-  auto result = (*host)->handle(init_record(std::move(capabilities)), collect_into(records), {});
+  auto result = (*host)->handle(init_record(std::move(capabilities), maximum_minor),
+                                collect_into(records), {});
   return {std::move(result), std::move(records)};
 }
 
@@ -193,8 +195,9 @@ TEST_CASE("lua scene constructors emit every protocol primitive exactly", "[lua_
       {R"(gisland.ui.progress { value = 0.5, label = "50 percent", state = "foreground",
           shape = "ring", transition_from = 0.4 })",
        R"({"type":"progress","value":0.5,"label":"50 percent","state":"foreground","shape":"ring","transition_from":0.4})"},
-      {R"(gisland.ui.indicator { state = "warning", accessible_label = "Needs attention" })",
-       R"({"type":"indicator","state":"warning","accessible_label":"Needs attention"})"},
+      {R"(gisland.ui.indicator { state = "warning", accessible_label = "Needs attention",
+          effects = { "shadow", "glow", "breathe" } })",
+       R"({"type":"indicator","state":"warning","accessible_label":"Needs attention","effects":["shadow","glow","breathe"]})"},
       {R"(gisland.ui.button { action_id = "accept", enabled = false,
           accessible_label = "Accept", content = gisland.ui.text { value = "OK", role = "button" }
         })",
@@ -234,6 +237,13 @@ gisland.ui.column { gap = "normal",
   CHECK(root.at("children").at(0).at("children").at(0).at("content").at("content").size() == 2);
 }
 
+TEST_CASE("lua indicator accepts an explicitly empty effects array", "[lua_scene]") {
+  const auto record =
+      emitted_record("gisland.ui.indicator { state = 'idle', accessible_label = 'Idle', "
+                     "effects = gisland.array() }");
+  CHECK(record.at("views").at("compact").at("effects") == Json::array());
+}
+
 TEST_CASE("lua scene API reports useful paths for malformed fields", "[lua_scene]") {
   const auto check_error = [](std::string_view expression, std::string_view diagnostic) {
     const auto [result, records] = run_script(publishing(expression));
@@ -260,6 +270,26 @@ TEST_CASE("lua scene API reports useful paths for malformed fields", "[lua_scene
     check_error("gisland.ui.rich_text { role = 'body', content = { { type = 'link' } } }",
                 "ui.rich_text/content/0/value");
   }
+  SECTION("indicator effects must be an array") {
+    check_error(
+        "gisland.ui.indicator { state = 'warning', accessible_label = 'Warning', effects = {} }",
+        "ui.indicator/effects");
+  }
+  SECTION("indicator effects must contain strings") {
+    check_error("gisland.ui.indicator { state = 'warning', accessible_label = 'Warning', "
+                "effects = { 1 } }",
+                "ui.indicator/effects/0");
+  }
+  SECTION("indicator effects must be unique") {
+    check_error("gisland.ui.indicator { state = 'warning', accessible_label = 'Warning', "
+                "effects = { 'glow', 'glow' } }",
+                "ui.indicator/effects/1");
+  }
+  SECTION("indicator effects must be supported") {
+    check_error("gisland.ui.indicator { state = 'warning', accessible_label = 'Warning', "
+                "effects = { 'pulse' } }",
+                "ui.indicator/effects/0");
+  }
   SECTION("unknown publication field") {
     const auto [result, records] = run_script(R"lua(return gisland.module { init = function()
       gisland.publish { context_id = "x", priority = 1, color = "red",
@@ -269,6 +299,62 @@ TEST_CASE("lua scene API reports useful paths for malformed fields", "[lua_scene
     CHECK(result.error().message.find("publish/color") != std::string::npos);
     CHECK(records.empty());
   }
+}
+
+TEST_CASE("lua publish accepts strict content transitions", "[lua_scene]") {
+  const auto [result, records] = run_script(R"lua(return gisland.module { init = function()
+    gisland.publish {
+      context_id = "transition", priority = 1,
+      views = {
+        compact = gisland.ui.spacer {},
+        expanded = gisland.ui.spacer {},
+      },
+      transitions = { compact = "crossfade", expanded = "slide-right" },
+    }
+  end })lua",
+                                            {"content-transitions"}, 9);
+
+  REQUIRE(result.has_value());
+  REQUIRE(records.size() == 2);
+  CHECK(records[1].at("transitions") ==
+        Json{{"compact", "crossfade"}, {"expanded", "slide-right"}});
+}
+
+TEST_CASE("lua publish rejects malformed content transitions", "[lua_scene]") {
+  const auto check_error = [](std::string_view transitions, std::string_view diagnostic) {
+    const auto script =
+        "return gisland.module { init = function() gisland.publish { context_id = 'x', "
+        "priority = 1, views = { compact = gisland.ui.spacer {} }, transitions = " +
+        std::string{transitions} + " } end }";
+    const auto [result, records] = run_script(script, {"content-transitions"}, 9);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find(diagnostic) != std::string::npos);
+    CHECK(records.empty());
+  };
+
+  check_error("gisland.array()", "publish/transitions");
+  check_error("{}", "publish/transitions");
+  check_error("{ other = 'crossfade' }", "publish/transitions/other");
+  check_error("{ compact = 1 }", "publish/transitions/compact");
+  check_error("{ expanded = 'zoom' }", "publish/transitions/expanded");
+}
+
+TEST_CASE("lua publish transitions require matching views", "[lua_scene]") {
+  const auto check_error = [](std::string_view view, std::string_view transition,
+                              std::string_view path) {
+    const auto script =
+        "return gisland.module { init = function() gisland.publish { context_id = 'x', "
+        "priority = 1, views = { " +
+        std::string{view} + " = gisland.ui.spacer {} }, transitions = { " +
+        std::string{transition} + " = 'crossfade' } } end }";
+    const auto [result, records] = run_script(script, {"content-transitions"}, 9);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find(path) != std::string::npos);
+    CHECK(records.empty());
+  };
+
+  check_error("expanded", "compact", "publish/transitions/compact");
+  check_error("compact", "expanded", "publish/transitions/expanded");
 }
 
 TEST_CASE("lua scene API enforces local bounds without final scene validation", "[lua_scene]") {

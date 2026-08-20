@@ -295,13 +295,38 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
     return {};
   }
   if (type == "indicator") {
-    if (auto result = known_fields(node, {"type", "state", "accessible_label"}, path); !result) {
+    if (auto result = known_fields(node, {"type", "state", "accessible_label", "effects"}, path);
+        !result) {
       return result;
     }
     if (auto result = required_string(node, "state", path); !result) {
       return result;
     }
-    return required_string(node, "accessible_label", path, maximum_text_bytes);
+    if (auto result = required_string(node, "accessible_label", path, maximum_text_bytes);
+        !result) {
+      return result;
+    }
+    if (const auto effects = node.find("effects"); effects != node.end()) {
+      if (!effects->is_array()) {
+        return std::unexpected(path_error(std::string{path} + "/effects", "expected an array"));
+      }
+      std::set<std::string> unique;
+      for (std::size_t index = 0; index < effects->size(); ++index) {
+        const auto item_path = std::string{path} + "/effects/" + std::to_string(index);
+        const auto &effect = effects->at(index);
+        if (!effect.is_string()) {
+          return std::unexpected(path_error(item_path, "expected a string"));
+        }
+        const auto &value = effect.get_ref<const std::string &>();
+        if (!unique.insert(value).second) {
+          return std::unexpected(path_error(item_path, "indicator effect must be unique"));
+        }
+        if (value != "shadow" && value != "glow" && value != "breathe") {
+          return std::unexpected(path_error(item_path, "unknown indicator effect"));
+        }
+      }
+    }
+    return {};
   }
   if (type == "button" || type == "action_region") {
     if (auto result = known_fields(
@@ -444,10 +469,10 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
 }
 
 [[nodiscard]] std::expected<void, std::string> validate_publication(const Json &context) {
-  if (auto result = known_fields(
-          context,
-          {"context_id", "priority", "expires_in_ms", "views", "resources", "presentation"},
-          "publish");
+  if (auto result = known_fields(context,
+                                 {"context_id", "priority", "expires_in_ms", "views", "resources",
+                                  "presentation", "transitions"},
+                                 "publish");
       !result) {
     return result;
   }
@@ -484,6 +509,35 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
     if (const auto view = views->find(field); view != views->end()) {
       if (auto result = validate_scene(*view, "publish/views/" + std::string{field}); !result) {
         return result;
+      }
+    }
+  }
+  if (const auto transitions = context.find("transitions"); transitions != context.end()) {
+    if (!transitions->is_object()) {
+      return std::unexpected(path_error("publish/transitions", "expected an object"));
+    }
+    if (auto result = known_fields(*transitions, {"compact", "expanded"}, "publish/transitions");
+        !result) {
+      return result;
+    }
+    if (transitions->empty()) {
+      return std::unexpected(
+          path_error("publish/transitions", "at least one view transition is required"));
+    }
+    for (const auto field : {"compact", "expanded"}) {
+      if (const auto transition = transitions->find(field); transition != transitions->end()) {
+        const auto transition_path = "publish/transitions/" + std::string{field};
+        if (!transition->is_string()) {
+          return std::unexpected(path_error(transition_path, "expected a string"));
+        }
+        const auto &value = transition->get_ref<const std::string &>();
+        if (value != "crossfade" && value != "slide-left" && value != "slide-right") {
+          return std::unexpected(path_error(transition_path, "unknown content transition"));
+        }
+        if (!views->contains(field)) {
+          return std::unexpected(
+              path_error(transition_path, "transition requires an updated view"));
+        }
       }
     }
   }

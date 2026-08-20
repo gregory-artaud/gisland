@@ -220,14 +220,19 @@ A Lua entry must return exactly one `gisland.module { ... }` definition. Its opt
 
 - `every = "duration"`: run `update` periodically; durations are positive integer `ms`, `s`, `m`,
   or `h` values up to 24 hours.
-- `init(config)`: run once with validated options before the module becomes ready.
+- `init(config, metadata)`: run once with validated options before the module becomes ready. Metadata
+  contains `instance_id`, `locale`, `timezone`, the selected integer `protocol_minor`, and negotiated
+  `capabilities` array.
 - `update()`: return an object to emit `data`, or `nil` to emit nothing.
 - `actions = { id = function(value) ... end }`: accept or reject semantic actions by returning
   `true`, `false`, or `false, "reason"`.
 - `visibility(state)`: receive `hidden`, `compact-active`, or `expanded-active`.
 - `shutdown()`: perform bounded cleanup during graceful shutdown.
 
-Callbacks are serialized. `gisland.data(value)` emits a snapshot immediately.
+Callbacks are serialized. `gisland.data(value)` emits a snapshot immediately. With negotiated
+protocol 1.9 `content-transitions`, `gisland.data(value, transitions)` accepts a non-empty object
+containing only `compact` and/or `expanded`, each set to `crossfade`, `slide-left`, or `slide-right`.
+Requesting transitions without negotiation is an error.
 `gisland.defer(callback)` schedules a callback for the next timer pass and
 `gisland.after("500ms", callback)` schedules it later. Contiguous integer-keyed tables become JSON
 arrays; use `gisland.array()` for an empty array. Other tables must have string keys.
@@ -248,7 +253,7 @@ or a protocol `log` record. Keep processing stdin until `shutdown` or EOF.
 The core starts the handshake with `init`:
 
 ```json
-{"type":"init","protocol":{"minimum":{"major":1,"minor":1},"maximum":{"major":1,"minor":8}},"instance_id":"weather-main","capabilities":["data-snapshots","context-images","rich-content","independent-views","ring-progress","status-indicator","compact-view-styles","icon-roles","progress-transitions"],"configuration":{"units":"metric"},"locale":"en_US.UTF-8","timezone":"Europe/Paris"}
+{"type":"init","protocol":{"minimum":{"major":1,"minor":1},"maximum":{"major":1,"minor":9}},"instance_id":"weather-main","capabilities":["data-snapshots","context-images","rich-content","independent-views","ring-progress","status-indicator","compact-view-styles","icon-roles","progress-transitions","indicator-effects","content-transitions"],"configuration":{"units":"metric"},"locale":"en_US.UTF-8","timezone":"Europe/Paris"}
 ```
 
 Choose one version inside both the offered and manifest ranges, and echo only capabilities you will
@@ -271,7 +276,7 @@ Do not send other records before `ready`. Feature introduction by protocol minor
 | 1.6 | `status-indicator` |
 | 1.7 | `compact-view-styles`, `icon-roles`, and `progress-transitions` |
 | 1.8 | correlated `action_result`, required for confirmed `gislandctl action` calls |
-| 1.9 | `content-transitions` on `publish` and `data` records |
+| 1.9 | `indicator-effects`; `content-transitions` on `publish` and `data` records |
 
 The core may then send:
 

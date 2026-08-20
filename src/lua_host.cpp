@@ -29,6 +29,11 @@ constexpr std::size_t maximum_diagnostic_bytes = 4096;
 constexpr std::size_t maximum_timer_count = 256;
 constexpr std::size_t maximum_buffered_output_messages = 256;
 constexpr LuaValueConversionLimits data_output_limits{.max_items = 512};
+constexpr std::array implemented_capabilities{
+    "data-snapshots",      "context-images", "rich-content",
+    "independent-views",   "ring-progress",  "status-indicator",
+    "compact-view-styles", "icon-roles",     "progress-transitions",
+};
 // Module-to-core publish records can be 8 MiB, so this intentionally exceeds the core-to-module
 // WriteQueue's 1 MiB limit.
 constexpr std::size_t maximum_buffered_output_bytes = std::size_t{16} * 1024U * 1024U;
@@ -529,12 +534,15 @@ private:
     }
     const auto &minimum = protocol->at("minimum");
     const auto &maximum = protocol->at("maximum");
+    const int minimum_minor = minimum.at("minor").get<int>();
+    const int maximum_minor = maximum.at("minor").get<int>();
     if (minimum.at("major").get<int>() != 1 || maximum.at("major").get<int>() != 1 ||
-        minimum.at("minor").get<int>() < 0 || minimum.at("minor").get<int>() > 8 ||
-        maximum.at("minor").get<int>() < 8) {
+        minimum_minor < 0 || minimum_minor > maximum_minor || minimum_minor > 9 ||
+        maximum_minor < 8) {
       return std::unexpected(
           error(LuaHostErrorCode::protocol_error, "core must offer protocol 1.8"));
     }
+    selected_protocol_minor_ = maximum_minor >= 9 ? 9 : 8;
     for (const auto field : {"instance_id", "locale", "timezone"}) {
       if (!required_string(record, field)) {
         return std::unexpected(
@@ -554,6 +562,20 @@ private:
             error(LuaHostErrorCode::protocol_error, "init capabilities are invalid"));
       }
     }
+    negotiated_capabilities_.clear();
+    content_transitions_negotiated_ = false;
+    for (const auto capability : implemented_capabilities) {
+      if (offered.contains(capability)) {
+        negotiated_capabilities_.emplace_back(capability);
+      }
+    }
+    if (selected_protocol_minor_ >= 9 && offered.contains("indicator-effects")) {
+      negotiated_capabilities_.emplace_back("indicator-effects");
+    }
+    if (selected_protocol_minor_ >= 9 && offered.contains("content-transitions")) {
+      negotiated_capabilities_.emplace_back("content-transitions");
+      content_transitions_negotiated_ = true;
+    }
     const auto configuration = record.find("configuration");
     if (configuration == record.end() || !configuration->is_object()) {
       return std::unexpected(
@@ -567,7 +589,9 @@ private:
       }
       pushed = push_json_to_lua(state_, nlohmann::json{{"instance_id", record.at("instance_id")},
                                                        {"locale", record.at("locale")},
-                                                       {"timezone", record.at("timezone")}});
+                                                       {"timezone", record.at("timezone")},
+                                                       {"protocol_minor", selected_protocol_minor_},
+                                                       {"capabilities", negotiated_capabilities_}});
       if (!pushed) {
         lua_pop(state_, 1);
         return std::unexpected(
@@ -585,21 +609,10 @@ private:
         return std::unexpected(called.error());
       }
     }
-    static const std::array implemented_capabilities{
-        "data-snapshots",      "context-images", "rich-content",
-        "independent-views",   "ring-progress",  "status-indicator",
-        "compact-view-styles", "icon-roles",     "progress-transitions",
-    };
-    std::vector<std::string> negotiated_capabilities;
-    for (const auto capability : implemented_capabilities) {
-      if (offered.contains(capability)) {
-        negotiated_capabilities.emplace_back(capability);
-      }
-    }
     auto sent = emit({{"type", "ready"},
                       {"protocol_major", 1},
-                      {"protocol_minor", 8},
-                      {"capabilities", std::move(negotiated_capabilities)}});
+                      {"protocol_minor", selected_protocol_minor_},
+                      {"capabilities", negotiated_capabilities_}});
     if (!sent) {
       return std::unexpected(sent.error());
     }
@@ -811,8 +824,9 @@ private:
 
   static int data_callback(lua_State *state) {
     auto *impl = static_cast<Impl *>(lua_touserdata(state, lua_upvalueindex(1)));
-    if (lua_gettop(state) != 1) {
-      lua_pushliteral(state, "gisland.data expects one value");
+    const int arguments = lua_gettop(state);
+    if (arguments < 1 || arguments > 2) {
+      lua_pushliteral(state, "gisland.data expects a value and optional transitions");
       return lua_error(state);
     }
     bool failed = false;
@@ -822,13 +836,29 @@ private:
         impl->callback_error_ = value.error().message;
         failed = true;
       } else if (!value->is_object()) {
-        lua_pushliteral(state, "gisland.data expects an object value");
+        impl->callback_error_ = "gisland.data expects an object value";
         failed = true;
       } else {
-        auto sent = impl->emit_record({{"type", "data"}, {"value", std::move(*value)}});
-        if (!sent) {
-          impl->callback_error_ = sent.error().message;
-          failed = true;
+        nlohmann::json record{{"type", "data"}, {"value", std::move(*value)}};
+        if (arguments == 2) {
+          auto transitions = data_transitions(state, 2);
+          if (!transitions) {
+            impl->callback_error_ = std::move(transitions.error());
+            failed = true;
+          } else if (!impl->content_transitions_negotiated_) {
+            impl->callback_error_ =
+                "gisland.data transitions require negotiated content-transitions";
+            failed = true;
+          } else {
+            record["transitions"] = std::move(*transitions);
+          }
+        }
+        if (!failed) {
+          auto sent = impl->emit_record(std::move(record));
+          if (!sent) {
+            impl->callback_error_ = sent.error().message;
+            failed = true;
+          }
         }
       }
     }
@@ -837,6 +867,42 @@ private:
       return lua_error(state);
     }
     return 0;
+  }
+
+  [[nodiscard]] static std::expected<nlohmann::json, std::string> data_transitions(lua_State *state,
+                                                                                   int index) {
+    if (!lua_istable(state, index)) {
+      return std::unexpected("gisland.data transitions must be a non-empty object");
+    }
+    const int table_index = lua_absindex(state, index);
+    nlohmann::json transitions = nlohmann::json::object();
+    lua_pushnil(state);
+    while (lua_next(state, table_index) != 0) {
+      if (lua_type(state, -2) != LUA_TSTRING || lua_type(state, -1) != LUA_TSTRING) {
+        lua_pop(state, 2);
+        return std::unexpected("gisland.data transitions must contain only named string fields");
+      }
+      std::size_t key_size = 0;
+      const char *key_data = lua_tolstring(state, -2, &key_size);
+      const std::string key{key_data, key_size};
+      if (key != "compact" && key != "expanded") {
+        lua_pop(state, 2);
+        return std::unexpected("unknown gisland.data transition field '" + key + "'");
+      }
+      std::size_t value_size = 0;
+      const char *value_data = lua_tolstring(state, -1, &value_size);
+      const std::string value{value_data, value_size};
+      if (value != "crossfade" && value != "slide-left" && value != "slide-right") {
+        lua_pop(state, 2);
+        return std::unexpected("unsupported gisland.data transition '" + value + "'");
+      }
+      transitions[key] = value;
+      lua_pop(state, 1);
+    }
+    if (transitions.empty()) {
+      return std::unexpected("gisland.data transitions must be a non-empty object");
+    }
+    return transitions;
   }
 
   static int defer_callback(lua_State *state) {
@@ -986,6 +1052,9 @@ private:
   std::uint64_t next_timer_sequence_{};
   bool initializing_{};
   bool emitted_this_dispatch_{};
+  int selected_protocol_minor_{};
+  std::vector<std::string> negotiated_capabilities_;
+  bool content_transitions_negotiated_{};
 };
 
 std::expected<std::unique_ptr<LuaHost>, LuaHostError> LuaHost::load(const std::string &entry_path) {

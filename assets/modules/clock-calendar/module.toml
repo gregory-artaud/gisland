@@ -11,9 +11,6 @@ major = 1
 minimum_minor = 8
 maximum_minor = 9
 
-[defaults]
-week_start = "monday"
-
 [options_schema.locale]
 type = "string"
 

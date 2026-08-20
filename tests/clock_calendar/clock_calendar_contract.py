@@ -16,15 +16,22 @@ def unix_seconds(value: str) -> int:
     return int(datetime.fromisoformat(value).replace(tzinfo=timezone.utc).timestamp())
 
 
-def init_message(configuration=None):
+def init_message(
+    configuration=None,
+    minimum_minor=8,
+    maximum_minor=9,
+    capabilities=None,
+):
     return {
         "type": "init",
         "protocol": {
-            "minimum": {"major": 1, "minor": 1},
-            "maximum": {"major": 1, "minor": 8},
+            "minimum": {"major": 1, "minor": minimum_minor},
+            "maximum": {"major": 1, "minor": maximum_minor},
         },
         "instance_id": "clock-contract",
-        "capabilities": ["data-snapshots"],
+        "capabilities": capabilities
+        if capabilities is not None
+        else ["data-snapshots", "content-transitions"],
         "configuration": configuration or {},
         "locale": "C",
         "timezone": "UTC",
@@ -76,11 +83,14 @@ class ModuleProcess:
                 f"stderr={diagnostics!r}"
             ) from error
 
-    def snapshot(self):
+    def data_record(self):
         record = self.next_record()
         if record.get("type") != "data":
             raise AssertionError(f"expected data, got {record!r}")
-        return record["value"]
+        return record
+
+    def snapshot(self):
+        return self.data_record()["value"]
 
     def action(self, action_id):
         self._invocation += 1
@@ -156,8 +166,13 @@ class ClockCalendarContract(unittest.TestCase):
             init or init_message(configuration),
         )
         self.assertEqual(self.module.ready["protocol_major"], 1)
-        self.assertIn(self.module.ready["protocol_minor"], (1, 8))
-        self.assertEqual(self.module.ready["capabilities"], ["data-snapshots"])
+        offered = init or init_message(configuration)
+        selected_minor = min(9, offered["protocol"]["maximum"]["minor"])
+        expected_capabilities = ["data-snapshots"]
+        if selected_minor >= 9 and "content-transitions" in offered["capabilities"]:
+            expected_capabilities.append("content-transitions")
+        self.assertEqual(self.module.ready["protocol_minor"], selected_minor)
+        self.assertEqual(self.module.ready["capabilities"], expected_capabilities)
 
     def set_now(self, value):
         self.now_path.write_text(str(unix_seconds(value)) + "\n", encoding="ascii")
@@ -221,6 +236,45 @@ class ClockCalendarContract(unittest.TestCase):
         self.assertTrue(self.module.action("today"))
         self.assertEqual(self.module.snapshot()["month_label"], "August 2026")
         self.assertFalse(self.module.action("unknown"))
+
+    def test_protocol_1_9_navigation_selects_directional_expanded_transitions(self):
+        self.start("2026-08-03T14:35:42")
+        self.assertNotIn("transitions", self.module.data_record())
+
+        self.assertTrue(self.module.action("previous-month"))
+        previous = self.module.data_record()
+        self.assertEqual(previous["value"]["month_label"], "July 2026")
+        self.assertEqual(previous["transitions"], {"expanded": "slide-right"})
+
+        self.assertTrue(self.module.action("next-month"))
+        following = self.module.data_record()
+        self.assertEqual(following["value"]["month_label"], "August 2026")
+        self.assertEqual(following["transitions"], {"expanded": "slide-left"})
+
+        self.assertTrue(self.module.action("today"))
+        self.assertNotIn("transitions", self.module.data_record())
+
+        self.module.send({"type": "visibility", "visibility": "expanded-active"})
+        self.assertNotIn("transitions", self.module.data_record())
+
+    def test_protocol_1_8_fallback_omits_navigation_transitions(self):
+        init = init_message(maximum_minor=8)
+        self.start("2026-08-03T14:35:42", init=init)
+        self.assertEqual(self.module.ready["capabilities"], ["data-snapshots"])
+        self.assertNotIn("transitions", self.module.data_record())
+
+        self.assertTrue(self.module.action("previous-month"))
+        self.assertNotIn("transitions", self.module.data_record())
+        self.assertTrue(self.module.action("next-month"))
+        self.assertNotIn("transitions", self.module.data_record())
+
+    def test_minute_publication_has_no_transition(self):
+        self.start("2026-08-03T14:35:59")
+        self.assertNotIn("transitions", self.module.data_record())
+        self.set_now("2026-08-03T14:36:00")
+        minute = self.module.data_record()
+        self.assertEqual(minute["value"]["time"], "14:36")
+        self.assertNotIn("transitions", minute)
 
     def test_sunday_grid_and_timezone_conversion(self):
         self.start(

@@ -378,11 +378,14 @@ def publication(kind, value, duration=3000):
             "compact": compact_view(value),
             "expanded": expanded_view(value, persistent),
         },
-        "presentation": {"reveal": "expanded"},
     }
-    if not persistent:
+    if persistent:
+        record["presentation"] = {"reveal": "expanded"}
+    elif duration > 0:
         record["expires_in_ms"] = duration
-        record["presentation"]["duration_ms"] = duration
+        record["presentation"] = {"reveal": "expanded", "duration_ms": duration}
+    else:
+        record["expires_in_ms"] = 0
     return record
 
 
@@ -650,6 +653,31 @@ class BatteryContract(unittest.TestCase):
         records, result = self.module.action("dismiss-alert")
         self.assertEqual(records, [])
         self.assertFalse(result["accepted"])
+
+    def test_zero_preview_duration_publishes_without_automatic_reveal(self):
+        self.upower.root["OnBattery"] = False
+        initial = self.start({"preview_duration_ms": 0})["value"]
+
+        self.upower.change_root(OnBattery=True)
+        records = self.module.collect()
+        unplugged_value = dict(
+            initial,
+            state_text="Décharge",
+            estimate_compact="3 h 12",
+            estimate_detail="3 h 12 restantes",
+        )
+        self.assertEqual(
+            records,
+            [
+                {"type": "data", "value": unplugged_value},
+                publication("unplugged", unplugged_value, 0),
+            ],
+        )
+        self.assertIsNone(self.module.process.poll())
+
+        updated = self.change_device(Percentage=71.0)
+        self.assertEqual(updated[0]["value"]["percent_text"], "71 %")
+        self.assertIsNone(self.module.process.poll())
 
     def test_startup_low_state_persists_all_crossed_thresholds_and_suppresses_duplicates(self):
         self.upower.device["Percentage"] = 9.0
