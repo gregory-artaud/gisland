@@ -7,9 +7,22 @@ test_root=$(mktemp -d)
 trap 'rm -rf "$test_root"' EXIT
 source_dir="$test_root/source"
 mkdir -p "$source_dir/scripts" "$source_dir/assets/modules/battery" \
+  "$source_dir/assets/modules/clock-calendar" \
+  "$source_dir/assets/modules/audio" \
   "$source_dir/assets/modules/notifications" \
   "$source_dir/build/release/install"
 cp "$project_source_dir/scripts/install-local.sh" "$source_dir/scripts/install-local.sh"
+cp "$project_source_dir/assets/modules/clock-calendar/config.toml" \
+  "$project_source_dir/assets/modules/clock-calendar/view.toml" \
+  "$project_source_dir/assets/modules/clock-calendar/clock_calendar.lua" \
+  "$source_dir/assets/modules/clock-calendar/"
+printf 'current-clock-manifest\n' \
+  >"$source_dir/build/release/install/clock-calendar.module.toml"
+cp "$project_source_dir/assets/modules/audio/config.toml" \
+  "$project_source_dir/assets/modules/audio/audio.lua" \
+  "$project_source_dir/assets/modules/audio/command.lua" \
+  "$source_dir/assets/modules/audio/"
+printf 'current-audio-manifest\n' >"$source_dir/build/release/install/audio.module.toml"
 cp "$project_source_dir/assets/modules/battery/config.toml" \
   "$project_source_dir/assets/modules/battery/view.toml" \
   "$project_source_dir/assets/modules/battery/battery.lua" \
@@ -117,6 +130,15 @@ make_case() {
     >"$case_dir/home/.local/share/gisland/notifications/sentinel"
   printf 'preserved-history\n' \
     >"$case_dir/home/.local/state/gisland/notifications-history.json"
+  for package_file in module.toml config.toml view.toml clock_calendar.lua; do
+    printf 'stale-clock\n' \
+      >"$case_dir/home/.local/share/gisland/distributed/modules/clock-calendar/$package_file"
+  done
+  mkdir -p "$case_dir/home/.local/share/gisland/distributed/modules/audio"
+  for package_file in module.toml config.toml audio.lua command.lua; do
+    printf 'stale-audio\n' \
+      >"$case_dir/home/.local/share/gisland/distributed/modules/audio/$package_file"
+  done
   for package_file in module.toml config.toml view.toml battery.lua; do
     printf 'stale-battery\n' \
       >"$case_dir/home/.local/share/gisland/distributed/modules/battery/$package_file"
@@ -150,18 +172,21 @@ fi
     fi
     if [[ ${FAKE_CMAKE_MISSING_CLOCK:-0} != 1 ]]; then
       mkdir -p "$HOME/.local/share/gisland/distributed/modules/clock-calendar"
-      for package_file in module.toml config.toml view.toml clock_calendar.lua; do
-        printf 'replacement-clock\n' \
-          >"$HOME/.local/share/gisland/distributed/modules/clock-calendar/$package_file"
-      done
+      cp build/release/install/clock-calendar.module.toml \
+        "$HOME/.local/share/gisland/distributed/modules/clock-calendar/module.toml"
+      cp assets/modules/clock-calendar/config.toml \
+        assets/modules/clock-calendar/view.toml \
+        assets/modules/clock-calendar/clock_calendar.lua \
+        "$HOME/.local/share/gisland/distributed/modules/clock-calendar/"
     fi
     if [[ ${FAKE_CMAKE_MISSING_AUDIO:-0} != 1 ]]; then
-    mkdir -p "$HOME/.local/share/gisland/distributed/modules/audio"
-    for package_file in module.toml config.toml audio.lua command.lua; do
-      printf 'replacement-audio\n' \
-        >"$HOME/.local/share/gisland/distributed/modules/audio/$package_file"
-    done
-  fi
+      mkdir -p "$HOME/.local/share/gisland/distributed/modules/audio"
+      cp build/release/install/audio.module.toml \
+        "$HOME/.local/share/gisland/distributed/modules/audio/module.toml"
+      cp assets/modules/audio/config.toml assets/modules/audio/audio.lua \
+        assets/modules/audio/command.lua \
+        "$HOME/.local/share/gisland/distributed/modules/audio/"
+    fi
     if [[ ${FAKE_CMAKE_MISSING_BATTERY:-0} != 1 ]]; then
       mkdir -p "$HOME/.local/share/gisland/distributed/modules/battery"
       cp build/release/install/battery.module.toml \
@@ -398,6 +423,10 @@ assert_not_contains "$replacement_failure_case/commands.log" 'rm|'
 assert_exists "$replacement_failure_case/home/.local/bin/gisland-audio"
 assert_exists "$replacement_failure_case/home/.local/bin/gisland-audio-control"
 assert_exists "$replacement_failure_case/home/.local/share/gisland/audio/gisland_audio/application.py"
+[[ $(<"$replacement_failure_case/home/.local/share/gisland/distributed/modules/audio/module.toml") == stale-audio ]] ||
+  fail 'a stale preseeded audio manifest must not pass replacement verification'
+[[ $(<"$replacement_failure_case/home/.local/share/gisland/distributed/modules/audio/audio.lua") == stale-audio ]] ||
+  fail 'a stale preseeded audio Lua package must not pass replacement verification'
 
 host_freshness_failure_case=$(make_case host-freshness-failure)
 printf 'stale-lua-host\n' \
@@ -429,6 +458,10 @@ assert_contains "$clock_replacement_failure_case/commands.log" \
   'systemctl|--user start gisland.service'
 assert_not_contains "$clock_replacement_failure_case/commands.log" 'rm|'
 assert_exists "$clock_replacement_failure_case/home/.local/bin/gisland-clock-calendar"
+[[ $(<"$clock_replacement_failure_case/home/.local/share/gisland/distributed/modules/clock-calendar/module.toml") == stale-clock ]] ||
+  fail 'a stale preseeded clock-calendar manifest must not pass replacement verification'
+[[ $(<"$clock_replacement_failure_case/home/.local/share/gisland/distributed/modules/clock-calendar/clock_calendar.lua") == stale-clock ]] ||
+  fail 'a stale preseeded clock-calendar Lua package must not pass replacement verification'
 
 battery_replacement_failure_case=$(make_case battery-replacement-failure)
 if run_installer "$battery_replacement_failure_case" FAKE_CMAKE_MISSING_BATTERY=1 \

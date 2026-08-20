@@ -72,6 +72,20 @@ if ! cmp -s -- "$source_dir/build/release/gisland-lua-host" \
   exit 1
 fi
 
+verify_current_files() {
+  local package_name=$1
+  local -n sources=$2
+  local -n destinations=$3
+  local index
+  for index in "${!sources[@]}"; do
+    if ! cmp -s -- "${sources[$index]}" "${destinations[$index]}"; then
+      printf 'install-local: installed %s file is not current: %s\n' \
+        "$package_name" "${destinations[$index]}" >&2
+      exit 1
+    fi
+  done
+}
+
 replacement_clock_files=(
   "$install_prefix/bin/gisland-lua-host"
   "$install_prefix/share/gisland/distributed/modules/clock-calendar/module.toml"
@@ -86,6 +100,19 @@ for replacement_clock_file in "${replacement_clock_files[@]}"; do
     exit 1
   fi
 done
+clock_sources=(
+  "$source_dir/build/release/install/clock-calendar.module.toml"
+  "$source_dir/assets/modules/clock-calendar/config.toml"
+  "$source_dir/assets/modules/clock-calendar/view.toml"
+  "$source_dir/assets/modules/clock-calendar/clock_calendar.lua"
+)
+clock_destinations=(
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/config.toml"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/view.toml"
+  "$install_prefix/share/gisland/distributed/modules/clock-calendar/clock_calendar.lua"
+)
+verify_current_files clock-calendar clock_sources clock_destinations
 
 replacement_audio_files=(
   "$install_prefix/bin/gisland-lua-host"
@@ -101,6 +128,19 @@ for replacement_audio_file in "${replacement_audio_files[@]}"; do
     exit 1
   fi
 done
+audio_sources=(
+  "$source_dir/build/release/install/audio.module.toml"
+  "$source_dir/assets/modules/audio/config.toml"
+  "$source_dir/assets/modules/audio/audio.lua"
+  "$source_dir/assets/modules/audio/command.lua"
+)
+audio_destinations=(
+  "$install_prefix/share/gisland/distributed/modules/audio/module.toml"
+  "$install_prefix/share/gisland/distributed/modules/audio/config.toml"
+  "$install_prefix/share/gisland/distributed/modules/audio/audio.lua"
+  "$install_prefix/share/gisland/distributed/modules/audio/command.lua"
+)
+verify_current_files audio audio_sources audio_destinations
 
 replacement_battery_files=(
   "$install_prefix/bin/gisland-lua-host"
@@ -129,13 +169,7 @@ battery_destinations=(
   "$install_prefix/share/gisland/distributed/modules/battery/view.toml"
   "$install_prefix/share/gisland/distributed/modules/battery/battery.lua"
 )
-for index in "${!battery_sources[@]}"; do
-  if ! cmp -s -- "${battery_sources[$index]}" "${battery_destinations[$index]}"; then
-    printf 'install-local: installed battery file is not current: %s\n' \
-      "${battery_destinations[$index]}" >&2
-    exit 1
-  fi
-done
+verify_current_files battery battery_sources battery_destinations
 
 replacement_notification_files=(
   "$install_prefix/bin/gisland-lua-host"
@@ -157,13 +191,7 @@ notification_destinations=(
   "$install_prefix/share/gisland/distributed/modules/notifications/module.toml"
   "$install_prefix/share/gisland/distributed/modules/notifications/notifications.lua"
 )
-for index in "${!notification_sources[@]}"; do
-  if ! cmp -s -- "${notification_sources[$index]}" "${notification_destinations[$index]}"; then
-    printf 'install-local: installed notification file is not current: %s\n' \
-      "${notification_destinations[$index]}" >&2
-    exit 1
-  fi
-done
+verify_current_files notification notification_sources notification_destinations
 
 rm -f -- "$install_prefix/bin/gisland-clock-calendar"
 rm -f -- "$install_prefix/share/gisland/distributed/modules/clock-calendar/calendar.lua"
