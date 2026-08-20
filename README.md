@@ -555,6 +555,28 @@ hover_overlay = "#FFFFFF14"
 Themes without this table retain the original `accent` and `muted` button backgrounds. The optional
 hover overlay appears immediately over enabled buttons; omit it to use the subtle white default.
 
+## Status Indicator Effects
+
+Protocol 1.9 adds the optional `indicator-effects` capability. After negotiating it, a module may
+request any combination of `shadow`, `glow`, and `breathe` on an `indicator` while continuing to
+provide only a semantic state:
+
+```json
+{"type":"indicator","state":"success","accessible_label":"Running",
+ "effects":["glow","breathe"]}
+```
+
+Unknown and duplicate effects, effects sent before protocol 1.9, and effects sent without the
+negotiated capability are protocol violations. They reject only the publication according to the
+normal module-violation policy. An omitted or empty `effects` array preserves the original
+indicator geometry and rendering.
+
+Modules cannot provide radii, colors, opacity, timing, or easing. Those values belong to the
+selected theme under `indicator.shadow`, `indicator.glow`, `indicator.breathe`, and
+`indicator.reduced_motion`. Effect extents participate in layout and clipping. Setting
+`interaction.reduced_motion = true` replaces the animated breathe cycle with the theme's static
+reduced-motion intensity and opacity.
+
 ## Dynamic Images
 
 Protocol 1.2 adds the optional `context-images` capability. A module that negotiates it can attach
@@ -632,6 +654,35 @@ references a resource from the same publication.
 An `action_region` adopts its child's geometry without adding decoration or padding. Nested links,
 buttons, and action regions take hit-test priority over their parent, allowing one default action to
 cover a notification while preserving close, link, and named-action controls.
+
+## Content Transitions
+
+Protocol 1.9 adds the optional `content-transitions` capability. A `publish` or `data` record may
+attach a semantic transition independently to either updated view:
+
+```json
+{
+  "type": "data",
+  "value": {"month_label": "August 2026"},
+  "transitions": {"expanded": "slide-left"}
+}
+```
+
+The closed catalogue is `crossfade`, `slide-left`, and `slide-right`. Omitting `transitions` keeps
+the default crossfade. Modules choose only the semantic type; the theme owns duration, horizontal
+distance, easing, and reduced-motion duration. The core captures, interpolates, and clips outgoing
+and incoming content. Set `GISLAND_REDUCED_MOTION=1` (or `true`) to select the theme's
+reduced-motion values.
+
+```toml
+[animation.content_transition]
+duration_ms = 250
+distance = 48
+easing = "ease-in-out"
+
+[animation.reduced_motion.content_transition]
+duration_ms = 0
+```
 
 ## Repository Layout
 

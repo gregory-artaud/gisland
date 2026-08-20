@@ -60,6 +60,7 @@ struct PublishMessage {
   std::vector<ImageResource> resources{};
   std::optional<PresentationIntent> presentation{};
   bool independent_views{false};
+  ViewTransitions transitions{};
 };
 
 struct DismissMessage {
@@ -74,6 +75,7 @@ struct ReadyMessage {
 
 struct DataMessage {
   nlohmann::json value;
+  ViewTransitions transitions{};
 };
 
 struct ActionResultMessage {

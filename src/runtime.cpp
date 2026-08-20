@@ -74,6 +74,10 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
     capabilities.emplace_back("icon-roles");
     capabilities.emplace_back("progress-transitions");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 9}) {
+    capabilities.emplace_back("indicator-effects");
+    capabilities.emplace_back("content-transitions");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =
@@ -174,6 +178,7 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                   .resources = message.resources,
                   .presentation = message.presentation,
                   .revision = revision_ + 1,
+                  .transitions = message.transitions,
               },
               event.at);
           ++revision_;
@@ -207,6 +212,7 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                   .expanded = instantiated.expanded,
                   .revision = revision_ + 1,
                   .fallback_only = true,
+                  .transitions = message.transitions,
               },
               event.at);
           ++revision_;

@@ -492,6 +492,21 @@ void read_init() {
     }
     return EXIT_SUCCESS;
   }
+  if (mode == "content-transition" || mode == "content-transition-without-capability") {
+    read_init();
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 9}};
+    if (mode == "content-transition") {
+      ready["capabilities"] = {"data-snapshots", "content-transitions"};
+    } else {
+      ready["capabilities"] = {"data-snapshots"};
+    }
+    write_json(ready);
+    write_json({{"type", "data"},
+                {"value", {{"time", "14:35"}}},
+                {"transitions", {{"expanded", "slide-left"}}}});
+    return silent();
+  }
   if (mode == "independent" || mode == "independent-without-capability") {
     read_init();
     nlohmann::json ready{{"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 4}};
@@ -541,6 +556,37 @@ void read_init() {
       publish["compact"] = indicator;
     }
     write_json(publish);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
+  if (mode == "indicator-effects" || mode == "indicator-effects-without-capability" ||
+      mode == "indicator-effects-legacy" || mode == "indicator-effects-capability-on-1.8") {
+    read_init();
+    const bool legacy =
+        mode == "indicator-effects-legacy" || mode == "indicator-effects-capability-on-1.8";
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", legacy ? 8 : 9}};
+    ready["capabilities"] = {"status-indicator"};
+    if (mode == "indicator-effects" || mode == "indicator-effects-capability-on-1.8") {
+      ready["capabilities"].push_back("indicator-effects");
+    }
+    write_json(ready);
+    write_json({
+        {"type", "publish"},
+        {"context_id", "indicator-effects"},
+        {"priority", 20},
+        {"compact",
+         {{"type", "indicator"},
+          {"state", "success"},
+          {"accessible_label", "Running"},
+          {"effects", {"glow", "breathe"}}}},
+    });
     std::string line;
     while (std::getline(std::cin, line)) {
       const auto message = nlohmann::json::parse(line, nullptr, false);

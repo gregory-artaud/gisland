@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -23,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -89,6 +91,20 @@ public:
 
 [[nodiscard]] gisland::SceneNode icon(std::string name, std::string label) {
   return gisland::SceneNode{gisland::Icon{std::move(name), std::move(label)}};
+}
+
+[[nodiscard]] gisland::SceneNode indicator_effects_gallery() {
+  return gisland::SceneNode{gisland::Row{
+      {text("Normal", "caption"), gisland::SceneNode{gisland::Indicator{"success", "Normal"}},
+       text("Glow", "caption"),
+       gisland::SceneNode{gisland::Indicator{"warning", "Glow", {gisland::IndicatorEffect::glow}}},
+       text("Breathe", "caption"),
+       gisland::SceneNode{gisland::Indicator{
+           "error",
+           "Glow and breathe",
+           {gisland::IndicatorEffect::glow, gisland::IndicatorEffect::breathe}}}},
+      "center",
+      "small"}};
 }
 
 [[nodiscard]] gisland::SceneNode compact_time_date() {
@@ -217,7 +233,8 @@ public:
 [[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode,
                                    const std::vector<gisland::ImageResource> &resources = {},
                                    std::string_view compact_style = {},
-                                   std::optional<float> progress_elapsed = std::nullopt) {
+                                   std::optional<float> progress_elapsed = std::nullopt,
+                                   gisland::IndicatorAnimationState indicator_animation = {}) {
   const auto theme = load_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
   REQUIRE(fonts.has_value());
@@ -250,7 +267,7 @@ public:
   BeginTextureMode(target);
   ClearBackground(BLANK);
   REQUIRE(painter.draw_surface(rendered_plan, origin).has_value());
-  REQUIRE(painter.draw_content(rendered_plan, origin).has_value());
+  REQUIRE(painter.draw_content(rendered_plan, origin, indicator_animation).has_value());
   EndTextureMode();
   Image image = LoadImageFromTexture(target.texture);
   UnloadRenderTexture(target);
@@ -261,6 +278,10 @@ public:
 
 [[nodiscard]] int channel_delta(unsigned char left, unsigned char right) {
   return std::abs(static_cast<int>(left) - static_cast<int>(right));
+}
+
+[[nodiscard]] bool same_color(Color left, Color right) {
+  return left.r == right.r && left.g == right.g && left.b == right.b && left.a == right.a;
 }
 
 void export_failure_artifacts(std::string_view name, const Image &actual, const Image &expected) {
@@ -289,8 +310,10 @@ void export_failure_artifacts(std::string_view name, const Image &actual, const 
 void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisland::ViewMode mode,
                    const std::vector<gisland::ImageResource> &resources = {},
                    std::string_view compact_style = {},
-                   std::optional<float> progress_elapsed = std::nullopt) {
-  Image actual = render_fixture(scene, mode, resources, compact_style, progress_elapsed);
+                   std::optional<float> progress_elapsed = std::nullopt,
+                   gisland::IndicatorAnimationState indicator_animation = {}) {
+  Image actual =
+      render_fixture(scene, mode, resources, compact_style, progress_elapsed, indicator_animation);
   const auto baseline = baseline_root() / (std::string{name} + ".png");
   const char *update = std::getenv("GISLAND_UPDATE_BASELINES");
   const char *approved_update = std::getenv("GISLAND_BASELINE_UPDATE_TARGET");
@@ -332,6 +355,38 @@ void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisla
   UnloadImage(actual);
 }
 
+[[nodiscard]] Image render_slide_frame(gisland::ContentTransition kind, float elapsed) {
+  constexpr int surface_x = 190;
+  constexpr int surface_y = 160;
+  constexpr int surface_width = 100;
+  constexpr int surface_height = 40;
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry geometry{surface_width, surface_height, 0.0F};
+  transition.start(geometry, geometry, std::chrono::milliseconds{200}, gisland::Easing::linear,
+                   kind, static_cast<float>(surface_width));
+  transition.update(elapsed);
+  const auto visual = transition.visual();
+
+  RenderTexture2D target = LoadRenderTexture(image_width, image_height);
+  REQUIRE(IsRenderTextureValid(target));
+  BeginTextureMode(target);
+  ClearBackground(BLANK);
+  BeginScissorMode(surface_x, surface_y, surface_width, surface_height);
+  if (visual.outgoing_opacity > 0.0F) {
+    DrawRectangle(surface_x + static_cast<int>(std::lround(visual.outgoing_offset_x)), surface_y,
+                  surface_width, surface_height, RED);
+  }
+  DrawRectangle(surface_x + static_cast<int>(std::lround(visual.incoming_offset_x)), surface_y,
+                surface_width, surface_height, BLUE);
+  EndScissorMode();
+  EndTextureMode();
+  Image image = LoadImageFromTexture(target.texture);
+  UnloadRenderTexture(target);
+  ImageFlipVertical(&image);
+  ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+  return image;
+}
+
 } // namespace
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: all v1 primitives gallery") {
@@ -340,6 +395,11 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: all v1 primitives gallery") {
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: compact time and date capsule") {
   check_fixture("compact-time-date", compact_time_date(), gisland::ViewMode::compact);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: semantic indicator effects") {
+  check_fixture("indicator-effects", indicator_effects_gallery(), gisland::ViewMode::compact, {},
+                {}, std::nullopt, {0.8, false});
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: dynamic image cropped into a circle") {
@@ -428,6 +488,26 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: expanded rich notification") 
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: expanded July 2026 calendar") {
   check_fixture("calendar-july-2026", july_2026_calendar(), gisland::ViewMode::expanded);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual content slides are clipped at fixed animation instants") {
+  for (const auto &[kind, outgoing, incoming] :
+       {std::tuple{gisland::ContentTransition::slide_left, RED, BLUE},
+        std::tuple{gisland::ContentTransition::slide_right, BLUE, RED}}) {
+    Image midpoint = render_slide_frame(kind, 0.1F);
+    CHECK(GetImageColor(midpoint, 189, 180).a == 0);
+    CHECK(same_color(GetImageColor(midpoint, 190, 180), outgoing));
+    CHECK(same_color(GetImageColor(midpoint, 239, 180), outgoing));
+    CHECK(same_color(GetImageColor(midpoint, 240, 180), incoming));
+    CHECK(same_color(GetImageColor(midpoint, 289, 180), incoming));
+    CHECK(GetImageColor(midpoint, 290, 180).a == 0);
+    UnloadImage(midpoint);
+  }
+
+  Image settled = render_slide_frame(gisland::ContentTransition::slide_left, 0.2F);
+  CHECK(same_color(GetImageColor(settled, 190, 180), BLUE));
+  CHECK(same_color(GetImageColor(settled, 289, 180), BLUE));
+  UnloadImage(settled);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: constrained UTF-8 truncation") {

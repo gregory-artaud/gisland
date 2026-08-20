@@ -25,6 +25,13 @@ struct ContextKey {
 
 enum class ViewSlot { compact, expanded };
 
+enum class ContentTransition { crossfade, slide_left, slide_right };
+
+struct ViewTransitions {
+  std::optional<ContentTransition> compact;
+  std::optional<ContentTransition> expanded;
+};
+
 enum class Reveal { expanded };
 
 struct PresentationIntent {
@@ -43,6 +50,7 @@ struct PublishedContext {
   std::optional<PresentationIntent> presentation{};
   std::uint64_t revision{};
   bool fallback_only{};
+  ViewTransitions transitions{};
 };
 
 enum class ContextActivationError { unavailable_instance };

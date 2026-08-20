@@ -166,6 +166,10 @@ public:
   return {codepoints.begin(), codepoints.end()};
 }
 
+[[nodiscard]] bool same_color(Color left, Color right) {
+  return left.r == right.r && left.g == right.g && left.b == right.b && left.a == right.a;
+}
+
 template <typename Draw> [[nodiscard]] Image render_image(Draw &&draw) {
   RenderTexture2D target = LoadRenderTexture(128, 96);
   REQUIRE(IsRenderTextureValid(target));
@@ -203,6 +207,16 @@ template <typename Draw> [[nodiscard]] Image render_image(Draw &&draw) {
     }
   }
   return count;
+}
+
+[[nodiscard]] int alpha_sum(const Image &image, gisland::Rect area) {
+  int total = 0;
+  for (int y = area.y; y < area.y + area.height; ++y) {
+    for (int x = area.x; x < area.x + area.width; ++x) {
+      total += GetImageColor(image, x, y).a;
+    }
+  }
+  return total;
 }
 
 } // namespace
@@ -514,6 +528,80 @@ TEST_CASE_METHOD(HiddenWindow, "painter renders a clipped antialiased status ind
   CHECK(GetImageColor(rendered, 16, 19).a == 0);
   CHECK(partially_covered_pixels(rendered, gisland::Rect{18, 16, 5, 7}) > 0);
   UnloadImage(rendered);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "indicator shadow and glow render independently and together") {
+  const auto theme = make_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  const gisland::Rgba success{32, 192, 96, 255};
+  const auto render_effects = [&](std::vector<gisland::IndicatorEffect> effects) {
+    const gisland::LayoutPlan plan{{},
+                                   {gisland::IndicatorDrawCommand{{24, 24, 7, 7},
+                                                                  {16, 16, 23, 23},
+                                                                  success,
+                                                                  "Running",
+                                                                  std::move(effects),
+                                                                  theme.indicator()}},
+                                   {}};
+    return render_image([&] { REQUIRE(painter.draw_content(plan).has_value()); });
+  };
+
+  Image normal = render_effects({});
+  Image shadow = render_effects({gisland::IndicatorEffect::shadow});
+  Image glow = render_effects({gisland::IndicatorEffect::glow});
+  Image combined =
+      render_effects({gisland::IndicatorEffect::shadow, gisland::IndicatorEffect::glow});
+  const gisland::Rect effect_bounds{16, 16, 23, 23};
+  CHECK(alpha_sum(shadow, effect_bounds) > alpha_sum(normal, effect_bounds));
+  CHECK(alpha_sum(glow, effect_bounds) > alpha_sum(normal, effect_bounds));
+  CHECK(alpha_sum(combined, effect_bounds) > alpha_sum(shadow, effect_bounds));
+  CHECK(alpha_sum(combined, effect_bounds) > alpha_sum(glow, effect_bounds));
+  UnloadImage(normal);
+  UnloadImage(shadow);
+  UnloadImage(glow);
+  UnloadImage(combined);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "indicator breathe is deterministic and reduced motion is static") {
+  const auto theme = make_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  const gisland::Rgba success{32, 192, 96, 255};
+  const gisland::LayoutPlan plan{{},
+                                 {gisland::IndicatorDrawCommand{{24, 24, 7, 7},
+                                                                {16, 16, 23, 23},
+                                                                success,
+                                                                "Running",
+                                                                {gisland::IndicatorEffect::glow,
+                                                                 gisland::IndicatorEffect::breathe},
+                                                                theme.indicator()}},
+                                 {}};
+  const auto render_at = [&](double elapsed, bool reduced_motion) {
+    return render_image([&] {
+      REQUIRE(
+          painter.draw_content(plan, {}, gisland::IndicatorAnimationState{elapsed, reduced_motion})
+              .has_value());
+    });
+  };
+
+  Image minimum = render_at(0.0, false);
+  Image maximum = render_at(0.8, false);
+  CHECK(alpha_sum(maximum, {16, 16, 23, 23}) > alpha_sum(minimum, {16, 16, 23, 23}));
+
+  Image reduced_start = render_at(0.0, true);
+  Image reduced_later = render_at(0.8, true);
+  for (int y = 16; y < 39; ++y) {
+    for (int x = 16; x < 39; ++x) {
+      CHECK(same_color(GetImageColor(reduced_start, x, y), GetImageColor(reduced_later, x, y)));
+    }
+  }
+  UnloadImage(minimum);
+  UnloadImage(maximum);
+  UnloadImage(reduced_start);
+  UnloadImage(reduced_later);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "image book center-crops and masks dynamic images") {

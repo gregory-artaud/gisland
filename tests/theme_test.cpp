@@ -91,11 +91,19 @@ easing = "ease-in-out"
 duration_ms = 270
 easing = "ease-out"
 
+[animation.content_transition]
+duration_ms = 250
+distance = 48
+easing = "ease-in-out"
+
 [animation.reduced_motion]
 compact_to_expanded_ms = 0
 context_change_ms = 0
 
 [animation.reduced_motion.progress]
+duration_ms = 0
+
+[animation.reduced_motion.content_transition]
 duration_ms = 0
 
 [icons.calendar]
@@ -158,6 +166,11 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().reduced_motion.compact_to_expanded_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.progress_duration == std::chrono::milliseconds{0});
+  CHECK(result->animation().content_transition.duration == std::chrono::milliseconds{250});
+  CHECK(result->animation().content_transition.distance == 48.0);
+  CHECK(result->animation().content_transition.easing == gisland::Easing::ease_in_out);
+  CHECK(result->animation().reduced_motion.content_transition_duration ==
+        std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
 }
@@ -202,6 +215,65 @@ TEST_CASE("indicator theme diameter is optional and bounded") {
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().path == "indicator.diameter");
   }
+}
+
+TEST_CASE("theme owns bounded indicator effect and reduced-motion parameters") {
+  const auto themed = replace_once(std::string{valid_theme}, "[shadow]",
+                                   R"([indicator]
+diameter = 9
+
+[indicator.shadow]
+offset_x = 1
+offset_y = 2
+radius = 3
+opacity = 0.25
+
+[indicator.glow]
+radius = 6
+intensity = 0.8
+opacity = 0.4
+
+[indicator.breathe]
+radius = 8
+minimum_intensity = 0.3
+maximum_intensity = 0.9
+minimum_opacity = 0.1
+maximum_opacity = 0.5
+duration_ms = 1800
+easing = "ease-in-out"
+
+[indicator.reduced_motion]
+breathe_intensity = 0.6
+breathe_opacity = 0.25
+
+[shadow])");
+  const auto result = gisland::parse_theme(themed, "indicator-effects.toml");
+
+  REQUIRE(result.has_value());
+  CHECK(result->indicator().diameter == 9.0);
+  CHECK(result->indicator().shadow.radius == 3.0);
+  CHECK(result->indicator().glow.intensity == 0.8);
+  CHECK(result->indicator().breathe.duration == std::chrono::milliseconds{1800});
+  CHECK(result->indicator().breathe.easing == gisland::Easing::ease_in_out);
+  CHECK(result->indicator().reduced_motion.breathe_opacity == 0.25);
+}
+
+TEST_CASE("theme rejects inconsistent indicator breathe ranges") {
+  const auto themed = replace_once(std::string{valid_theme}, "[shadow]",
+                                   R"([indicator.breathe]
+radius = 8
+minimum_intensity = 1
+maximum_intensity = 0.2
+minimum_opacity = 0.1
+maximum_opacity = 0.5
+duration_ms = 1800
+easing = "linear"
+
+[shadow])");
+  const auto result = gisland::parse_theme(themed, "indicator-effects.toml");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().path == "indicator.breathe.minimum_intensity");
 }
 
 TEST_CASE("fixed native canvas covers theme maxima and shadow") {
@@ -648,8 +720,11 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
                    "[animation]\ncompact_to_expanded_ms = 325\ncontext_change_ms = 325\n"
                    "easing = \"ease-in-out\"\n\n[animation.progress]\n"
                    "duration_ms = 270\neasing = \"ease-out\"\n\n"
+                   "[animation.content_transition]\nduration_ms = 250\ndistance = 48\n"
+                   "easing = \"ease-in-out\"\n\n"
                    "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"
                    "context_change_ms = 0\n\n[animation.reduced_motion.progress]\n"
+                   "duration_ms = 0\n\n[animation.reduced_motion.content_transition]\n"
                    "duration_ms = 0\n\n",
                    ""),
       "animation.toml");
@@ -661,6 +736,8 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
                                         "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"
                                         "context_change_ms = 0\n\n"
                                         "[animation.reduced_motion.progress]\n"
+                                        "duration_ms = 0\n\n"
+                                        "[animation.reduced_motion.content_transition]\n"
                                         "duration_ms = 0\n\n",
                                         ""),
                            "reduced-motion.toml");

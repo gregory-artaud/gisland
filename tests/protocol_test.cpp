@@ -38,6 +38,8 @@ TEST_CASE("a publish line is parsed into typed scenes") {
   REQUIRE(publish != nullptr);
   CHECK(publish->context_id == "clock");
   CHECK(publish->priority == 7);
+  CHECK_FALSE(publish->transitions.compact.has_value());
+  CHECK_FALSE(publish->transitions.expanded.has_value());
   REQUIRE(publish->expires_in.has_value());
   CHECK(publish->expires_in.value_or(std::chrono::milliseconds{-1}) ==
         std::chrono::milliseconds{1500});
@@ -74,6 +76,31 @@ TEST_CASE("protocol 1.4 parses independent views and presentation intent") {
   REQUIRE(publish->expanded.has_value());
   REQUIRE(publish->presentation.has_value());
   CHECK(publish->presentation->duration == std::chrono::milliseconds{1000});
+}
+
+TEST_CASE("protocol 1.9 parses independent content transitions") {
+  const auto publish = gisland::parse_module_message(
+      R"({"type":"publish","context_id":"calendar","priority":0,"views":{"compact":{"type":"text","value":"12:34","role":"body"},"expanded":{"type":"text","value":"August","role":"body"}},"transitions":{"compact":"crossfade","expanded":"slide-left"}})");
+  REQUIRE(publish.has_value());
+  const auto &typed_publish = std::get<gisland::PublishMessage>(*publish);
+  CHECK(typed_publish.transitions.compact == gisland::ContentTransition::crossfade);
+  CHECK(typed_publish.transitions.expanded == gisland::ContentTransition::slide_left);
+
+  const auto data = gisland::parse_module_message(
+      R"({"type":"data","value":{"month":"August"},"transitions":{"expanded":"slide-right"}})");
+  REQUIRE(data.has_value());
+  CHECK(std::get<gisland::DataMessage>(*data).transitions.expanded ==
+        gisland::ContentTransition::slide_right);
+}
+
+TEST_CASE("protocol rejects unknown content transitions and transition views") {
+  for (const auto line : {
+           R"({"type":"data","value":{},"transitions":{"expanded":"zoom"}})",
+           R"({"type":"data","value":{},"transitions":{"other":"crossfade"}})"}) {
+    const auto result = gisland::parse_module_message(line);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path.starts_with("/transitions/"));
+  }
 }
 
 TEST_CASE("protocol 1.7 parses compact HUD style icon role and progress source") {
@@ -185,6 +212,37 @@ TEST_CASE("indicator protocol fields are required") {
        }) {
     const auto result = gisland::parse_module_message(
         "{\"type\":\"publish\",\"context_id\":\"x\",\"priority\":0,\"compact\":" + node + "}");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == path);
+  }
+}
+
+TEST_CASE("protocol 1.9 parses combinable semantic indicator effects") {
+  const auto result = gisland::parse_module_message(
+      R"({"type":"publish","context_id":"job","priority":20,"compact":{"type":"indicator","state":"success","accessible_label":"Running","effects":["shadow","glow","breathe"]}})");
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  REQUIRE(publish->compact.has_value());
+  const auto &indicator = std::get<gisland::Indicator>(publish->compact->value);
+  CHECK(indicator.effects == std::vector<gisland::IndicatorEffect>{
+                                 gisland::IndicatorEffect::shadow, gisland::IndicatorEffect::glow,
+                                 gisland::IndicatorEffect::breathe});
+}
+
+TEST_CASE("indicator effects reject malformed unknown and duplicate requests") {
+  for (const auto &[effects, path] : std::vector<std::pair<std::string, std::string>>{
+           {R"("glow")", "/compact/effects"},
+           {R"(["sparkle"])", "/compact/effects/0"},
+           {R"(["glow","glow"])", "/compact/effects/1"},
+           {R"(["glow",1])", "/compact/effects/1"},
+       }) {
+    const auto result = gisland::parse_module_message(
+        "{\"type\":\"publish\",\"context_id\":\"x\",\"priority\":0,\"compact\":{"
+        "\"type\":\"indicator\",\"state\":\"success\",\"accessible_label\":\"Available\","
+        "\"effects\":" +
+        effects + "}}");
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().path == path);
   }

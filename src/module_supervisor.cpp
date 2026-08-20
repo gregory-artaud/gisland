@@ -75,6 +75,25 @@ namespace {
       scene.value);
 }
 
+[[nodiscard]] bool scene_uses_indicator_effects(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &primitive) {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, Indicator>) {
+          return !primitive.effects.empty();
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          return std::ranges::any_of(primitive.children, [](const auto &child) {
+            return scene_uses_indicator_effects(*child);
+          });
+        } else if constexpr (std::is_same_v<Primitive, Button> ||
+                             std::is_same_v<Primitive, ActionRegion>) {
+          return scene_uses_indicator_effects(*primitive.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
 [[nodiscard]] std::optional<std::string> indicator_path(const PublishMessage &publish) {
   if (publish.compact && scene_uses_indicator(*publish.compact)) {
     return publish.independent_views ? "/views/compact" : "/compact";
@@ -130,6 +149,29 @@ template <typename Predicate>
   }
   if (publish.expanded && predicate(*publish.expanded)) {
     return publish.independent_views ? "/views/expanded" : "/expanded";
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string> transition_path(const ModuleMessage &message) {
+  const ViewTransitions *transitions = std::visit(
+      [](const auto &typed) -> const ViewTransitions * {
+        using Message = std::decay_t<decltype(typed)>;
+        if constexpr (std::is_same_v<Message, PublishMessage> ||
+                      std::is_same_v<Message, DataMessage>) {
+          return &typed.transitions;
+        }
+        return nullptr;
+      },
+      message);
+  if (transitions == nullptr) {
+    return std::nullopt;
+  }
+  if (transitions->compact) {
+    return "/transitions/compact";
+  }
+  if (transitions->expanded) {
+    return "/transitions/expanded";
   }
   return std::nullopt;
 }
@@ -1013,6 +1055,21 @@ private:
                        ProtocolError{"/type", "data-snapshots capability was not negotiated"}, now);
       return;
     }
+    if (const auto path = transition_path(*message); path) {
+      if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 9}) {
+        record_violation(instance,
+                         ProtocolError{*path, "content transition requires protocol version 1.9"},
+                         now);
+        return;
+      }
+      if (!instance.negotiated_capabilities.contains("content-transitions")) {
+        record_violation(instance,
+                         ProtocolError{*path,
+                                       "content-transitions capability was not negotiated"},
+                         now);
+        return;
+      }
+    }
     if (const auto *publish = std::get_if<PublishMessage>(&*message);
         publish != nullptr && !publish->resources.empty() &&
         !instance.negotiated_capabilities.contains("context-images")) {
@@ -1050,6 +1107,21 @@ private:
         record_violation(
             instance, ProtocolError{*path, "status-indicator capability was not negotiated"}, now);
         return;
+      }
+      if (const auto effect_path = scene_feature_path(*publish, scene_uses_indicator_effects);
+          effect_path) {
+        if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 9}) {
+          record_violation(
+              instance,
+              ProtocolError{*effect_path, "indicator effects require protocol version 1.9"}, now);
+          return;
+        }
+        if (!instance.negotiated_capabilities.contains("indicator-effects")) {
+          record_violation(
+              instance,
+              ProtocolError{*effect_path, "indicator-effects capability was not negotiated"}, now);
+          return;
+        }
       }
       if (publish->presentation && publish->presentation->compact_style) {
         if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 7}) {
@@ -1151,6 +1223,19 @@ private:
         record_violation(
             instance, ProtocolError{"/capabilities", capability + " requires protocol version 1.7"},
             now);
+        return false;
+      }
+      if (capability == "indicator-effects" && selected < ProtocolVersion{1, 9}) {
+        record_violation(
+            instance,
+            ProtocolError{"/capabilities", "indicator-effects requires protocol version 1.9"}, now);
+        return false;
+      }
+      if (capability == "content-transitions" && selected < ProtocolVersion{1, 9}) {
+        record_violation(instance,
+                         ProtocolError{"/capabilities",
+                                       "content-transitions requires protocol version 1.9"},
+                         now);
         return false;
       }
     }

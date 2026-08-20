@@ -777,7 +777,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     std::string module_id;
     std::optional<std::filesystem::path> manifest_path;
     ProtocolVersion minimum_protocol{1, 0};
-    ProtocolVersion maximum_protocol{1, 8};
+    ProtocolVersion maximum_protocol{1, 9};
     std::expected<std::vector<std::string>, ConfigError> command =
         has_command
             ? parse_command(*module_table, index, source_name)
@@ -817,13 +817,13 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
         }
       }
       if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
-          manifest->minimum_protocol.minor > 8 || manifest->maximum_protocol.minor < 0) {
+          manifest->minimum_protocol.minor > 9 || manifest->maximum_protocol.minor < 0) {
         return std::unexpected(error_at(source_name, base_path + ".module",
                                         "module protocol range is incompatible",
                                         module_table->get("module")));
       }
       minimum_protocol = {1, std::max(0, manifest->minimum_protocol.minor)};
-      maximum_protocol = {1, std::min(8, manifest->maximum_protocol.minor)};
+      maximum_protocol = {1, std::min(9, manifest->maximum_protocol.minor)};
       auto arguments = parse_arguments(*module_table, index, source_name);
       if (!arguments) {
         return std::unexpected(arguments.error());
@@ -961,7 +961,7 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
     return std::unexpected(error_at(source_name, "interaction", "expected a table", node));
   }
   for (const auto &[key, value] : *table) {
-    if (key != "animation_speed" && key != "hover_exit_ms") {
+    if (key != "animation_speed" && key != "hover_exit_ms" && key != "reduced_motion") {
       return std::unexpected(error_at(source_name, "interaction." + std::string{key.str()},
                                       "unknown interaction property", &value));
     }
@@ -991,6 +991,15 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
                                       "value must be between 0 and 2000", hover_node));
     }
     interaction.hover_exit = std::chrono::milliseconds{*hover_exit};
+  }
+
+  if (const auto *reduced_node = table->get("reduced_motion"); reduced_node != nullptr) {
+    const auto reduced = reduced_node->value_exact<bool>();
+    if (!reduced.has_value()) {
+      return std::unexpected(
+          error_at(source_name, "interaction.reduced_motion", "expected a boolean", reduced_node));
+    }
+    interaction.reduced_motion = *reduced;
   }
 
   return interaction;

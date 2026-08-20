@@ -31,6 +31,12 @@ constexpr std::size_t maximum_line_size = std::size_t{1024} * 1024;
 
 enum class PublishResult : std::uint8_t { published, skipped, output_failed };
 
+struct ParsedInit {
+  gisland::ClockCalendarOptions options;
+  int protocol_minor;
+  bool content_transitions;
+};
+
 [[nodiscard]] Json snapshot_json(const gisland::ClockCalendarSnapshot &snapshot) {
   Json weeks = Json::array();
   for (const auto &week : snapshot.weeks) {
@@ -64,7 +70,7 @@ enum class PublishResult : std::uint8_t { published, skipped, output_failed };
   return std::cout.good();
 }
 
-[[nodiscard]] std::expected<gisland::ClockCalendarOptions, std::string>
+[[nodiscard]] std::expected<ParsedInit, std::string>
 parse_init(const Json &message) {
   try {
     if (!message.is_object() || message.value("type", "") != "init") {
@@ -77,10 +83,10 @@ parse_init(const Json &message) {
     const int minimum_minor = minimum.at("minor").get<int>();
     const int maximum_major = maximum.at("major").get<int>();
     const int maximum_minor = maximum.at("minor").get<int>();
-    const bool supports_1_1 =
-        minimum_major == 1 && minimum_minor <= 1 && maximum_major == 1 && maximum_minor >= 1;
-    if (!supports_1_1) {
-      return std::unexpected("protocol 1.1 is not supported by the core");
+    const bool supported_range =
+        minimum_major == 1 && minimum_minor <= 9 && maximum_major == 1 && maximum_minor >= 1;
+    if (!supported_range) {
+      return std::unexpected("protocol range does not overlap 1.1 through 1.9");
     }
     const auto &capabilities = message.at("capabilities");
     if (!capabilities.is_array() || std::ranges::none_of(capabilities, [](const Json &capability) {
@@ -89,6 +95,12 @@ parse_init(const Json &message) {
         })) {
       return std::unexpected("data-snapshots capability is required");
     }
+    const bool content_transitions =
+        minimum_minor <= 9 && maximum_minor >= 9 &&
+        std::ranges::any_of(capabilities, [](const Json &capability) {
+          return capability.is_string() &&
+                 capability.get_ref<const std::string &>() == "content-transitions";
+        });
 
     gisland::ClockCalendarOptions options{
         .locale = message.at("locale").get<std::string>(),
@@ -116,19 +128,24 @@ parse_init(const Json &message) {
         return std::unexpected("unknown configuration property: " + key);
       }
     }
-    return options;
+    return ParsedInit{std::move(options), std::min(maximum_minor, 9), content_transitions};
   } catch (const std::exception &error) {
     return std::unexpected(error.what());
   }
 }
 
-[[nodiscard]] PublishResult publish(gisland::ClockCalendarModel &model, sys_seconds now) {
+[[nodiscard]] PublishResult publish(gisland::ClockCalendarModel &model, sys_seconds now,
+                                    std::optional<std::string_view> expanded_transition = {}) {
   const auto snapshot = model.snapshot(now);
   if (!snapshot) {
     std::cerr << "clock-calendar: " << snapshot.error() << '\n';
     return PublishResult::skipped;
   }
-  return write_json({{"type", "data"}, {"value", snapshot_json(*snapshot)}})
+  Json message{{"type", "data"}, {"value", snapshot_json(*snapshot)}};
+  if (expanded_transition) {
+    message["transitions"] = {{"expanded", *expanded_transition}};
+  }
+  return write_json(message)
              ? PublishResult::published
              : PublishResult::output_failed;
 }
@@ -142,6 +159,8 @@ parse_init(const Json &message) {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] int run() {
   std::optional<gisland::ClockCalendarModel> model;
+  bool content_transitions = false;
+  int protocol_minor = 1;
   std::string input;
   std::array<char, 4096> chunk{};
 
@@ -216,7 +235,9 @@ parse_init(const Json &message) {
           std::cerr << "clock-calendar: " << options.error() << '\n';
           return EXIT_FAILURE;
         }
-        auto created = gisland::ClockCalendarModel::create(std::move(*options),
+        content_transitions = options->content_transitions;
+        protocol_minor = options->protocol_minor;
+        auto created = gisland::ClockCalendarModel::create(std::move(options->options),
                                                            floor<seconds>(system_clock::now()));
         if (!created) {
           std::cerr << "clock-calendar: " << created.error() << '\n';
@@ -225,8 +246,10 @@ parse_init(const Json &message) {
         model.emplace(std::move(*created));
         if (!write_json({{"type", "ready"},
                          {"protocol_major", 1},
-                         {"protocol_minor", 1},
-                         {"capabilities", {"data-snapshots"}}}) ||
+                         {"protocol_minor", protocol_minor},
+                         {"capabilities", content_transitions
+                                              ? Json{"data-snapshots", "content-transitions"}
+                                              : Json{"data-snapshots"}}}) ||
             publish(*model, floor<seconds>(system_clock::now())) != PublishResult::published) {
           return EXIT_FAILURE;
         }
@@ -260,8 +283,14 @@ parse_init(const Json &message) {
               {{"type", "action_result"}, {"action_id", action_id}, {"accepted", *accepted}})) {
         return EXIT_FAILURE;
       }
-      if (*accepted &&
-          publish(*model, floor<seconds>(system_clock::now())) == PublishResult::output_failed) {
+      std::optional<std::string_view> transition;
+      if (content_transitions && action_id == "next-month") {
+        transition = "slide-left";
+      } else if (content_transitions && action_id == "previous-month") {
+        transition = "slide-right";
+      }
+      if (*accepted && publish(*model, floor<seconds>(system_clock::now()), transition) ==
+                           PublishResult::output_failed) {
         return EXIT_FAILURE;
       }
     }
