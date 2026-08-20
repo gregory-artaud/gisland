@@ -94,9 +94,8 @@ TEST_CASE("protocol 1.9 parses independent content transitions") {
 }
 
 TEST_CASE("protocol rejects unknown content transitions and transition views") {
-  for (const auto line : {
-           R"({"type":"data","value":{},"transitions":{"expanded":"zoom"}})",
-           R"({"type":"data","value":{},"transitions":{"other":"crossfade"}})"}) {
+  for (const auto line : {R"({"type":"data","value":{},"transitions":{"expanded":"zoom"}})",
+                          R"({"type":"data","value":{},"transitions":{"other":"crossfade"}})"}) {
     const auto result = gisland::parse_module_message(line);
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().path.starts_with("/transitions/"));

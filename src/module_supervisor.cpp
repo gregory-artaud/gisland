@@ -1064,8 +1064,7 @@ private:
       }
       if (!instance.negotiated_capabilities.contains("content-transitions")) {
         record_violation(instance,
-                         ProtocolError{*path,
-                                       "content-transitions capability was not negotiated"},
+                         ProtocolError{*path, "content-transitions capability was not negotiated"},
                          now);
         return;
       }
@@ -1232,10 +1231,10 @@ private:
         return false;
       }
       if (capability == "content-transitions" && selected < ProtocolVersion{1, 9}) {
-        record_violation(instance,
-                         ProtocolError{"/capabilities",
-                                       "content-transitions requires protocol version 1.9"},
-                         now);
+        record_violation(
+            instance,
+            ProtocolError{"/capabilities", "content-transitions requires protocol version 1.9"},
+            now);
         return false;
       }
     }

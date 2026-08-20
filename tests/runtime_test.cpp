@@ -96,10 +96,9 @@ TEST_CASE("runtime preserves independent data snapshot transitions") {
   REQUIRE(runtime
               .consume(message(
                   "clock",
-                  gisland::DataMessage{
-                      nlohmann::json{{"label", "12:34"}, {"details", "August"}},
-                      {.compact = std::nullopt,
-                       .expanded = gisland::ContentTransition::slide_left}},
+                  gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "August"}},
+                                       {.compact = std::nullopt,
+                                        .expanded = gisland::ContentTransition::slide_left}},
                   now))
               .has_value());
   const auto selections = runtime.selections(now);
