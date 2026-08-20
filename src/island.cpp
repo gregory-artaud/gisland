@@ -265,12 +265,15 @@ ContentVisual ContentCrossfade::compact() const { return compact_; }
 ContentVisual ContentCrossfade::expanded() const { return expanded_; }
 
 void ContextTransition::start(IslandGeometry source, IslandGeometry target,
-                              std::chrono::milliseconds duration, Easing easing) {
+                              std::chrono::milliseconds duration, Easing easing,
+                              ContentTransition content, float slide_distance) {
   source_ = source;
   target_ = target;
   elapsed_seconds_ = 0.0F;
   duration_seconds_ = std::max(std::chrono::duration<float>{duration}.count(), 0.0F);
   easing_ = easing;
+  content_ = content;
+  slide_distance_ = std::max(slide_distance, 0.0F);
   active_ = duration_seconds_ > 0.0F;
   linear_progress_ = active_ ? 0.0F : 1.0F;
   progress_ = linear_progress_;
@@ -321,13 +324,36 @@ bool ContextTransition::active() const { return active_; }
 
 ContextTransitionVisual ContextTransition::visual() const {
   const auto opacity = black_fade_opacity(linear_progress_);
-  return {
+  ContextTransitionVisual result{
       .geometry = interpolate(source_, target_, progress_),
       .outgoing_opacity = opacity.outgoing,
       .incoming_opacity = opacity.incoming,
       .local_outgoing_opacity = 1.0F - progress_,
+      .outgoing_offset_x = 0.0F,
+      .incoming_offset_x = 0.0F,
       .surface_progress = progress_,
   };
+  if (content_ == ContentTransition::slide_left) {
+    result.outgoing_opacity = 1.0F;
+    result.incoming_opacity = 1.0F;
+    result.local_outgoing_opacity = 1.0F;
+    result.outgoing_offset_x = -slide_distance_ * progress_;
+    result.incoming_offset_x = slide_distance_ * (1.0F - progress_);
+  } else if (content_ == ContentTransition::slide_right) {
+    result.outgoing_opacity = 1.0F;
+    result.incoming_opacity = 1.0F;
+    result.local_outgoing_opacity = 1.0F;
+    result.outgoing_offset_x = slide_distance_ * progress_;
+    result.incoming_offset_x = -slide_distance_ * (1.0F - progress_);
+  }
+  if (!active_) {
+    result.outgoing_opacity = 0.0F;
+    result.incoming_opacity = 1.0F;
+    result.local_outgoing_opacity = 0.0F;
+    result.outgoing_offset_x = 0.0F;
+    result.incoming_offset_x = 0.0F;
+  }
+  return result;
 }
 
 HoverController::HoverController(std::chrono::milliseconds exit_tolerance)

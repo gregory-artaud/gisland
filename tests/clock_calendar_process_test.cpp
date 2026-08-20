@@ -165,6 +165,13 @@ private:
   };
 }
 
+[[nodiscard]] gisland::InitMessage transition_init() {
+  auto message = init();
+  message.maximum = {1, 9};
+  message.capabilities.push_back("content-transitions");
+  return message;
+}
+
 } // namespace
 
 TEST_CASE("clock-calendar process negotiates and publishes a live snapshot") {
@@ -261,6 +268,35 @@ TEST_CASE("clock-calendar process resolves options and handles calendar actions"
   const auto rejected = process.read_json();
   CHECK(rejected.at("accepted") == false);
   CHECK_FALSE(process.output_ready(100ms));
+
+  process.send(
+      gisland::serialize_core_message(gisland::ShutdownMessage{.reason = "test", .deadline = 1s}));
+  CHECK(process.wait_for_exit().success());
+}
+
+TEST_CASE("clock-calendar publishes directional expanded transitions only for month navigation") {
+  ModuleProcess process;
+  process.send(gisland::serialize_core_message(transition_init()));
+  const auto ready = process.read_json();
+  CHECK(ready.at("protocol_minor") == 9);
+  CHECK(ready.at("capabilities") ==
+        nlohmann::json::array({"data-snapshots", "content-transitions"}));
+  const auto initial = process.read_json();
+  CHECK_FALSE(initial.contains("transitions"));
+
+  for (const auto &[action, expected] :
+       {std::pair{"next-month", "slide-left"}, std::pair{"previous-month", "slide-right"}}) {
+    process.send(gisland::serialize_core_message(
+        gisland::ActionMessage{.action_id = action, .value = std::nullopt}));
+    CHECK(process.read_json().at("accepted") == true);
+    const auto update = process.read_json();
+    CHECK(update.at("transitions") == nlohmann::json{{"expanded", expected}});
+  }
+
+  process.send(gisland::serialize_core_message(
+      gisland::ActionMessage{.action_id = "today", .value = std::nullopt}));
+  CHECK(process.read_json().at("accepted") == true);
+  CHECK_FALSE(process.read_json().contains("transitions"));
 
   process.send(
       gisland::serialize_core_message(gisland::ShutdownMessage{.reason = "test", .deadline = 1s}));

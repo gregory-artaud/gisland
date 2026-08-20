@@ -296,6 +296,31 @@ TEST_CASE("supervisor emits data snapshots only after capability negotiation") {
   }
 }
 
+TEST_CASE("supervisor gates content transitions on protocol 1.9 capability negotiation") {
+  for (const auto &[instance, mode, negotiated] :
+       {std::tuple{"transition", "content-transition", true},
+        std::tuple{"unnegotiated-transition", "content-transition-without-capability", false}}) {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request(instance, mode);
+    request.init.maximum = {.major = 1, .minor = 9};
+    request.init.capabilities.insert(request.init.capabilities.end(),
+                                     {"data-snapshots", "content-transitions"});
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [instance, negotiated](const auto &observed) {
+      return negotiated ? has_message<gisland::DataMessage>(observed, instance)
+                        : count_events<gisland::ProtocolViolationEvent>(observed, instance) > 0;
+    });
+    CHECK(has_message<gisland::DataMessage>(events, instance) == negotiated);
+    if (!negotiated) {
+      REQUIRE(last_violation(events, instance) != nullptr);
+      CHECK(last_violation(events, instance)->error.path == "/transitions/expanded");
+    }
+    stop_and_wait(supervisor, events, instance);
+  }
+}
+
 TEST_CASE("supervisor emits image publications only after capability negotiation") {
   SECTION("negotiated images are emitted") {
     gisland::ModuleSupervisor supervisor;

@@ -492,6 +492,21 @@ void read_init() {
     }
     return EXIT_SUCCESS;
   }
+  if (mode == "content-transition" || mode == "content-transition-without-capability") {
+    read_init();
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 9}};
+    if (mode == "content-transition") {
+      ready["capabilities"] = {"data-snapshots", "content-transitions"};
+    } else {
+      ready["capabilities"] = {"data-snapshots"};
+    }
+    write_json(ready);
+    write_json({{"type", "data"},
+                {"value", {{"time", "14:35"}}},
+                {"transitions", {{"expanded", "slide-left"}}}});
+    return silent();
+  }
   if (mode == "independent" || mode == "independent-without-capability") {
     read_init();
     nlohmann::json ready{{"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", 4}};

@@ -153,6 +153,29 @@ template <typename Predicate>
   return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::string> transition_path(const ModuleMessage &message) {
+  const ViewTransitions *transitions = std::visit(
+      [](const auto &typed) -> const ViewTransitions * {
+        using Message = std::decay_t<decltype(typed)>;
+        if constexpr (std::is_same_v<Message, PublishMessage> ||
+                      std::is_same_v<Message, DataMessage>) {
+          return &typed.transitions;
+        }
+        return nullptr;
+      },
+      message);
+  if (transitions == nullptr) {
+    return std::nullopt;
+  }
+  if (transitions->compact) {
+    return "/transitions/compact";
+  }
+  if (transitions->expanded) {
+    return "/transitions/expanded";
+  }
+  return std::nullopt;
+}
+
 using namespace std::chrono_literals;
 
 constexpr std::size_t command_capacity = 2048;
@@ -1032,6 +1055,21 @@ private:
                        ProtocolError{"/type", "data-snapshots capability was not negotiated"}, now);
       return;
     }
+    if (const auto path = transition_path(*message); path) {
+      if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 9}) {
+        record_violation(instance,
+                         ProtocolError{*path, "content transition requires protocol version 1.9"},
+                         now);
+        return;
+      }
+      if (!instance.negotiated_capabilities.contains("content-transitions")) {
+        record_violation(instance,
+                         ProtocolError{*path,
+                                       "content-transitions capability was not negotiated"},
+                         now);
+        return;
+      }
+    }
     if (const auto *publish = std::get_if<PublishMessage>(&*message);
         publish != nullptr && !publish->resources.empty() &&
         !instance.negotiated_capabilities.contains("context-images")) {
@@ -1191,6 +1229,13 @@ private:
         record_violation(
             instance,
             ProtocolError{"/capabilities", "indicator-effects requires protocol version 1.9"}, now);
+        return false;
+      }
+      if (capability == "content-transitions" && selected < ProtocolVersion{1, 9}) {
+        record_violation(instance,
+                         ProtocolError{"/capabilities",
+                                       "content-transitions requires protocol version 1.9"},
+                         now);
         return false;
       }
     }

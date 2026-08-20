@@ -113,7 +113,7 @@ enum class ContentAlignment { centered, top_centered };
 void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
                   const IslandGeometry &geometry, const IslandPlacement &placement,
                   Shader blur_shader, int texture_size_location, int blur_radius_location,
-                  ContentAlignment alignment = ContentAlignment::centered) {
+                  ContentAlignment alignment = ContentAlignment::centered, float offset_x = 0.0F) {
   if (visual.opacity <= 0.001F) {
     return;
   }
@@ -127,7 +127,7 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
   const float height = texture_size.y * visual.scale;
   const Rectangle source{0.0F, 0.0F, texture_size.x, -texture_size.y};
   const Rectangle destination{
-      placement.x + ((geometry.width - width) / 2.0F),
+      placement.x + ((geometry.width - width) / 2.0F) + offset_x,
       placement.y +
           (alignment == ContentAlignment::centered ? (geometry.height - height) / 2.0F : 0.0F),
       width,
@@ -212,6 +212,8 @@ struct RenderedContext {
   std::optional<RaylibRichTextBook> expanded_rich_text;
   RenderTexture2D compact_content;
   std::optional<RenderTexture2D> expanded_content;
+  ViewTransitions compact_transitions;
+  ViewTransitions expanded_transitions;
 };
 
 struct RenderedSlot {
@@ -434,12 +436,32 @@ render_context(const RuntimeSelection &compact_selection,
       .expanded_rich_text = std::move(expanded_rich_text),
       .compact_content = compact->content,
       .expanded_content = expanded_content,
+      .compact_transitions = compact_selection.context == nullptr
+                                 ? ViewTransitions{}
+                                 : compact_selection.context->transitions,
+      .expanded_transitions = expanded_selection.context == nullptr
+                                  ? ViewTransitions{}
+                                  : expanded_selection.context->transitions,
   };
 }
 
 [[nodiscard]] std::string environment_or(const char *name, std::string fallback) {
   const char *value = std::getenv(name);
   return value != nullptr && *value != '\0' ? std::string{value} : std::move(fallback);
+}
+
+[[nodiscard]] AnimationStyle effective_animation(const Theme &theme) {
+  AnimationStyle animation = theme.animation();
+  const char *requested = std::getenv("GISLAND_REDUCED_MOTION");
+  if (requested == nullptr ||
+      (std::string_view{requested} != "1" && std::string_view{requested} != "true")) {
+    return animation;
+  }
+  animation.compact_to_expanded_ms = animation.reduced_motion.compact_to_expanded_ms;
+  animation.context_change_ms = animation.reduced_motion.context_change_ms;
+  animation.progress.duration = animation.reduced_motion.progress_duration;
+  animation.content_transition.duration = animation.reduced_motion.content_transition_duration;
+  return animation;
 }
 
 [[nodiscard]] std::string runtime_locale() {
@@ -626,6 +648,21 @@ int Application::run() {
                                     const AnimationStyle &animation,
                                     ContextTransitionKind transition_kind,
                                     bool preserve_compact_content = false) {
+    const bool compact_updated =
+        rendered && rendered->compact_revision != candidate.compact_revision;
+    const bool expanded_updated =
+        rendered && rendered->expanded_revision != candidate.expanded_revision;
+    const bool has_declared_transition =
+        (compact_updated && candidate.compact_transitions.compact) ||
+        (expanded_updated && candidate.expanded_transitions.expanded);
+    const std::optional<ContentTransition> requested_transition =
+        mode == IslandMode::compact
+            ? (compact_updated ? candidate.compact_transitions.compact : std::nullopt)
+            : (expanded_updated ? candidate.expanded_transitions.expanded : std::nullopt);
+    const auto transition_duration =
+        has_declared_transition ? (requested_transition ? animation.content_transition.duration
+                                                        : std::chrono::milliseconds{0})
+                                : animation.context_change_ms;
     if (preserve_compact_content && rendered) {
       std::swap(candidate.compact, rendered->compact);
       std::swap(candidate.compact_images, rendered->compact_images);
@@ -653,7 +690,7 @@ int Application::run() {
 
     std::optional<RenderTexture2D> snapshot;
     if (!preserve_compact_content && rendered && current_surface &&
-        animation.context_change_ms.count() > 0 && !suppress_context_crossfade) {
+        transition_duration.count() > 0 && !suppress_context_crossfade) {
       const auto transition_visual = context_transition.visual();
       auto captured = snapshot_content(
           outgoing_content, context_outgoing_opacity(context_transition_kind, transition_visual),
@@ -712,8 +749,11 @@ int Application::run() {
           transition_kind == ContextTransitionKind::aligned_content_crossfade
               ? ContentAlignment::top_centered
               : ContentAlignment::centered;
-      context_transition.start(current, geometry(target), animation.context_change_ms,
-                               animation.easing);
+      context_transition.start(current, geometry(target), transition_duration,
+                               requested_transition ? animation.content_transition.easing
+                                                    : animation.easing,
+                               requested_transition.value_or(ContentTransition::crossfade),
+                               static_cast<float>(animation.content_transition.distance));
     } else {
       transition_source_surface.reset();
       transition_target_surface.reset();
@@ -843,7 +883,8 @@ int Application::run() {
       const bool preserve_expanded = mode_controller.mode() == IslandMode::expanded &&
                                      candidate_rendered->expanded.has_value();
       replace_rendered(std::move(*candidate_rendered), preserve_expanded,
-                       bootstrap_.theme.animation(), ContextTransitionKind::full_crossfade);
+                       effective_animation(bootstrap_.theme),
+                       ContextTransitionKind::full_crossfade);
     } else {
       clear_outgoing();
       if (rendered) {
@@ -998,8 +1039,9 @@ int Application::run() {
             rendered && preserve_compact_during_expanded_switch(
                             mode, mode_controller.mode(), rendered->compact_key,
                             rendered->expanded_key, compact_key, expanded_key);
-        replace_rendered(std::move(*candidate), preserve_expanded, bootstrap_.theme.animation(),
-                         transition_kind, preserve_compact_content);
+        replace_rendered(std::move(*candidate), preserve_expanded,
+                         effective_animation(bootstrap_.theme), transition_kind,
+                         preserve_compact_content);
         if (expanded_changed) {
           if (selection.expanded.context != nullptr &&
               selection.expanded.context->presentation.has_value() &&
@@ -1166,27 +1208,37 @@ int Application::run() {
         std::cerr << drawn.error().message << '\n';
       }
       if (outgoing_content) {
+        BeginScissorMode(static_cast<int>(std::lround(placement.x)),
+                         static_cast<int>(std::lround(placement.y)),
+                         std::max(1, static_cast<int>(std::lround(current.width))),
+                         std::max(1, static_cast<int>(std::lround(current.height))));
         draw_content(
             *outgoing_content,
             ContentVisual{context_outgoing_opacity(context_transition_kind, transition_visual),
                           0.0F, 1.0F},
             current, placement, blur_shader, texture_size_location, blur_radius_location,
-            context_content_alignment);
+            context_content_alignment, transition_visual.outgoing_offset_x);
+        EndScissorMode();
       }
       const float incoming_opacity =
           context_transition.active()
               ? context_incoming_opacity(context_transition_kind, transition_visual)
               : 1.0F;
+      BeginScissorMode(static_cast<int>(std::lround(placement.x)),
+                       static_cast<int>(std::lround(placement.y)),
+                       std::max(1, static_cast<int>(std::lround(current.width))),
+                       std::max(1, static_cast<int>(std::lround(current.height))));
       draw_content(rendered->compact_content,
                    with_opacity(content_crossfade.compact(), incoming_opacity), current, placement,
                    blur_shader, texture_size_location, blur_radius_location,
-                   context_content_alignment);
+                   context_content_alignment, transition_visual.incoming_offset_x);
       if (rendered->expanded_content) {
         draw_content(*rendered->expanded_content,
                      with_opacity(content_crossfade.expanded(), incoming_opacity), current,
                      placement, blur_shader, texture_size_location, blur_radius_location,
-                     context_content_alignment);
+                     context_content_alignment, transition_visual.incoming_offset_x);
       }
+      EndScissorMode();
       if (button_hover) {
         const LayoutPlan hover_plan{{}, {*button_hover}, {}};
         if (auto drawn = painter.draw_content(

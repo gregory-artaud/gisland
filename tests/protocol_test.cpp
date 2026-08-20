@@ -38,6 +38,8 @@ TEST_CASE("a publish line is parsed into typed scenes") {
   REQUIRE(publish != nullptr);
   CHECK(publish->context_id == "clock");
   CHECK(publish->priority == 7);
+  CHECK_FALSE(publish->transitions.compact.has_value());
+  CHECK_FALSE(publish->transitions.expanded.has_value());
   REQUIRE(publish->expires_in.has_value());
   CHECK(publish->expires_in.value_or(std::chrono::milliseconds{-1}) ==
         std::chrono::milliseconds{1500});
@@ -74,6 +76,31 @@ TEST_CASE("protocol 1.4 parses independent views and presentation intent") {
   REQUIRE(publish->expanded.has_value());
   REQUIRE(publish->presentation.has_value());
   CHECK(publish->presentation->duration == std::chrono::milliseconds{1000});
+}
+
+TEST_CASE("protocol 1.9 parses independent content transitions") {
+  const auto publish = gisland::parse_module_message(
+      R"({"type":"publish","context_id":"calendar","priority":0,"views":{"compact":{"type":"text","value":"12:34","role":"body"},"expanded":{"type":"text","value":"August","role":"body"}},"transitions":{"compact":"crossfade","expanded":"slide-left"}})");
+  REQUIRE(publish.has_value());
+  const auto &typed_publish = std::get<gisland::PublishMessage>(*publish);
+  CHECK(typed_publish.transitions.compact == gisland::ContentTransition::crossfade);
+  CHECK(typed_publish.transitions.expanded == gisland::ContentTransition::slide_left);
+
+  const auto data = gisland::parse_module_message(
+      R"({"type":"data","value":{"month":"August"},"transitions":{"expanded":"slide-right"}})");
+  REQUIRE(data.has_value());
+  CHECK(std::get<gisland::DataMessage>(*data).transitions.expanded ==
+        gisland::ContentTransition::slide_right);
+}
+
+TEST_CASE("protocol rejects unknown content transitions and transition views") {
+  for (const auto line : {
+           R"({"type":"data","value":{},"transitions":{"expanded":"zoom"}})",
+           R"({"type":"data","value":{},"transitions":{"other":"crossfade"}})"}) {
+    const auto result = gisland::parse_module_message(line);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path.starts_with("/transitions/"));
+  }
 }
 
 TEST_CASE("protocol 1.7 parses compact HUD style icon role and progress source") {

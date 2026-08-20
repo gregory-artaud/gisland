@@ -6,7 +6,7 @@ command = ["gisland-clock-calendar"]
 [protocol]
 major = 1
 minimum_minor = 1
-maximum_minor = 1
+maximum_minor = 9
 
 [defaults]
 week_start = "monday"
