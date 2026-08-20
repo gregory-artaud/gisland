@@ -221,6 +221,9 @@ int main(int argc, char **argv) {
     }
     auto result = (*transport)->advance(std::span{descriptors}.first(transport_descriptors.size()));
     if (!result) {
+      if (result.error().code == gisland::LuaTransportErrorCode::input_eof && (*host)->stopped()) {
+        break;
+      }
       std::cerr << "gisland-lua-host: " << result.error().message << '\n';
       return EXIT_FAILURE;
     }

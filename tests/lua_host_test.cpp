@@ -117,8 +117,15 @@ void write_all(int descriptor, std::string_view value) {
 void configure_lgi_test_environment() {
 #ifdef GISLAND_TEST_LGI_PREFIX
   const std::string prefix = GISLAND_TEST_LGI_PREFIX;
-  const auto lua_path = prefix + "/share/lua/5.4/?.lua;" + prefix + "/share/lua/5.4/?/init.lua;;";
-  const auto lua_cpath = prefix + "/lib/lua/5.4/?.so;;";
+  const auto lua_path = prefix + "/share/lua/5.4/?.lua;" + prefix + "/share/lua/5.4/?/init.lua";
+  auto lua_cpath = prefix + "/lib/lua/5.4/?.so;" + prefix + "/lib64/lua/5.4/?.so";
+  if (std::filesystem::is_directory(prefix + "/lib")) {
+    for (const auto &entry : std::filesystem::directory_iterator{prefix + "/lib"}) {
+      if (std::filesystem::is_directory(entry.path() / "lua/5.4")) {
+        lua_cpath += ";" + (entry.path() / "lua/5.4/?.so").string();
+      }
+    }
+  }
   if (::setenv("LUA_PATH", lua_path.c_str(), 1) != 0 ||
       ::setenv("LUA_CPATH", lua_cpath.c_str(), 1) != 0) {
     _exit(126);
@@ -349,6 +356,31 @@ TEST_CASE("lua host transport leaves input unread while output is pending") {
   REQUIRE((*transport)->advance(descriptors).has_value());
   REQUIRE(records.size() == 1);
   CHECK(records.front().at("sequence") == 1);
+}
+
+TEST_CASE("lua host transport bounds no-output input processing per turn") {
+  Pipe input;
+  Pipe output;
+  std::size_t handled = 0;
+  auto transport = gisland::LuaTransport::create(
+      input.read_fd(), output.write_fd(),
+      [&handled](const nlohmann::json &, const gisland::LuaTransport::Emit &) {
+        ++handled;
+        return gisland::LuaTransport::Result{};
+      });
+  REQUIRE(transport.has_value());
+
+  constexpr std::size_t record_count = 200;
+  std::string input_text;
+  for (std::size_t index = 0; index < record_count; ++index) {
+    input_text += "{\"type\":\"noop\"}\n";
+  }
+  write_all(input.write_fd(), input_text);
+
+  REQUIRE((*transport)->poll_once(0).has_value());
+  CHECK(handled > 0);
+  CHECK(handled < record_count);
+  CHECK((*transport)->has_buffered_input());
 }
 
 TEST_CASE("lua host transport detects output failure while input is disabled") {
@@ -1346,8 +1378,11 @@ TEST_CASE("lua_host_timer and lua_host_data emit deterministically",
   CHECK(records.back().at("value").at("sequence") == 2);
 
   REQUIRE((*host)->run_due(start + 10ms, emit).has_value());
-  REQUIRE(records.size() == 5);
+  REQUIRE(records.size() == 4);
   CHECK(records[3].at("value").at("sequence") == 3);
+
+  REQUIRE((*host)->run_due(start + 10ms, emit).has_value());
+  REQUIRE(records.size() == 5);
   CHECK(records[4].at("value").at("sequence") == 4);
 
   REQUIRE((*host)->run_due(start + 20ms, emit).has_value());
@@ -1385,6 +1420,35 @@ TEST_CASE("lua_host_timer defers nested zero-delay callbacks to the next turn",
   REQUIRE((*host)->run_due(start, emit).has_value());
   REQUIRE(records.size() == 3);
   CHECK(records.back().at("value").at("sequence") == 2);
+}
+
+TEST_CASE("lua_host_timer yields after a due callback queues output", "[lua_host_timer]") {
+  using namespace std::chrono_literals;
+  auto host = gisland::LuaHost::load("due-output-limit.lua", R"lua(return gisland.module {
+    every = '1ms',
+    init = function()
+      for index = 1, 256 do
+        gisland.defer(function() gisland.data { deferred = index } end)
+      end
+    end,
+    update = function() return { periodic = true } end,
+  })lua");
+  REQUIRE(host.has_value());
+  std::size_t queued = 0;
+  const auto emit = [&queued](nlohmann::json) -> std::expected<void, gisland::LuaHostError> {
+    if (queued == gisland::LuaTransport::max_output_messages) {
+      return std::unexpected(gisland::LuaHostError{gisland::LuaHostErrorCode::output_error,
+                                                   "output queue limit exceeded"});
+    }
+    ++queued;
+    return {};
+  };
+  const auto start = gisland::LuaHost::TimePoint{};
+  REQUIRE((*host)->handle(init_record(), emit, start).has_value());
+  queued = 0;
+
+  REQUIRE((*host)->run_due(start + 1ms, emit).has_value());
+  CHECK(queued == 1);
 }
 
 TEST_CASE("lua host poll timeout rounds sub-millisecond deadlines up", "[lua_host_timer]") {
@@ -1559,6 +1623,34 @@ TEST_CASE("lua_host_lifecycle process flushes ready before lua_host_timer deferr
   int status = 0;
   REQUIRE(::waitpid(child, &status, 0) == child);
   CHECK(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("lua host process exits cleanly after shutdown followed by stdin EOF",
+          "[lua_host_lifecycle][lua_host_transport]") {
+  TemporaryDirectory temporary;
+  const auto entry = temporary.path() / "shutdown-eof.lua";
+  write_file(entry, "return gisland.module {}\n");
+  Pipe input;
+  Pipe output;
+  const pid_t child = ::fork();
+  REQUIRE(child >= 0);
+  if (child == 0) {
+    static_cast<void>(::dup2(input.read_fd(), STDIN_FILENO));
+    static_cast<void>(::dup2(output.write_fd(), STDOUT_FILENO));
+    ::execl(GISLAND_LUA_HOST_PATH, GISLAND_LUA_HOST_PATH, entry.c_str(), nullptr);
+    _exit(127);
+  }
+
+  write_all(input.write_fd(), init_record().dump() + "\n");
+  write_all(input.write_fd(),
+            nlohmann::json{{"type", "shutdown"}, {"reason", "test"}, {"deadline_ms", 100}}.dump() +
+                "\n");
+  input.close_write();
+
+  int status = 0;
+  REQUIRE(::waitpid(child, &status, 0) == child);
+  REQUIRE(WIFEXITED(status));
   CHECK(WEXITSTATUS(status) == 0);
 }
 

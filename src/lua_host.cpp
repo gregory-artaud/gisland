@@ -417,6 +417,7 @@ public:
     }
     current_emit_ = &emit;
     current_time_ = now;
+    emitted_this_dispatch_ = false;
     const std::uint64_t maximum_sequence = next_timer_sequence_;
     while (true) {
       auto iterator = timers_.end();
@@ -440,8 +441,11 @@ public:
         current_emit_ = nullptr;
         return std::unexpected(called.error());
       }
+      if (emitted_this_dispatch_) {
+        break;
+      }
     }
-    if (periodic_deadline_ && *periodic_deadline_ <= now) {
+    if (!emitted_this_dispatch_ && periodic_deadline_ && *periodic_deadline_ <= now) {
       auto updated = invoke_update();
       if (!updated) {
         current_emit_ = nullptr;
@@ -905,6 +909,9 @@ private:
           error(LuaHostErrorCode::output_error, "Lua API called outside host dispatch"));
     }
     auto emitted = (*current_emit_)(std::move(record));
+    if (emitted) {
+      emitted_this_dispatch_ = true;
+    }
     if (!emitted && external_dispatch_ && !external_dispatch_error_) {
       external_dispatch_error_ = emitted.error();
     }
@@ -978,6 +985,7 @@ private:
   TimePoint current_time_for_record_{};
   std::uint64_t next_timer_sequence_{};
   bool initializing_{};
+  bool emitted_this_dispatch_{};
 };
 
 std::expected<std::unique_ptr<LuaHost>, LuaHostError> LuaHost::load(const std::string &entry_path) {

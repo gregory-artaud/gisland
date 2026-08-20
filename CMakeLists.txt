@@ -110,12 +110,26 @@ if(GISLAND_LGI_ROOT)
   endif()
   set(
     GISLAND_LGI_LUA_PATH
-    "${GISLAND_LGI_PREFIX}/share/lua/5.4/?.lua;${GISLAND_LGI_PREFIX}/share/lua/5.4/?/init.lua;;"
+    "${GISLAND_LGI_PREFIX}/share/lua/5.4/?.lua;${GISLAND_LGI_PREFIX}/share/lua/5.4/?/init.lua"
   )
-  set(GISLAND_LGI_LUA_CPATH "${GISLAND_LGI_PREFIX}/lib/lua/5.4/?.so;;")
+  set(
+    GISLAND_LGI_NATIVE_PATHS
+    "${GISLAND_LGI_PREFIX}/lib/lua/5.4/?.so"
+    "${GISLAND_LGI_PREFIX}/lib64/lua/5.4/?.so"
+  )
+  file(GLOB GISLAND_LGI_MULTIARCH_LIBDIRS LIST_DIRECTORIES true
+       "${GISLAND_LGI_PREFIX}/lib/*")
+  foreach(GISLAND_LGI_LIBDIR IN LISTS GISLAND_LGI_MULTIARCH_LIBDIRS)
+    if(IS_DIRECTORY "${GISLAND_LGI_LIBDIR}/lua/5.4")
+      list(APPEND GISLAND_LGI_NATIVE_PATHS "${GISLAND_LGI_LIBDIR}/lua/5.4/?.so")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES GISLAND_LGI_NATIVE_PATHS)
+  list(JOIN GISLAND_LGI_NATIVE_PATHS ";" GISLAND_LGI_LUA_CPATH)
   execute_process(
     COMMAND
-      ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+      ${CMAKE_COMMAND} -E env "GISLAND_LGI_TEST_PREFIX=${GISLAND_LGI_PREFIX}"
+      "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
       "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${LUA54_EXECUTABLE}"
       "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
     RESULT_VARIABLE GISLAND_LGI_CHECK_RESULT
@@ -131,12 +145,12 @@ endif()
 if(NOT GISLAND_LGI_CHECK_RESULT EQUAL 0)
   message(
     FATAL_ERROR
-      "gisland requires Lua 5.4-compatible lgi with GLib, Gio, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0; install lgi and the required typelibs for "
+      "gisland requires Lua 5.4-compatible lgi with GLib, Gio, GioUnix 2.0, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0; install lgi and the required typelibs for "
       "${LUA54_EXECUTABLE} or set GISLAND_LGI_ROOT to a staged installation. "
       "Probe error: ${GISLAND_LGI_CHECK_ERROR}"
   )
 endif()
-message(STATUS "Found a Lua 5.4-compatible lgi with GLib, Gio, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0")
+message(STATUS "Found a Lua 5.4-compatible lgi with GLib, Gio, GioUnix 2.0, Json-GLib 1.0, GdkPixbuf 2.0, Rsvg 2.0, and Gtk 3.0")
 
 file(GLOB_RECURSE GISLAND_ASSET_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/*")
 set(GISLAND_ASSET_STAMP "${PROJECT_BINARY_DIR}/assets/.stamp")
@@ -375,9 +389,21 @@ if(BUILD_TESTING)
     add_test(
       NAME lgi_runtime_check
       COMMAND
-        ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
+        ${CMAKE_COMMAND} -E env "GISLAND_LGI_TEST_PREFIX=${GISLAND_LGI_PREFIX}"
+        "LUA_PATH=${GISLAND_LGI_LUA_PATH}"
         "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${LUA54_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/check_lgi.lua"
+    )
+    add_test(
+      NAME lgi_staged_layouts
+      COMMAND
+        ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DBINARY_DIR=${PROJECT_BINARY_DIR}/lgi-layout-test
+        -DSOURCE_PREFIX=${GISLAND_LGI_PREFIX}
+        -DRAYLIB_SOURCE_DIR=${raylib_SOURCE_DIR}
+        -DNLOHMANN_JSON_SOURCE_DIR=${nlohmann_json_SOURCE_DIR}
+        -DTOMLPLUSPLUS_SOURCE_DIR=${tomlplusplus_SOURCE_DIR} -P
+        ${PROJECT_SOURCE_DIR}/tests/lgi_layout_test.cmake
     )
   else()
     add_test(

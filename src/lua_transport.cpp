@@ -23,6 +23,8 @@
 namespace gisland {
 namespace {
 
+constexpr std::size_t max_input_records_per_turn = 64;
+
 [[nodiscard]] LuaTransportError error(LuaTransportErrorCode code, std::string message) {
   return {code, std::move(message)};
 }
@@ -125,15 +127,16 @@ public:
       }
     }
     const bool read_enabled = descriptors[0].fd == input_fd_;
+    std::size_t input_budget = max_input_records_per_turn;
     if (read_enabled && !output_.wants_write()) {
-      auto processed = process_buffered_lines();
+      auto processed = process_buffered_lines(input_budget);
       if (!processed) {
         return processed;
       }
     }
     if (read_enabled && !output_.wants_write() &&
         (descriptors[0].revents & (POLLIN | POLLHUP)) != 0) {
-      auto read = read_input();
+      auto read = read_input(input_budget);
       if (!read) {
         return read;
       }
@@ -164,9 +167,9 @@ public:
   [[nodiscard]] bool has_buffered_input() const noexcept { return !buffered_lines_.empty(); }
 
 private:
-  [[nodiscard]] Result read_input() {
+  [[nodiscard]] Result read_input(std::size_t &input_budget) {
     std::array<std::byte, 64 * 1024> buffer{};
-    while (true) {
+    while (input_budget > 0) {
       const auto count = ::read(input_fd_, buffer.data(), buffer.size());
       if (count > 0) {
         const auto lines = input_.append(
@@ -177,11 +180,7 @@ private:
         for (auto &line : *lines) {
           buffered_lines_.push_back(std::move(line.text));
         }
-        auto processed = process_buffered_lines();
-        if (!processed || output_.wants_write()) {
-          return processed;
-        }
-        continue;
+        return process_buffered_lines(input_budget);
       }
       if (count == 0) {
         const auto trailing = input_.finish();
@@ -205,12 +204,14 @@ private:
       return std::unexpected(error(LuaTransportErrorCode::read_failed,
                                    std::string{"read failed: "} + std::strerror(errno)));
     }
+    return {};
   }
 
-  [[nodiscard]] Result process_buffered_lines() {
-    while (!buffered_lines_.empty() && !output_.wants_write()) {
+  [[nodiscard]] Result process_buffered_lines(std::size_t &input_budget) {
+    while (input_budget > 0 && !buffered_lines_.empty() && !output_.wants_write()) {
       auto line = std::move(buffered_lines_.front());
       buffered_lines_.pop_front();
+      --input_budget;
       auto handled = handle_line(line);
       if (!handled) {
         return handled;
