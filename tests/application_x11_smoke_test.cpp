@@ -720,6 +720,8 @@ TEST_CASE("application renders protocol 1.3 rich notification scenes from an ext
   }
   Display *display = XOpenDisplay(nullptr);
   REQUIRE(display != nullptr);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
   TemporaryConfig config;
   write_text(config.config_path(),
              "monitor = \"primary\"\n"
