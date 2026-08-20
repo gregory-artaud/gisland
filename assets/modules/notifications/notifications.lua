@@ -1,6 +1,7 @@
 local lgi = require("lgi")
 local Gio = lgi.Gio
 local GLib = lgi.GLib
+local GioUnix = lgi.require("GioUnix", "2.0")
 local GdkPixbuf = lgi.require("GdkPixbuf", "2.0")
 local Json = lgi.require("Json", "1.0")
 local Gtk = lgi.require("Gtk", "3.0")
@@ -25,9 +26,11 @@ local MAX_MARKUP_DEPTH = 16
 local MAX_MARKUP_ELEMENTS = 128
 local MAX_IMAGE_DIMENSION = 512
 local MAX_IMAGE_INPUT_BYTES = 4 * 1024 * 1024
-local MAX_IMAGE_FILE_BYTES = 8 * 1024 * 1024
+local MAX_IMAGE_FILE_BYTES = 4 * 1024 * 1024
 local MAX_RESOURCE_COUNT = 16
 local MAX_RESOURCE_BYTES = 4 * 1024 * 1024
+-- Zero-timeout notifications are persistent, but the module and core must retain bounded state.
+local MAX_LIVE_NOTIFICATIONS = 128
 local MAX_HISTORY_LIMIT = 1000
 local MAX_HISTORY_TEXT_BYTES = 4096
 local MAX_HISTORY_FILE_BYTES = 1024 + MAX_HISTORY_LIMIT * (18 * MAX_HISTORY_TEXT_BYTES + 256)
@@ -67,6 +70,7 @@ local stopped = false
 local next_id = 1
 local live = {}
 local live_count = 0
+local live_order = {}
 local routes = {}
 local timers = {}
 local history = {}
@@ -325,20 +329,69 @@ local function local_path(value)
   return value
 end
 
-local function regular_file(path, maximum)
-  local file = Gio.File.new_for_path(path)
-  local info = file:query_info("standard::type,standard::size", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, nil)
-  if tostring(info:get_file_type()) ~= "REGULAR" then error("image is not a regular file") end
-  local size = math.tointeger(info:get_size())
-  if not size or size < 0 or size > maximum then error("image file exceeds the byte limit") end
-  return size
+local FILE_IDENTITY_ATTRIBUTES = "standard::type,standard::size,unix::device,unix::inode"
+
+local function read_regular_file(path, maximum, description)
+  local flags = 0x800 + 0x20000 + 0x80000
+  local fd = math.tointeger(GLib.open(path, flags, 0))
+  assert(fd ~= nil and fd >= 0, "cannot open " .. description)
+  local stream
+  local ok, result = pcall(function()
+    local file = Gio.File.new_for_path("/proc/self/fd/" .. fd)
+    local info = assert(file:query_info("standard::type,standard::size", Gio.FileQueryInfoFlags.NONE, nil))
+    assert(tostring(info:get_file_type()) == "REGULAR", description .. " is not a regular file")
+    local size = math.tointeger(info:get_size())
+    assert(size ~= nil and size >= 0 and size <= maximum, description .. " exceeds the byte limit")
+
+    stream = assert(GioUnix.InputStream.new(fd, true))
+    fd = nil
+    local contents = assert(stream:read_bytes(maximum + 1, nil)):get_data()
+    assert(#contents <= maximum, description .. " changed while reading")
+    return contents
+  end)
+  if stream ~= nil then
+    pcall(function() stream:close(nil) end)
+  elseif fd ~= nil then
+    GLib.close(fd)
+  end
+  if not ok then error(result, 0) end
+  return result
 end
 
-local function validate_svg(path, size)
-  local stream = assert(Gio.File.new_for_path(path):read(nil))
-  local bytes = assert(stream:read_bytes(size + 1, nil)):get_data()
+local function read_image_file(path)
+  local file = Gio.File.new_for_path(path)
+  local expected = file:query_info(
+    FILE_IDENTITY_ATTRIBUTES, Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, nil)
+  if tostring(expected:get_file_type()) ~= "REGULAR" then error("image is not a regular file") end
+  local expected_size = math.tointeger(expected:get_size())
+  if not expected_size or expected_size < 0 or expected_size > MAX_IMAGE_FILE_BYTES then
+    error("image file exceeds the byte limit")
+  end
+  local stream = assert(file:read(nil))
+  local opened = stream:query_info(FILE_IDENTITY_ATTRIBUTES, nil)
+  local opened_size = math.tointeger(opened:get_size())
+  if tostring(opened:get_file_type()) ~= "REGULAR" or opened_size ~= expected_size or
+      opened:get_attribute_uint64("unix::device") ~= expected:get_attribute_uint64("unix::device") or
+      opened:get_attribute_uint64("unix::inode") ~= expected:get_attribute_uint64("unix::inode") then
+    stream:close(nil)
+    error("image file changed while opening")
+  end
+  local chunks = {}
+  local total = 0
+  while total <= MAX_IMAGE_FILE_BYTES do
+    local chunk = assert(stream:read_bytes(
+      math.min(64 * 1024, MAX_IMAGE_FILE_BYTES + 1 - total), nil)):get_data()
+    if #chunk == 0 then break end
+    chunks[#chunks + 1] = chunk
+    total = total + #chunk
+  end
   stream:close(nil)
-  if #bytes > size then error("image file changed while reading") end
+  if total > MAX_IMAGE_FILE_BYTES then error("image file exceeds the byte limit") end
+  if total ~= opened_size then error("image file changed while reading") end
+  return table.concat(chunks)
+end
+
+local function validate_svg(bytes)
   local lowered = bytes:lower()
   if lowered:find("<!doctype", 1, true) or lowered:find("<!entity", 1, true) then
     error("unsafe SVG declaration")
@@ -350,30 +403,41 @@ local function validate_svg(path, size)
   end
 end
 
-local function looks_like_svg(path, size)
-  local stream = assert(Gio.File.new_for_path(path):read(nil))
-  local prefix = assert(stream:read_bytes(math.min(size, 4096), nil)):get_data():lower()
-  stream:close(nil)
-  return prefix:find("<svg", 1, true) ~= nil
+local function looks_like_svg(bytes)
+  return bytes:sub(1, 4096):lower():find("<svg", 1, true) ~= nil
 end
 
 local function load_image_file(value)
   local path = local_path(value)
-  local size = regular_file(path, MAX_IMAGE_FILE_BYTES)
-  if path:lower():match("%.svgz$") then error("compressed SVG images are unsupported") end
-  if path:lower():match("%.svg$") or looks_like_svg(path, size) then validate_svg(path, size) end
-  local _, source_width, source_height = GdkPixbuf.Pixbuf.get_file_info(path)
-  if not source_width or not source_height or source_width <= 0 or source_height <= 0 or
-      source_width > 1000000 or source_height > 1000000 then
-    error("image dimensions are invalid")
+  local bytes = read_image_file(path)
+  if path:lower():match("%.svgz$") or bytes:sub(1, 2) == "\31\139" then
+    error("compressed SVG images are unsupported")
   end
-  local pixbuf
-  if source_width > MAX_IMAGE_DIMENSION or source_height > MAX_IMAGE_DIMENSION then
-    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-      path, MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, true)
-  else
-    pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+  if path:lower():match("%.svg$") or looks_like_svg(bytes) then validate_svg(bytes) end
+  local invalid_dimensions = false
+  local loader = GdkPixbuf.PixbufLoader.new()
+  loader.on_size_prepared = function(candidate, width, height)
+    if width <= 0 or height <= 0 or width > 1000000 or height > 1000000 then
+      invalid_dimensions = true
+      candidate:set_size(1, 1)
+      return
+    end
+    if width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION then
+      local scale = math.min(MAX_IMAGE_DIMENSION / width, MAX_IMAGE_DIMENSION / height)
+      candidate:set_size(math.max(1, math.floor(width * scale)),
+        math.max(1, math.floor(height * scale)))
+    end
   end
+  assert(loader:write_bytes(GLib.Bytes.new(bytes)))
+  assert(loader:close())
+  if invalid_dimensions then error("image dimensions are invalid") end
+  local format = assert(loader:get_format(), "image format is invalid")
+  local image_mime = false
+  for _, mime in ipairs(format:get_mime_types()) do
+    if mime:match("^image/") then image_mime = true break end
+  end
+  if not image_mime then error("image MIME type is unsupported") end
+  local pixbuf = assert(loader:get_pixbuf(), "image decode failed")
   local pixels = pixbuf:read_pixel_bytes():get_data()
   return normalize_raw_image {
     pixbuf:get_width(), pixbuf:get_height(), pixbuf:get_rowstride(), pixbuf:get_has_alpha(),
@@ -415,8 +479,7 @@ local function desktop_entry_icon(name)
       end
     end
     if GLib.file_test(candidate, "IS_REGULAR") then
-      regular_file(candidate, 1024 * 1024)
-      local contents = assert(GLib.file_get_contents(candidate))
+      local contents = read_regular_file(candidate, 1024 * 1024, "desktop entry")
       local in_entry = false
       for line in contents:gmatch("[^\r\n]+") do
         if line:match("^%[") then in_entry = line == "[Desktop Entry]" end
@@ -899,9 +962,9 @@ local function reset_history()
 end
 
 local function close_overlay()
-  local host = arg and arg[0] or "gisland-lua-host"
-  local directory = host:match("^(.*)/[^/]+$")
-  local control = directory and (directory .. "/gislandctl") or "gislandctl"
+  local directory = os.getenv("GISLAND_LUA_HOST_BINDIR")
+  if not directory or directory == "" then return end
+  local control = directory .. "/gislandctl"
   local flags = Gio.SubprocessFlags.STDOUT_SILENCE + Gio.SubprocessFlags.STDERR_SILENCE
   local ok, process = pcall(Gio.Subprocess.new, { control, "close" }, flags)
   if ok then
@@ -970,6 +1033,9 @@ local function close_notification(id, reason)
   if not notification then return false end
   live[id] = nil
   live_count = live_count - 1
+  for index, candidate in ipairs(live_order) do
+    if candidate == id then table.remove(live_order, index) break end
+  end
   cancel_notification_timer(id)
   routes[id] = nil
   history_sequences[id] = nil
@@ -1012,11 +1078,17 @@ local function notify(values)
   }
   local app_image = resolve_app_image(hints, app_icon)
   local publication, routing = notification_publication(notification, app_image)
-  gisland.publish(publication)
   local replacing = live[id] ~= nil
+  if not replacing and live_count >= MAX_LIVE_NOTIFICATIONS then
+    close_notification(live_order[1], 4)
+  end
+  gisland.publish(publication)
   if replacing then cancel_notification_timer(id) end
   live[id] = notification
-  if not replacing then live_count = live_count + 1 end
+  if not replacing then
+    live_count = live_count + 1
+    live_order[#live_order + 1] = id
+  end
   routes[id] = routing
   if notification.transient then remove_history(id) else add_history(notification) end
   if history_visible_count > 0 then gisland.publish(history_publication()) end

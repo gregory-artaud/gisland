@@ -183,8 +183,13 @@ class ModuleProcess:
         )
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
-        self.send(init)
-        self.ready = self.next_record()
+        try:
+            self.send(init)
+            self.ready = self.next_record()
+        except Exception:
+            self.process.kill()
+            self.process.wait()
+            raise
         if self.ready.get("type") != "ready":
             raise AssertionError(f"expected ready, got {self.ready!r}")
 
@@ -666,9 +671,102 @@ class BatteryContract(unittest.TestCase):
         state_path.write_text("not json\n", encoding="utf-8")
         self.upower.device["Percentage"] = 9.0
         records = [self.start(), *self.module.collect()]
-        self.assertEqual(records[1]["context_id"], "battery-persistent")
+        self.assertTrue(
+            any(record.get("context_id") == "battery-persistent" for record in records)
+        )
         self.assertEqual(
             json.loads(state_path.read_text(encoding="utf-8"))["emitted"], [10, 20]
+        )
+
+    def test_oversized_cycle_state_is_ignored_before_reading(self):
+        state_path = self.root / "state" / "gisland" / "battery-cycle.json"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(
+            '{"version":1,"emitted":[10,20],"previous_on_battery":true}'
+            + " " * (64 * 1024),
+            encoding="utf-8",
+        )
+        self.upower.device["Percentage"] = 9.0
+
+        records = [self.start(), *self.module.collect()]
+
+        self.assertTrue(
+            any(record.get("context_id") == "battery-persistent" for record in records)
+        )
+        self.assertTrue(
+            any(
+                record.get("type") == "log"
+                and "cannot load battery state" in record.get("message", "")
+                for record in records
+            )
+        )
+
+    def test_non_regular_cycle_state_is_ignored(self):
+        state_path = self.root / "state" / "gisland" / "battery-cycle.json"
+        state_path.mkdir(parents=True)
+        self.upower.device["Percentage"] = 9.0
+
+        records = [self.start(), *self.module.collect()]
+
+        self.assertTrue(
+            any(record.get("context_id") == "battery-persistent" for record in records)
+        )
+        self.assertTrue(
+            any(
+                record.get("type") == "log"
+                and "cannot load battery state" in record.get("message", "")
+                for record in records
+            )
+        )
+        self.assertTrue(state_path.is_dir())
+
+    def test_symlink_cycle_state_is_ignored_without_following_target(self):
+        state_path = self.root / "state" / "gisland" / "battery-cycle.json"
+        state_path.parent.mkdir(parents=True)
+        target = self.root / "battery-target.json"
+        target.write_text(
+            '{"version":1,"emitted":[10,20],"previous_on_battery":true}\n',
+            encoding="utf-8",
+        )
+        state_path.symlink_to(target)
+        self.upower.device["Percentage"] = 9.0
+
+        records = [self.start(), *self.module.collect()]
+
+        self.assertTrue(
+            any(record.get("context_id") == "battery-persistent" for record in records)
+        )
+        self.assertTrue(
+            any(
+                record.get("type") == "log"
+                and "cannot load battery state" in record.get("message", "")
+                for record in records
+            )
+        )
+        self.assertEqual(
+            target.read_text(encoding="utf-8"),
+            '{"version":1,"emitted":[10,20],"previous_on_battery":true}\n',
+        )
+
+    def test_fifo_cycle_state_is_rejected_without_blocking(self):
+        state_path = self.root / "state" / "gisland" / "battery-cycle.json"
+        state_path.parent.mkdir(parents=True)
+        os.mkfifo(state_path)
+        self.upower.device["Percentage"] = 9.0
+
+        started = time.monotonic()
+        records = [self.start(), *self.module.collect()]
+
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertTrue(
+            any(record.get("context_id") == "battery-persistent" for record in records)
+        )
+        self.assertTrue(
+            any(
+                record.get("type") == "log"
+                and "cannot load battery state" in record.get("message", "")
+                for record in records
+            )
         )
 
     def test_cycle_state_requires_the_exact_strict_schema(self):
@@ -691,7 +789,12 @@ class BatteryContract(unittest.TestCase):
             with self.subTest(value=value):
                 state_path.write_text(value + "\n", encoding="utf-8")
                 records = [self.start(), *self.module.collect()]
-                self.assertEqual(records[1]["context_id"], "battery-persistent")
+                self.assertTrue(
+                    any(
+                        record.get("context_id") == "battery-persistent"
+                        for record in records
+                    )
+                )
                 self.assertEqual(
                     json.loads(state_path.read_text(encoding="utf-8")),
                     {
@@ -721,7 +824,9 @@ class BatteryContract(unittest.TestCase):
             ),
             *self.module.collect(),
         ]
-        self.assertEqual(records[1]["context_id"], "battery-persistent")
+        self.assertTrue(
+            any(record.get("context_id") == "battery-persistent" for record in records)
+        )
         self.assertEqual(
             json.loads(state_path.read_text(encoding="utf-8"))["emitted"], [12, 25]
         )

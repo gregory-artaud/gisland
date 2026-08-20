@@ -1,7 +1,10 @@
 local lgi = require("lgi")
 local Gio = lgi.Gio
 local GLib = lgi.GLib
+local GioUnix = lgi.require("GioUnix", "2.0")
 local Json = lgi.require("Json", "1.0")
+
+local MAX_STATE_FILE_BYTES = 4096
 
 local options = {
   warning_percent = 20,
@@ -169,11 +172,42 @@ local function state_path()
   return root .. "/gisland/battery-cycle.json"
 end
 
+local function read_state_file(path)
+  -- Linux open flags: O_NONBLOCK prevents special files from stalling startup,
+  -- while O_NOFOLLOW keeps the validation and bounded read on one object.
+  local flags = 0x800 + 0x20000 + 0x80000
+  local fd = math.tointeger(GLib.open(path, flags, 0))
+  assert(fd ~= nil and fd >= 0, "cannot open battery state")
+  local stream
+  local ok, result = pcall(function()
+    local file = Gio.File.new_for_path("/proc/self/fd/" .. fd)
+    local info = assert(file:query_info(
+      "standard::type,standard::size", Gio.FileQueryInfoFlags.NONE, nil))
+    assert(tostring(info:get_file_type()) == "REGULAR", "battery state is not a regular file")
+    local size = math.tointeger(info:get_size())
+    assert(size ~= nil and size >= 0 and size <= MAX_STATE_FILE_BYTES,
+      "battery state exceeds the byte limit")
+
+    stream = assert(GioUnix.InputStream.new(fd, true))
+    fd = nil
+    local contents = assert(stream:read_bytes(MAX_STATE_FILE_BYTES + 1, nil)):get_data()
+    assert(#contents <= MAX_STATE_FILE_BYTES, "battery state changed while reading")
+    return contents
+  end)
+  if stream ~= nil then
+    pcall(function() stream:close(nil) end)
+  elseif fd ~= nil then
+    GLib.close(fd)
+  end
+  if not ok then error(result, 0) end
+  return result
+end
+
 local function load_state()
   emitted = {}
   previous_on_battery = nil
   local ok, loaded_emitted, loaded_previous = pcall(function()
-    local value = assert(GLib.file_get_contents(state_path()))
+    local value = read_state_file(state_path())
     local parser = Json.Parser.new()
     assert(parser:load_from_data(value, -1), "invalid JSON")
     local root = parser:get_root()
@@ -226,6 +260,8 @@ local function load_state()
   if ok then
     emitted = loaded_emitted
     previous_on_battery = loaded_previous
+  elseif Gio.File.new_for_path(state_path()):query_exists(nil) then
+    gisland.log("error", "gisland-battery: cannot load battery state: " .. tostring(loaded_emitted))
   end
 end
 

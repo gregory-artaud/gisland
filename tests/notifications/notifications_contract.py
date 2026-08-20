@@ -2,6 +2,7 @@
 
 import argparse
 from collections import deque
+import ctypes
 import json
 import os
 import queue
@@ -34,6 +35,7 @@ CAPABILITIES = [
     "persistence",
 ]
 PROTOCOL_CAPABILITIES = ["context-images", "rich-content", "independent-views"]
+MAX_LIVE_NOTIFICATIONS = 128
 
 
 def parse_command(value):
@@ -403,6 +405,44 @@ class NotificationContract(unittest.TestCase):
             {"type": "dismiss", "context_id": f"notification-{notification_id}"},
         )
 
+    def test_zero_timeout_notifications_evict_the_oldest_live_context_at_capacity(self):
+        module = self.start({"history_limit": 1, "history_visible_limit": 1})
+        proxy = self.proxy()
+        signals = []
+        proxy.connect(
+            "g-signal",
+            lambda _proxy, _sender, name, parameters: signals.append((name, parameters.unpack())),
+        )
+        for index in range(MAX_LIVE_NOTIFICATIONS):
+            self.assertEqual(self.notify(proxy, summary=f"Live {index}", timeout=0), index + 1)
+            self.assertEqual(module.next_record()["context_id"], f"notification-{index + 1}")
+
+        newest = self.notify(proxy, summary="Capacity replacement", timeout=0)
+        self.assertEqual(newest, MAX_LIVE_NOTIFICATIONS + 1)
+        self.assertEqual(
+            module.next_record(),
+            {"type": "dismiss", "context_id": "notification-1"},
+        )
+        self.assertEqual(module.next_record()["context_id"], f"notification-{newest}")
+        self.wait_signal(signals, ("NotificationClosed", (1, 4)))
+        records, result = module.action("notification-1:close")
+        self.assertEqual(records, [])
+        self.assertFalse(result["accepted"])
+        with self.assertRaises(GLib.Error) as caught:
+            self.call(proxy, "CloseNotification", GLib.Variant("(u)", (1,)))
+        self.assertEqual(
+            self.remote_error(caught.exception),
+            "org.freedesktop.Notifications.Error.NonExistent",
+        )
+
+        following = self.notify(proxy, summary="Next replacement", timeout=0)
+        self.assertEqual(
+            module.next_record(),
+            {"type": "dismiss", "context_id": "notification-2"},
+        )
+        self.assertEqual(module.next_record()["context_id"], f"notification-{following}")
+        self.wait_signal(signals, ("NotificationClosed", (2, 4)))
+
     def test_transient_history_replacement_and_restart_semantics(self):
         module = self.start()
         proxy = self.proxy()
@@ -552,10 +592,10 @@ class NotificationContract(unittest.TestCase):
         baseline = Path(__file__).resolve().parents[1] / "baselines/notification-compact.png"
         symlink = self.root / "linked.png"
         symlink.symlink_to(baseline)
-        large_svg = self.root / "large.svg"
-        with large_svg.open("wb") as output:
+        oversized_svg = self.root / "oversized.svg"
+        with oversized_svg.open("wb") as output:
             output.write(b'<svg xmlns="http://www.w3.org/2000/svg">')
-            output.seek(8 * 1024 * 1024 + 1)
+            output.write(b" " * (4 * 1024 * 1024))
             output.write(b"</svg>")
         complex_svg = self.root / "complex.svg"
         complex_svg.write_text(
@@ -571,7 +611,7 @@ class NotificationContract(unittest.TestCase):
 
         invalid_sources = (
             str(symlink),
-            large_svg.as_uri(),
+            oversized_svg.as_uri(),
             str(complex_svg),
             str(bomb),
             f"file://localhostevil{baseline}",
@@ -585,6 +625,103 @@ class NotificationContract(unittest.TestCase):
 
         self.notify(proxy, icon="file://localhost" + str(baseline))
         self.assertEqual(module.next_record()["resources"][0]["id"], "app-image")
+
+    def test_file_image_is_decoded_from_the_single_checked_read(self):
+        module = self.start()
+        proxy = self.proxy()
+        baseline = Path(__file__).resolve().parents[1] / "baselines/notification-compact.png"
+        source = self.root / "changing-image"
+        replacement = self.root / "replacement.svg"
+        source.write_bytes(baseline.read_bytes())
+        replacement.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1">'
+            '<rect width="2" height="1" fill="#00ff00"/></svg>',
+            encoding="utf-8",
+        )
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        inotify_fd = libc.inotify_init1(os.O_CLOEXEC)
+        self.assertGreaterEqual(inotify_fd, 0, os.strerror(ctypes.get_errno()))
+        watch = libc.inotify_add_watch(inotify_fd, os.fsencode(source), 0x00000010)
+        self.assertGreaterEqual(watch, 0, os.strerror(ctypes.get_errno()))
+        swapped = threading.Event()
+
+        def replace_after_first_close():
+            try:
+                os.read(inotify_fd, 4096)
+                os.replace(replacement, source)
+                swapped.set()
+            finally:
+                os.close(inotify_fd)
+
+        worker = threading.Thread(target=replace_after_first_close, daemon=True)
+        worker.start()
+        self.notify(proxy, icon=str(source))
+        publication = module.next_record()
+        worker.join(timeout=2.0)
+        self.assertTrue(swapped.is_set(), "image loader did not close its checked source")
+        resource = publication["resources"][0]
+        self.assertEqual((resource["width"], resource["height"]), (480, 360))
+
+    def test_desktop_entries_use_a_bounded_nonblocking_regular_file_read(self):
+        data_home = self.root / "data"
+        applications = data_home / "applications"
+        applications.mkdir(parents=True)
+        baseline = Path(__file__).resolve().parents[1] / "baselines/notification-compact.png"
+        entry = applications / "safe.desktop"
+        entry.write_text(
+            f"[Desktop Entry]\nType=Application\nIcon={baseline}\n",
+            encoding="utf-8",
+        )
+        self.environment["XDG_DATA_HOME"] = str(data_home)
+        module = self.start()
+        proxy = self.proxy()
+
+        self.notify(
+            proxy,
+            hints={"desktop-entry": GLib.Variant("s", "safe")},
+        )
+        self.assertEqual(module.next_record()["resources"][0]["id"], "app-image")
+
+        entry.unlink()
+        os.mkfifo(entry)
+        started = time.monotonic()
+        self.notify(
+            proxy,
+            hints={"desktop-entry": GLib.Variant("s", "safe")},
+        )
+        self.assertNotIn("resources", module.next_record())
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_history_close_uses_lua_host_bindir_for_gislandctl(self):
+        control_dir = self.root / "host-bin"
+        control_dir.mkdir()
+        host = control_dir / "gisland-lua-host"
+        shutil.copy2(self.command[0], host)
+        marker = self.root / "gislandctl-command"
+        control = control_dir / "gislandctl"
+        control.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >\"$GISLAND_TEST_CONTROL_MARKER\"\n",
+            encoding="utf-8",
+        )
+        control.chmod(0o755)
+        self.environment["GISLAND_TEST_CONTROL_MARKER"] = str(marker)
+        self.environment["PATH"] = ""
+        command = [str(host), *self.command[1:]]
+        self.module = ModuleProcess(command, self.environment, self.protocol_minor)
+        module = self.module
+        self._show_more()
+        publication = module.next_record()
+        session = publication["views"]["expanded"]["children"][0]["children"][2][
+            "action_id"
+        ].split(":")[1]
+        records, result = module.action(f"history:{session}:close-all")
+        self.assertEqual(records, [{"type": "dismiss", "context_id": "history"}])
+        self.assertTrue(result["accepted"])
+        deadline = time.monotonic() + 2.0
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "close\n")
 
     def test_body_action_markup_and_resource_protocol_budgets(self):
         module = self.start()
