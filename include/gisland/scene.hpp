@@ -98,9 +98,12 @@ struct Progress {
   std::optional<double> transition_from;
 };
 
+enum class IndicatorEffect { shadow, glow, breathe };
+
 struct Indicator {
   std::string state;
   std::string accessible_label;
+  std::vector<IndicatorEffect> effects{};
 };
 
 struct Row {

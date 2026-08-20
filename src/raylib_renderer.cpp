@@ -131,6 +131,40 @@ void draw_antialiased_disc(Vector2 center, float radius, Color tint) {
   rlEnd();
 }
 
+[[nodiscard]] float indicator_easing(float progress, Easing easing) {
+  const float value = std::clamp(progress, 0.0F, 1.0F);
+  switch (easing) {
+  case Easing::linear:
+    return value;
+  case Easing::ease_in:
+    return value * value;
+  case Easing::ease_out:
+    return 1.0F - ((1.0F - value) * (1.0F - value));
+  case Easing::ease_in_out:
+    return value < 0.5F ? 2.0F * value * value
+                        : 1.0F - (std::pow(-2.0F * value + 2.0F, 2.0F) / 2.0F);
+  }
+  return value;
+}
+
+void draw_indicator_aura(Vector2 center, float core_radius, double radius, double intensity,
+                         double opacity, Rgba tint) {
+  constexpr int layers = 10;
+  const float extent = static_cast<float>(radius * std::clamp(intensity, 0.0, 1.0));
+  if (extent <= 0.0F || opacity <= 0.0) {
+    return;
+  }
+  for (int layer = layers; layer >= 1; --layer) {
+    const float fraction = static_cast<float>(layer) / static_cast<float>(layers);
+    const double layer_opacity =
+        opacity * (1.0 - static_cast<double>(fraction)) / static_cast<double>(layers / 2);
+    Rgba layer_color = tint;
+    layer_color.alpha = static_cast<std::uint8_t>(
+        std::clamp(std::lround(static_cast<double>(tint.alpha) * layer_opacity), 0L, 255L));
+    draw_antialiased_disc(center, core_radius + (extent * fraction), color(layer_color));
+  }
+}
+
 [[nodiscard]] std::expected<Rect, RendererError>
 checked_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height) {
   constexpr auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
@@ -847,8 +881,9 @@ std::expected<void, RendererError> RaylibPainter::draw_surface(const LayoutPlan 
   return {};
 }
 
-std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan &plan,
-                                                               RenderOrigin origin) const {
+std::expected<void, RendererError>
+RaylibPainter::draw_content(const LayoutPlan &plan, RenderOrigin origin,
+                            IndicatorAnimationState indicator_animation) const {
   if (!IsWindowReady()) {
     return std::unexpected(renderer_error(RendererErrorCode::window_not_ready, {},
                                           "raylib window is not ready for drawing"));
@@ -856,7 +891,8 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
 
   for (const auto &content : plan.content) {
     auto drawn = std::visit(
-        [this, origin](const auto &command) -> std::expected<void, RendererError> {
+        [this, origin,
+         indicator_animation](const auto &command) -> std::expected<void, RendererError> {
           if (command.clip.width <= 0 || command.clip.height <= 0) {
             return {};
           }
@@ -972,6 +1008,43 @@ std::expected<void, RendererError> RaylibPainter::draw_content(const LayoutPlan 
             rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE,
                                       RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
             BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+            const auto has_effect = [&command](IndicatorEffect effect) {
+              return std::ranges::find(command.effects, effect) != command.effects.end();
+            };
+            if (command.style) {
+              const auto &style = *command.style;
+              if (has_effect(IndicatorEffect::shadow)) {
+                const Vector2 shadow_center{center.x + static_cast<float>(style.shadow.offset_x),
+                                            center.y + static_cast<float>(style.shadow.offset_y)};
+                draw_indicator_aura(shadow_center, radius, style.shadow.radius, 1.0,
+                                    style.shadow.opacity, Rgba{0, 0, 0, 255});
+              }
+              if (has_effect(IndicatorEffect::glow)) {
+                draw_indicator_aura(center, radius, style.glow.radius, style.glow.intensity,
+                                    style.glow.opacity, command.color);
+              }
+              if (has_effect(IndicatorEffect::breathe)) {
+                double intensity = style.reduced_motion.breathe_intensity;
+                double opacity = style.reduced_motion.breathe_opacity;
+                if (!indicator_animation.reduced_motion) {
+                  const double duration =
+                      static_cast<double>(style.breathe.duration.count()) / 1000.0;
+                  const double cycle =
+                      duration > 0.0 ? std::fmod(std::max(0.0, indicator_animation.elapsed_seconds),
+                                                 duration) /
+                                           duration
+                                     : 0.0;
+                  const float wave = static_cast<float>((1.0 - std::cos(cycle * 2.0 * PI)) / 2.0);
+                  const double eased = indicator_easing(wave, style.breathe.easing);
+                  intensity = std::lerp(style.breathe.minimum_intensity,
+                                        style.breathe.maximum_intensity, eased);
+                  opacity = std::lerp(style.breathe.minimum_opacity, style.breathe.maximum_opacity,
+                                      eased);
+                }
+                draw_indicator_aura(center, radius, style.breathe.radius, intensity, opacity,
+                                    command.color);
+              }
+            }
             draw_antialiased_disc(center, radius, color(command.color));
             EndBlendMode();
           } else {

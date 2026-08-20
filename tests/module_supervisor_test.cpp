@@ -427,6 +427,52 @@ TEST_CASE("supervisor gates status indicators on protocol 1.6 capability negotia
   }
 }
 
+TEST_CASE("supervisor gates indicator effects on protocol 1.9 capability negotiation") {
+  SECTION("negotiated indicator effects are emitted") {
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("indicator-effects", "indicator-effects");
+    request.init.maximum = {.major = 1, .minor = 9};
+    request.init.capabilities.insert(request.init.capabilities.end(),
+                                     {"status-indicator", "indicator-effects"});
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, "indicator-effects");
+    });
+    stop_and_wait(supervisor, events, "indicator-effects");
+  }
+
+  for (const auto &[instance, mode, maximum, error_path] :
+       std::vector<std::tuple<std::string, std::string, gisland::ProtocolVersion, std::string>>{
+           {"indicator-effects-missing",
+            "indicator-effects-without-capability",
+            {1, 9},
+            "/compact"},
+           {"indicator-effects-legacy", "indicator-effects-legacy", {1, 8}, "/compact"},
+           {"indicator-effects-early-capability",
+            "indicator-effects-capability-on-1.8",
+            {1, 9},
+            "/capabilities"}}) {
+    SECTION(instance) {
+      gisland::ModuleSupervisor supervisor;
+      EventLog events;
+      auto request = fake_request(instance, mode);
+      request.init.maximum = maximum;
+      request.init.capabilities.insert(request.init.capabilities.end(),
+                                       {"status-indicator", "indicator-effects"});
+      REQUIRE(supervisor.start(std::move(request)).has_value());
+      collect_until(supervisor, events, [&instance](const auto &observed) {
+        return count_events<gisland::ProtocolViolationEvent>(observed, instance) > 0;
+      });
+      CHECK_FALSE(has_message<gisland::PublishMessage>(events, instance));
+      REQUIRE(last_violation(events, instance) != nullptr);
+      CHECK(last_violation(events, instance)->error.path == error_path);
+      stop_and_wait(supervisor, events, instance);
+    }
+  }
+}
+
 TEST_CASE("supervisor gates audio HUD fields on protocol 1.7 capabilities") {
   SECTION("negotiated HUD fields are emitted") {
     gisland::ModuleSupervisor supervisor;

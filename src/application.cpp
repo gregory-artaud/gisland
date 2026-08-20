@@ -278,36 +278,26 @@ snapshot_content(const std::optional<RenderTexture2D> &outgoing, float outgoing_
   return texture;
 }
 
-[[nodiscard]] std::expected<RenderTexture2D, std::string>
-render_content(const LayoutPlan &plan, const RaylibPainter &painter) {
-  RenderTexture2D texture =
-      LoadRenderTexture(std::max(1, plan.view.bounds.width), std::max(1, plan.view.bounds.height));
-  if (!IsRenderTextureValid(texture)) {
-    return std::unexpected("could not allocate a context render texture");
-  }
-  BeginTextureMode(texture);
-  ClearBackground(BLANK);
-  auto drawn = painter.draw_content(plan);
-  EndTextureMode();
-  if (!drawn) {
-    const std::string message = drawn.error().message;
-    UnloadRenderTexture(texture);
-    return std::unexpected(message);
-  }
-  SetTextureFilter(texture.texture, TEXTURE_FILTER_BILINEAR);
-  return texture;
-}
-
 [[nodiscard]] std::expected<void, std::string>
-redraw_content(const LayoutPlan &plan, const RaylibPainter &painter, RenderTexture2D texture) {
+redraw_content(const LayoutPlan &plan, const RaylibPainter &painter, RenderTexture2D texture,
+               IndicatorAnimationState indicator_animation = {}) {
   BeginTextureMode(texture);
   ClearBackground(BLANK);
-  auto drawn = painter.draw_content(plan);
+  auto drawn = painter.draw_content(plan, {}, indicator_animation);
   EndTextureMode();
   if (!drawn) {
     return std::unexpected(drawn.error().message);
   }
   return {};
+}
+
+[[nodiscard]] bool has_indicator_breathe(const LayoutPlan &plan) {
+  return std::ranges::any_of(plan.content, [](const ContentDrawCommand &command) {
+    const auto *indicator = std::get_if<IndicatorDrawCommand>(&command);
+    return indicator != nullptr &&
+           std::ranges::find(indicator->effects, IndicatorEffect::breathe) !=
+               indicator->effects.end();
+  });
 }
 
 [[nodiscard]] bool has_progress_transition(const LayoutPlan &plan) {
@@ -325,7 +315,7 @@ redraw_content(const LayoutPlan &plan, const RaylibPainter &painter, RenderTextu
 [[nodiscard]] std::expected<RenderedContext, RenderContextError>
 render_context(const RuntimeSelection &compact_selection,
                const RuntimeSelection &expanded_selection, const Theme &theme,
-               const RaylibFontBook &fonts, const PangoTextBook &rich_text) {
+               const RaylibFontBook &fonts, const PangoTextBook &rich_text, bool reduced_motion) {
   if ((compact_selection.context == nullptr || compact_selection.scene == nullptr) &&
       (expanded_selection.context == nullptr || expanded_selection.scene == nullptr)) {
     return std::unexpected(
@@ -358,11 +348,22 @@ render_context(const RuntimeSelection &compact_selection,
       return std::unexpected(prepared.error().message);
     }
     const RaylibPainter slot_painter{fonts, *images, *rich_textures};
-    auto content = render_content(*plan, slot_painter);
-    if (!content) {
-      return std::unexpected(content.error());
+    RenderTexture2D texture = LoadRenderTexture(std::max(1, plan->view.bounds.width),
+                                                std::max(1, plan->view.bounds.height));
+    if (!IsRenderTextureValid(texture)) {
+      return std::unexpected("could not allocate a context render texture");
     }
-    return RenderedSlot{std::move(*plan), std::move(*images), std::move(*rich_textures), *content};
+    BeginTextureMode(texture);
+    ClearBackground(BLANK);
+    const auto drawn =
+        slot_painter.draw_content(*plan, {}, IndicatorAnimationState{0.0, reduced_motion});
+    EndTextureMode();
+    if (!drawn) {
+      UnloadRenderTexture(texture);
+      return std::unexpected(drawn.error().message);
+    }
+    SetTextureFilter(texture.texture, TEXTURE_FILTER_BILINEAR);
+    return RenderedSlot{std::move(*plan), std::move(*images), std::move(*rich_textures), texture};
   };
 
   std::optional<RenderedSlot> compact;
@@ -591,6 +592,7 @@ int Application::run() {
   bool visible = false;
   bool actions_ready = false;
   bool compact_refresh_deferred = false;
+  double indicator_elapsed_seconds = 0.0;
 
   const auto refresh_monitor = [&] {
     if (!host) {
@@ -710,8 +712,9 @@ int Application::run() {
     if (compact_progress.active()) {
       const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
                                        *rendered->compact_rich_text};
-      if (auto redrawn = redraw_content(compact_progress.apply(rendered->compact), slot_painter,
-                                        rendered->compact_content);
+      if (auto redrawn = redraw_content(
+              compact_progress.apply(rendered->compact), slot_painter, rendered->compact_content,
+              {indicator_elapsed_seconds, bootstrap_.config.interaction.reduced_motion});
           !redrawn) {
         std::cerr << redrawn.error() << '\n';
       }
@@ -720,8 +723,10 @@ int Application::run() {
         rendered->expanded_images && rendered->expanded_rich_text) {
       const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
                                        *rendered->expanded_rich_text};
-      if (auto redrawn = redraw_content(expanded_progress.apply(*rendered->expanded), slot_painter,
-                                        *rendered->expanded_content);
+      if (auto redrawn = redraw_content(
+              expanded_progress.apply(*rendered->expanded), slot_painter,
+              *rendered->expanded_content,
+              {indicator_elapsed_seconds, bootstrap_.config.interaction.reduced_motion});
           !redrawn) {
         std::cerr << redrawn.error() << '\n';
       }
@@ -833,9 +838,9 @@ int Application::run() {
     const auto candidate_expanded = make_selection(ViewSlot::expanded);
     std::optional<RenderedContext> candidate_rendered;
     if (candidate_compact.context != nullptr || candidate_expanded.context != nullptr) {
-      auto candidate =
-          render_context(candidate_compact, candidate_expanded, candidate_bootstrap->theme,
-                         *candidate_fonts, *candidate_rich_text);
+      auto candidate = render_context(
+          candidate_compact, candidate_expanded, candidate_bootstrap->theme, *candidate_fonts,
+          *candidate_rich_text, candidate_bootstrap->config.interaction.reduced_motion);
       if (!candidate) {
         return std::unexpected(candidate.error().message);
       }
@@ -1011,8 +1016,9 @@ int Application::run() {
     if (changed) {
       const bool preserve_expanded =
           mode_controller.mode() == IslandMode::expanded && selection.expanded.context != nullptr;
-      auto candidate = render_context(selection.compact, selection.expanded, bootstrap_.theme,
-                                      *fonts, *rich_text);
+      auto candidate =
+          render_context(selection.compact, selection.expanded, bootstrap_.theme, *fonts,
+                         *rich_text, bootstrap_.config.interaction.reduced_motion);
       if (!candidate) {
         const RuntimeSelection &rejected =
             candidate.error().slot == ViewSlot::compact ? selection.compact : selection.expanded;
@@ -1126,27 +1132,39 @@ int Application::run() {
 
     const float animation_delta =
         delta_seconds * static_cast<float>(bootstrap_.config.interaction.animation_speed);
+    indicator_elapsed_seconds += static_cast<double>(std::max(animation_delta, 0.0F));
+    const IndicatorAnimationState indicator_animation{indicator_elapsed_seconds,
+                                                      bootstrap_.config.interaction.reduced_motion};
     const bool compact_progress_was_active = compact_progress.active();
     const bool expanded_progress_was_active = expanded_progress.active();
     compact_progress.update(animation_delta);
     expanded_progress.update(animation_delta);
-    if (rendered && compact_progress_was_active) {
+    if (rendered && (compact_progress_was_active || (!indicator_animation.reduced_motion &&
+                                                     has_indicator_breathe(rendered->compact)))) {
       const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
                                        *rendered->compact_rich_text};
-      if (auto redrawn = redraw_content(compact_progress.apply(rendered->compact), slot_painter,
-                                        rendered->compact_content);
-          !redrawn) {
-        std::cerr << redrawn.error() << '\n';
+      BeginTextureMode(rendered->compact_content);
+      ClearBackground(BLANK);
+      const auto redrawn = slot_painter.draw_content(compact_progress.apply(rendered->compact), {},
+                                                     indicator_animation);
+      EndTextureMode();
+      if (!redrawn) {
+        std::cerr << redrawn.error().message << '\n';
       }
     }
     if (rendered && rendered->expanded && rendered->expanded_content && rendered->expanded_images &&
-        rendered->expanded_rich_text && expanded_progress_was_active) {
+        rendered->expanded_rich_text &&
+        (expanded_progress_was_active ||
+         (!indicator_animation.reduced_motion && has_indicator_breathe(*rendered->expanded)))) {
       const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
                                        *rendered->expanded_rich_text};
-      if (auto redrawn = redraw_content(expanded_progress.apply(*rendered->expanded), slot_painter,
-                                        *rendered->expanded_content);
-          !redrawn) {
-        std::cerr << redrawn.error() << '\n';
+      BeginTextureMode(*rendered->expanded_content);
+      ClearBackground(BLANK);
+      const auto redrawn = slot_painter.draw_content(expanded_progress.apply(*rendered->expanded),
+                                                     {}, indicator_animation);
+      EndTextureMode();
+      if (!redrawn) {
+        std::cerr << redrawn.error().message << '\n';
       }
     }
     const bool context_was_active = context_transition.active();

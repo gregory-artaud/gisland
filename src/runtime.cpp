@@ -75,6 +75,7 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
     capabilities.emplace_back("progress-transitions");
   }
   if (config.maximum_protocol >= ProtocolVersion{1, 9}) {
+    capabilities.emplace_back("indicator-effects");
     capabilities.emplace_back("content-transitions");
   }
   return ModuleStartRequest{

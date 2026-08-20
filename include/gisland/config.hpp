@@ -81,6 +81,7 @@ struct ModuleInstanceConfig {
 struct InteractionConfig {
   double animation_speed{1.25};
   std::chrono::milliseconds hover_exit{120};
+  bool reduced_motion{false};
 };
 
 struct AppConfig {

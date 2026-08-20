@@ -6,6 +6,7 @@
 #include <expected>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -45,6 +46,7 @@ struct MeasuredNode {
   std::string text;
   std::string font_resource;
   Rgba color{};
+  RectInsets indicator_insets{};
   std::optional<RichTextComposition> rich_composition;
   std::vector<MeasuredNode> children;
 };
@@ -627,10 +629,37 @@ private:
       return std::unexpected(diameter.error());
     }
     MeasuredNode result{&scene, path};
-    result.width = *diameter;
-    result.height = *diameter;
-    result.minimum_width = *diameter;
-    result.minimum_height = *diameter;
+    const auto has_effect = [&indicator](IndicatorEffect effect) {
+      return std::ranges::find(indicator.effects, effect) != indicator.effects.end();
+    };
+    const auto &style = theme_.indicator();
+    if (has_effect(IndicatorEffect::shadow)) {
+      result.indicator_insets.left =
+          static_cast<int>(std::ceil(std::max(0.0, style.shadow.radius - style.shadow.offset_x)));
+      result.indicator_insets.right =
+          static_cast<int>(std::ceil(std::max(0.0, style.shadow.radius + style.shadow.offset_x)));
+      result.indicator_insets.top =
+          static_cast<int>(std::ceil(std::max(0.0, style.shadow.radius - style.shadow.offset_y)));
+      result.indicator_insets.bottom =
+          static_cast<int>(std::ceil(std::max(0.0, style.shadow.radius + style.shadow.offset_y)));
+    }
+    const auto include_aura = [&result](double radius) {
+      const int extent = static_cast<int>(std::ceil(radius));
+      result.indicator_insets.left = std::max(result.indicator_insets.left, extent);
+      result.indicator_insets.top = std::max(result.indicator_insets.top, extent);
+      result.indicator_insets.right = std::max(result.indicator_insets.right, extent);
+      result.indicator_insets.bottom = std::max(result.indicator_insets.bottom, extent);
+    };
+    if (has_effect(IndicatorEffect::glow)) {
+      include_aura(style.glow.radius);
+    }
+    if (has_effect(IndicatorEffect::breathe)) {
+      include_aura(style.breathe.radius);
+    }
+    result.width = *diameter + result.indicator_insets.left + result.indicator_insets.right;
+    result.height = *diameter + result.indicator_insets.top + result.indicator_insets.bottom;
+    result.minimum_width = result.width;
+    result.minimum_height = result.height;
     result.color = color->second;
     return result;
   }
@@ -1192,25 +1221,39 @@ private:
     return {};
   }
 
-  [[nodiscard]] static std::expected<void, LayoutError>
+  [[nodiscard]] std::expected<void, LayoutError>
   place_primitive(const MeasuredNode &node, const Indicator &indicator, Rect assigned, Rect clip,
                   std::vector<ContentDrawCommand> &commands,
-                  std::vector<InteractionTarget> & /*interactions*/) {
+                  std::vector<InteractionTarget> & /*interactions*/) const {
     if (assigned.width < node.width || assigned.height < node.height) {
       return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
                                    "indicator cannot fit the assigned bounds"));
     }
-    auto y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    auto effect_y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    if (!effect_y) {
+      return std::unexpected(effect_y.error());
+    }
+    auto x = checked_add(assigned.x, node.indicator_insets.left, node.path);
+    auto y = checked_add(*effect_y, node.indicator_insets.top, node.path);
+    if (!x) {
+      return std::unexpected(x.error());
+    }
     if (!y) {
       return std::unexpected(y.error());
     }
-    const Rect bounds{assigned.x, *y, node.width, node.height};
-    auto clipped = intersect(clip, bounds, node.path);
+    const auto diameter = rounded_pixel(theme_.indicator().diameter, node.path);
+    if (!diameter) {
+      return std::unexpected(diameter.error());
+    }
+    const Rect bounds{*x, *y, *diameter, *diameter};
+    const Rect effect_bounds{assigned.x, *effect_y, node.width, node.height};
+    auto clipped = intersect(clip, effect_bounds, node.path);
     if (!clipped) {
       return std::unexpected(clipped.error());
     }
-    commands.emplace_back(
-        IndicatorDrawCommand{bounds, *clipped, node.color, indicator.accessible_label});
+    commands.emplace_back(IndicatorDrawCommand{bounds, *clipped, node.color,
+                                               indicator.accessible_label, indicator.effects,
+                                               theme_.indicator()});
     return {};
   }
 

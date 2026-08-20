@@ -573,24 +573,187 @@ parse_progress(const toml::table &root, std::string_view source_name) {
 
 [[nodiscard]] std::expected<IndicatorStyle, ThemeError>
 parse_indicator(const toml::table &root, std::string_view source_name) {
+  constexpr IndicatorStyle defaults{
+      7.0,
+      {1.0, 2.0, 3.0, 0.35},
+      {5.0, 1.0, 0.45},
+      {6.0, 0.35, 1.0, 0.12, 0.5, std::chrono::milliseconds{1600}, Easing::ease_in_out},
+      {0.65, 0.3},
+  };
   const auto *node = root.get("indicator");
   if (node == nullptr) {
-    return IndicatorStyle{7.0};
+    return defaults;
   }
   const auto *table = node->as_table();
   if (table == nullptr) {
     return std::unexpected(error_at(source_name, "indicator", "expected a table", node));
   }
-  auto keys = reject_unknown(*table, {"diameter"}, "indicator", source_name);
+  auto keys = reject_unknown(*table, {"diameter", "shadow", "glow", "breathe", "reduced_motion"},
+                             "indicator", source_name);
   if (!keys) {
     return std::unexpected(keys.error());
   }
-  auto diameter =
-      number_value(table->get("diameter"), "indicator.diameter", source_name, 1.0, maximum_pixels);
+  auto diameter = number_value(table->get("diameter"), "indicator.diameter", source_name, 1.0,
+                               maximum_pixels, false, defaults.diameter);
   if (!diameter) {
     return std::unexpected(diameter.error());
   }
-  return IndicatorStyle{*diameter};
+
+  IndicatorStyle style = defaults;
+  style.diameter = *diameter;
+  if (const auto *shadow_node = table->get("shadow"); shadow_node != nullptr) {
+    const auto *shadow = shadow_node->as_table();
+    if (shadow == nullptr) {
+      return std::unexpected(
+          error_at(source_name, "indicator.shadow", "expected a table", shadow_node));
+    }
+    if (auto known = reject_unknown(*shadow, {"offset_x", "offset_y", "radius", "opacity"},
+                                    "indicator.shadow", source_name);
+        !known) {
+      return std::unexpected(known.error());
+    }
+    auto offset_x = number_value(shadow->get("offset_x"), "indicator.shadow.offset_x", source_name,
+                                 -maximum_pixels, maximum_pixels);
+    auto offset_y = number_value(shadow->get("offset_y"), "indicator.shadow.offset_y", source_name,
+                                 -maximum_pixels, maximum_pixels);
+    auto radius = number_value(shadow->get("radius"), "indicator.shadow.radius", source_name, 0.0,
+                               maximum_pixels);
+    auto opacity =
+        number_value(shadow->get("opacity"), "indicator.shadow.opacity", source_name, 0.0, 1.0);
+    if (!offset_x)
+      return std::unexpected(offset_x.error());
+    if (!offset_y)
+      return std::unexpected(offset_y.error());
+    if (!radius)
+      return std::unexpected(radius.error());
+    if (!opacity)
+      return std::unexpected(opacity.error());
+    style.shadow = {*offset_x, *offset_y, *radius, *opacity};
+  }
+  if (const auto *glow_node = table->get("glow"); glow_node != nullptr) {
+    const auto *glow = glow_node->as_table();
+    if (glow == nullptr) {
+      return std::unexpected(
+          error_at(source_name, "indicator.glow", "expected a table", glow_node));
+    }
+    if (auto known = reject_unknown(*glow, {"radius", "intensity", "opacity"}, "indicator.glow",
+                                    source_name);
+        !known) {
+      return std::unexpected(known.error());
+    }
+    auto radius = number_value(glow->get("radius"), "indicator.glow.radius", source_name, 0.0,
+                               maximum_pixels);
+    auto intensity =
+        number_value(glow->get("intensity"), "indicator.glow.intensity", source_name, 0.0, 1.0);
+    auto opacity =
+        number_value(glow->get("opacity"), "indicator.glow.opacity", source_name, 0.0, 1.0);
+    if (!radius)
+      return std::unexpected(radius.error());
+    if (!intensity)
+      return std::unexpected(intensity.error());
+    if (!opacity)
+      return std::unexpected(opacity.error());
+    style.glow = {*radius, *intensity, *opacity};
+  }
+  if (const auto *breathe_node = table->get("breathe"); breathe_node != nullptr) {
+    const auto *breathe = breathe_node->as_table();
+    if (breathe == nullptr) {
+      return std::unexpected(
+          error_at(source_name, "indicator.breathe", "expected a table", breathe_node));
+    }
+    if (auto known = reject_unknown(*breathe,
+                                    {"radius", "minimum_intensity", "maximum_intensity",
+                                     "minimum_opacity", "maximum_opacity", "duration_ms", "easing"},
+                                    "indicator.breathe", source_name);
+        !known) {
+      return std::unexpected(known.error());
+    }
+    auto radius = number_value(breathe->get("radius"), "indicator.breathe.radius", source_name, 0.0,
+                               maximum_pixels);
+    auto minimum_intensity =
+        number_value(breathe->get("minimum_intensity"), "indicator.breathe.minimum_intensity",
+                     source_name, 0.0, 1.0);
+    auto maximum_intensity =
+        number_value(breathe->get("maximum_intensity"), "indicator.breathe.maximum_intensity",
+                     source_name, 0.0, 1.0);
+    auto minimum_opacity = number_value(breathe->get("minimum_opacity"),
+                                        "indicator.breathe.minimum_opacity", source_name, 0.0, 1.0);
+    auto maximum_opacity = number_value(breathe->get("maximum_opacity"),
+                                        "indicator.breathe.maximum_opacity", source_name, 0.0, 1.0);
+    const auto *duration_node = breathe->get("duration_ms");
+    const auto duration = duration_node == nullptr ? std::optional<std::int64_t>{}
+                                                   : duration_node->value_exact<std::int64_t>();
+    if (!radius)
+      return std::unexpected(radius.error());
+    if (!minimum_intensity)
+      return std::unexpected(minimum_intensity.error());
+    if (!maximum_intensity)
+      return std::unexpected(maximum_intensity.error());
+    if (!minimum_opacity)
+      return std::unexpected(minimum_opacity.error());
+    if (!maximum_opacity)
+      return std::unexpected(maximum_opacity.error());
+    if (!duration || *duration <= 0 || *duration > maximum_duration_ms) {
+      return std::unexpected(error_at(source_name, "indicator.breathe.duration_ms",
+                                      "duration is outside the allowed range", duration_node));
+    }
+    const auto *easing_node = breathe->get("easing");
+    const auto easing_value = easing_node == nullptr ? std::optional<std::string>{}
+                                                     : easing_node->value_exact<std::string>();
+    Easing easing{};
+    if (easing_value == "linear")
+      easing = Easing::linear;
+    else if (easing_value == "ease-in")
+      easing = Easing::ease_in;
+    else if (easing_value == "ease-out")
+      easing = Easing::ease_out;
+    else if (easing_value == "ease-in-out")
+      easing = Easing::ease_in_out;
+    else {
+      return std::unexpected(
+          error_at(source_name, "indicator.breathe.easing", "unsupported easing", easing_node));
+    }
+    if (*minimum_intensity > *maximum_intensity) {
+      return std::unexpected(error_at(source_name, "indicator.breathe.minimum_intensity",
+                                      "minimum must not exceed maximum",
+                                      breathe->get("minimum_intensity")));
+    }
+    if (*minimum_opacity > *maximum_opacity) {
+      return std::unexpected(error_at(source_name, "indicator.breathe.minimum_opacity",
+                                      "minimum must not exceed maximum",
+                                      breathe->get("minimum_opacity")));
+    }
+    style.breathe = {*radius,
+                     *minimum_intensity,
+                     *maximum_intensity,
+                     *minimum_opacity,
+                     *maximum_opacity,
+                     std::chrono::milliseconds{*duration},
+                     easing};
+  }
+  if (const auto *reduced_node = table->get("reduced_motion"); reduced_node != nullptr) {
+    const auto *reduced = reduced_node->as_table();
+    if (reduced == nullptr) {
+      return std::unexpected(
+          error_at(source_name, "indicator.reduced_motion", "expected a table", reduced_node));
+    }
+    if (auto known = reject_unknown(*reduced, {"breathe_intensity", "breathe_opacity"},
+                                    "indicator.reduced_motion", source_name);
+        !known) {
+      return std::unexpected(known.error());
+    }
+    auto intensity =
+        number_value(reduced->get("breathe_intensity"),
+                     "indicator.reduced_motion.breathe_intensity", source_name, 0.0, 1.0);
+    auto opacity = number_value(reduced->get("breathe_opacity"),
+                                "indicator.reduced_motion.breathe_opacity", source_name, 0.0, 1.0);
+    if (!intensity)
+      return std::unexpected(intensity.error());
+    if (!opacity)
+      return std::unexpected(opacity.error());
+    style.reduced_motion = {*intensity, *opacity};
+  }
+  return style;
 }
 
 [[nodiscard]] std::expected<ShadowStyle, ThemeError> parse_shadow(const toml::table &root,

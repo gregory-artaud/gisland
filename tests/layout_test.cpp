@@ -646,6 +646,51 @@ TEST_CASE("indicator has square intrinsic geometry and resolves its semantic sta
   CHECK(indicator.accessible_label == "Available");
 }
 
+TEST_CASE("indicator effects reserve themed extents while preserving the dot diameter") {
+  const auto theme = make_theme_with("[shadow]",
+                                     R"([indicator]
+diameter = 7
+[indicator.shadow]
+offset_x = 1
+offset_y = 2
+radius = 3
+opacity = 0.3
+[indicator.glow]
+radius = 6
+intensity = 1
+opacity = 0.4
+[indicator.breathe]
+radius = 8
+minimum_intensity = 0.3
+maximum_intensity = 1
+minimum_opacity = 0.1
+maximum_opacity = 0.5
+duration_ms = 1600
+easing = "ease-in-out"
+[indicator.reduced_motion]
+breathe_intensity = 0.6
+breathe_opacity = 0.25
+[shadow])");
+  const auto result = gisland::layout_scene(
+      gisland::SceneNode{
+          gisland::Indicator{"success",
+                             "Running",
+                             {gisland::IndicatorEffect::glow, gisland::IndicatorEffect::breathe}}},
+      theme, gisland::ViewMode::compact, TestGlyphMetrics{});
+
+  REQUIRE(result.has_value());
+  const auto &indicator = command_at<gisland::IndicatorDrawCommand>(*result, 0);
+  CHECK(indicator.bounds.width == 7);
+  CHECK(indicator.bounds.height == 7);
+  CHECK(indicator.clip.width == 23);
+  CHECK(indicator.clip.height == 23);
+  CHECK(indicator.bounds.x - indicator.clip.x == 8);
+  CHECK(indicator.bounds.y - indicator.clip.y == 8);
+  CHECK(indicator.effects.size() == 2);
+  REQUIRE(indicator.style.has_value());
+  CHECK(indicator.style->breathe.radius == 8.0);
+}
+
 TEST_CASE("named compact style selects exact HUD geometry") {
   const auto theme = make_theme_with(
       "padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = 100\nmin_height = "

@@ -217,6 +217,37 @@ TEST_CASE("indicator protocol fields are required") {
   }
 }
 
+TEST_CASE("protocol 1.9 parses combinable semantic indicator effects") {
+  const auto result = gisland::parse_module_message(
+      R"({"type":"publish","context_id":"job","priority":20,"compact":{"type":"indicator","state":"success","accessible_label":"Running","effects":["shadow","glow","breathe"]}})");
+
+  REQUIRE(result.has_value());
+  const auto *publish = std::get_if<gisland::PublishMessage>(&*result);
+  REQUIRE(publish != nullptr);
+  REQUIRE(publish->compact.has_value());
+  const auto &indicator = std::get<gisland::Indicator>(publish->compact->value);
+  CHECK(indicator.effects == std::vector<gisland::IndicatorEffect>{
+                                 gisland::IndicatorEffect::shadow, gisland::IndicatorEffect::glow,
+                                 gisland::IndicatorEffect::breathe});
+}
+
+TEST_CASE("indicator effects reject malformed unknown and duplicate requests") {
+  for (const auto &[effects, path] : std::vector<std::pair<std::string, std::string>>{
+           {R"("glow")", "/compact/effects"},
+           {R"(["sparkle"])", "/compact/effects/0"},
+           {R"(["glow","glow"])", "/compact/effects/1"},
+           {R"(["glow",1])", "/compact/effects/1"},
+       }) {
+    const auto result = gisland::parse_module_message(
+        "{\"type\":\"publish\",\"context_id\":\"x\",\"priority\":0,\"compact\":{"
+        "\"type\":\"indicator\",\"state\":\"success\",\"accessible_label\":\"Available\","
+        "\"effects\":" +
+        effects + "}}");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == path);
+  }
+}
+
 TEST_CASE("a publish line decodes context-owned RGBA8 image resources") {
   constexpr auto line = R"({
     "type": "publish",

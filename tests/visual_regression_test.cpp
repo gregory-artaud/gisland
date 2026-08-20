@@ -123,6 +123,20 @@ public:
       "normal"}};
 }
 
+[[nodiscard]] gisland::SceneNode indicator_effects_gallery() {
+  return gisland::SceneNode{gisland::Row{
+      {text("Normal", "caption"), gisland::SceneNode{gisland::Indicator{"success", "Normal"}},
+       text("Glow", "caption"),
+       gisland::SceneNode{gisland::Indicator{"warning", "Glow", {gisland::IndicatorEffect::glow}}},
+       text("Breathe", "caption"),
+       gisland::SceneNode{gisland::Indicator{
+           "error",
+           "Glow and breathe",
+           {gisland::IndicatorEffect::glow, gisland::IndicatorEffect::breathe}}}},
+      "center",
+      "small"}};
+}
+
 [[nodiscard]] gisland::SceneNode compact_time_date() {
   return gisland::SceneNode{
       gisland::Row{{text("14:32", "compact-primary"), gisland::SceneNode{gisland::Spacer{true, {}}},
@@ -249,7 +263,8 @@ public:
 [[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode,
                                    const std::vector<gisland::ImageResource> &resources = {},
                                    std::string_view compact_style = {},
-                                   std::optional<float> progress_elapsed = std::nullopt) {
+                                   std::optional<float> progress_elapsed = std::nullopt,
+                                   gisland::IndicatorAnimationState indicator_animation = {}) {
   const auto theme = load_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
   REQUIRE(fonts.has_value());
@@ -282,7 +297,7 @@ public:
   BeginTextureMode(target);
   ClearBackground(BLANK);
   REQUIRE(painter.draw_surface(rendered_plan, origin).has_value());
-  REQUIRE(painter.draw_content(rendered_plan, origin).has_value());
+  REQUIRE(painter.draw_content(rendered_plan, origin, indicator_animation).has_value());
   EndTextureMode();
   Image image = LoadImageFromTexture(target.texture);
   UnloadRenderTexture(target);
@@ -325,8 +340,10 @@ void export_failure_artifacts(std::string_view name, const Image &actual, const 
 void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisland::ViewMode mode,
                    const std::vector<gisland::ImageResource> &resources = {},
                    std::string_view compact_style = {},
-                   std::optional<float> progress_elapsed = std::nullopt) {
-  Image actual = render_fixture(scene, mode, resources, compact_style, progress_elapsed);
+                   std::optional<float> progress_elapsed = std::nullopt,
+                   gisland::IndicatorAnimationState indicator_animation = {}) {
+  Image actual =
+      render_fixture(scene, mode, resources, compact_style, progress_elapsed, indicator_animation);
   const auto baseline = baseline_root() / (std::string{name} + ".png");
   const char *update = std::getenv("GISLAND_UPDATE_BASELINES");
   const char *approved_update = std::getenv("GISLAND_BASELINE_UPDATE_TARGET");
@@ -408,6 +425,11 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: all v1 primitives gallery") {
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: compact time and date capsule") {
   check_fixture("compact-time-date", compact_time_date(), gisland::ViewMode::compact);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: semantic indicator effects") {
+  check_fixture("indicator-effects", indicator_effects_gallery(), gisland::ViewMode::compact, {},
+                {}, std::nullopt, {0.8, false});
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: dynamic image cropped into a circle") {

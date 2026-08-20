@@ -282,7 +282,7 @@ TEST_CASE("runtime start requests preserve process config and offer snapshot cap
         std::vector<std::string>{"data-snapshots", "context-images", "rich-content",
                                  "independent-views", "ring-progress", "status-indicator",
                                  "compact-view-styles", "icon-roles", "progress-transitions",
-                                 "content-transitions"});
+                                 "indicator-effects", "content-transitions"});
   CHECK(request.init.configuration == nlohmann::json{{"format", "24h"}, {"week_start", 1}});
   CHECK(request.init.locale == "fr_FR.UTF-8");
   CHECK(request.init.timezone == "Europe/Paris");

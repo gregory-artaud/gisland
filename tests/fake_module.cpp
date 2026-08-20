@@ -565,6 +565,37 @@ void read_init() {
     }
     return EXIT_SUCCESS;
   }
+  if (mode == "indicator-effects" || mode == "indicator-effects-without-capability" ||
+      mode == "indicator-effects-legacy" || mode == "indicator-effects-capability-on-1.8") {
+    read_init();
+    const bool legacy =
+        mode == "indicator-effects-legacy" || mode == "indicator-effects-capability-on-1.8";
+    nlohmann::json ready{
+        {"type", "ready"}, {"protocol_major", 1}, {"protocol_minor", legacy ? 8 : 9}};
+    ready["capabilities"] = {"status-indicator"};
+    if (mode == "indicator-effects" || mode == "indicator-effects-capability-on-1.8") {
+      ready["capabilities"].push_back("indicator-effects");
+    }
+    write_json(ready);
+    write_json({
+        {"type", "publish"},
+        {"context_id", "indicator-effects"},
+        {"priority", 20},
+        {"compact",
+         {{"type", "indicator"},
+          {"state", "success"},
+          {"accessible_label", "Running"},
+          {"effects", {"glow", "breathe"}}}},
+    });
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto message = nlohmann::json::parse(line, nullptr, false);
+      if (message.is_object() && message.value("type", "") == "shutdown") {
+        return EXIT_SUCCESS;
+      }
+    }
+    return EXIT_SUCCESS;
+  }
   if (mode == "audio-hud" || mode == "hud-style-without-capability" ||
       mode == "icon-role-without-capability" || mode == "progress-transition-without-capability" ||
       mode == "hud-capability-on-1.6") {

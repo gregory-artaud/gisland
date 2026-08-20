@@ -961,7 +961,7 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
     return std::unexpected(error_at(source_name, "interaction", "expected a table", node));
   }
   for (const auto &[key, value] : *table) {
-    if (key != "animation_speed" && key != "hover_exit_ms") {
+    if (key != "animation_speed" && key != "hover_exit_ms" && key != "reduced_motion") {
       return std::unexpected(error_at(source_name, "interaction." + std::string{key.str()},
                                       "unknown interaction property", &value));
     }
@@ -991,6 +991,15 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
                                       "value must be between 0 and 2000", hover_node));
     }
     interaction.hover_exit = std::chrono::milliseconds{*hover_exit};
+  }
+
+  if (const auto *reduced_node = table->get("reduced_motion"); reduced_node != nullptr) {
+    const auto reduced = reduced_node->value_exact<bool>();
+    if (!reduced.has_value()) {
+      return std::unexpected(
+          error_at(source_name, "interaction.reduced_motion", "expected a boolean", reduced_node));
+    }
+    interaction.reduced_motion = *reduced;
   }
 
   return interaction;
