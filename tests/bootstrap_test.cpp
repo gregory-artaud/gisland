@@ -160,6 +160,7 @@ TEST_CASE(
   REQUIRE(bootstrap->config.modules.size() == 4);
   CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
   CHECK(bootstrap->config.modules.front().command.front() == "gisland-clock-calendar");
+  CHECK(bootstrap->config.modules.front().maximum_protocol == gisland::ProtocolVersion{1, 9});
   CHECK(bootstrap->config.modules[1].module_id == "notifications");
   CHECK(bootstrap->config.modules[1].command.front() == "gisland-notifications");
   CHECK(std::get<std::int64_t>(

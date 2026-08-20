@@ -77,6 +77,8 @@ TEST_CASE("runtime data snapshots atomically publish the configured default cont
   CHECK(text(*selection.context->compact).value == "12:34");
   REQUIRE(selection.context->expanded.has_value());
   CHECK(text(*selection.context->expanded).value == "Monday");
+  CHECK_FALSE(selection.context->transitions.compact.has_value());
+  CHECK_FALSE(selection.context->transitions.expanded.has_value());
 
   const auto revision = selection.revision;
   const auto invalid = runtime.consume(
@@ -86,6 +88,26 @@ TEST_CASE("runtime data snapshots atomically publish the configured default cont
   REQUIRE(retained.context != nullptr);
   CHECK(retained.revision == revision);
   CHECK(text(*retained.context->compact).value == "12:34");
+}
+
+TEST_CASE("runtime preserves independent data snapshot transitions") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const auto now = gisland::MonotonicTime{} + std::chrono::seconds{1};
+  REQUIRE(runtime
+              .consume(message(
+                  "clock",
+                  gisland::DataMessage{
+                      nlohmann::json{{"label", "12:34"}, {"details", "August"}},
+                      {.compact = std::nullopt,
+                       .expanded = gisland::ContentTransition::slide_left}},
+                  now))
+              .has_value());
+  const auto selections = runtime.selections(now);
+  REQUIRE(selections.compact.context != nullptr);
+  REQUIRE(selections.expanded.context != nullptr);
+  CHECK_FALSE(selections.compact.context->transitions.compact.has_value());
+  CHECK(selections.expanded.context->transitions.expanded ==
+        gisland::ContentTransition::slide_left);
 }
 
 TEST_CASE("runtime arbitrates direct publications, dismissals, and rejected layouts") {
@@ -255,11 +277,12 @@ TEST_CASE("runtime start requests preserve process config and offer snapshot cap
   CHECK(request.process.environment == module.environment);
   CHECK(request.process.working_directory == module.working_directory);
   CHECK(request.init.minimum == gisland::ProtocolVersion{1, 0});
-  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 8});
+  CHECK(request.init.maximum == gisland::ProtocolVersion{1, 9});
   CHECK(request.init.capabilities ==
         std::vector<std::string>{"data-snapshots", "context-images", "rich-content",
                                  "independent-views", "ring-progress", "status-indicator",
-                                 "compact-view-styles", "icon-roles", "progress-transitions"});
+                                 "compact-view-styles", "icon-roles", "progress-transitions",
+                                 "content-transitions"});
   CHECK(request.init.configuration == nlohmann::json{{"format", "24h"}, {"week_start", 1}});
   CHECK(request.init.locale == "fr_FR.UTF-8");
   CHECK(request.init.timezone == "Europe/Paris");

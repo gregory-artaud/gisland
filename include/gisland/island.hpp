@@ -149,6 +149,8 @@ struct ContextTransitionVisual {
   float outgoing_opacity;
   float incoming_opacity;
   float local_outgoing_opacity;
+  float outgoing_offset_x{};
+  float incoming_offset_x{};
   float surface_progress;
 };
 
@@ -173,7 +175,8 @@ preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requ
 class ContextTransition {
 public:
   void start(IslandGeometry source, IslandGeometry target, std::chrono::milliseconds duration,
-             Easing easing);
+             Easing easing, ContentTransition content = ContentTransition::crossfade,
+             float slide_distance = 0.0F);
   void update(float delta_seconds);
   [[nodiscard]] bool active() const;
   [[nodiscard]] ContextTransitionVisual visual() const;
@@ -187,6 +190,8 @@ private:
   float progress_{1.0F};
   Easing easing_{Easing::linear};
   bool active_{false};
+  ContentTransition content_{ContentTransition::crossfade};
+  float slide_distance_{};
 };
 
 [[nodiscard]] IslandGeometry geometry_for(IslandMode mode);

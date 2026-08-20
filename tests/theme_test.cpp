@@ -91,11 +91,19 @@ easing = "ease-in-out"
 duration_ms = 270
 easing = "ease-out"
 
+[animation.content_transition]
+duration_ms = 250
+distance = 48
+easing = "ease-in-out"
+
 [animation.reduced_motion]
 compact_to_expanded_ms = 0
 context_change_ms = 0
 
 [animation.reduced_motion.progress]
+duration_ms = 0
+
+[animation.reduced_motion.content_transition]
 duration_ms = 0
 
 [icons.calendar]
@@ -158,6 +166,11 @@ TEST_CASE("theme TOML parses into typed semantic values") {
   CHECK(result->animation().reduced_motion.compact_to_expanded_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.context_change_ms == std::chrono::milliseconds{0});
   CHECK(result->animation().reduced_motion.progress_duration == std::chrono::milliseconds{0});
+  CHECK(result->animation().content_transition.duration == std::chrono::milliseconds{250});
+  CHECK(result->animation().content_transition.distance == 48.0);
+  CHECK(result->animation().content_transition.easing == gisland::Easing::ease_in_out);
+  CHECK(result->animation().reduced_motion.content_transition_duration ==
+        std::chrono::milliseconds{0});
   CHECK(result->fonts().at("ui") == "/usr/share/fonts/ui.ttf");
   CHECK(result->icons().at("calendar").codepoint == U'\uE001');
 }
@@ -648,8 +661,11 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
                    "[animation]\ncompact_to_expanded_ms = 325\ncontext_change_ms = 325\n"
                    "easing = \"ease-in-out\"\n\n[animation.progress]\n"
                    "duration_ms = 270\neasing = \"ease-out\"\n\n"
+                   "[animation.content_transition]\nduration_ms = 250\ndistance = 48\n"
+                   "easing = \"ease-in-out\"\n\n"
                    "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"
                    "context_change_ms = 0\n\n[animation.reduced_motion.progress]\n"
+                   "duration_ms = 0\n\n[animation.reduced_motion.content_transition]\n"
                    "duration_ms = 0\n\n",
                    ""),
       "animation.toml");
@@ -661,6 +677,8 @@ TEST_CASE("theme requires canonical roles tokens and both views") {
                                         "[animation.reduced_motion]\ncompact_to_expanded_ms = 0\n"
                                         "context_change_ms = 0\n\n"
                                         "[animation.reduced_motion.progress]\n"
+                                        "duration_ms = 0\n\n"
+                                        "[animation.reduced_motion.content_transition]\n"
                                         "duration_ms = 0\n\n",
                                         ""),
                            "reduced-motion.toml");

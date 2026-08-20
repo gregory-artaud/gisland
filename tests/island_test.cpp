@@ -640,6 +640,38 @@ TEST_CASE("context transition holds content black when geometry is unchanged") {
   CHECK(transition.visual().incoming_opacity == Approx(0.0F));
 }
 
+TEST_CASE("content slides use deterministic horizontal directions") {
+  const gisland::IslandGeometry geometry{360.0F, 232.0F, 24.0F};
+  gisland::ContextTransition left;
+  left.start(geometry, geometry, 200ms, gisland::Easing::linear,
+             gisland::ContentTransition::slide_left, 48.0F);
+  left.update(0.1F);
+  const auto left_visual = left.visual();
+  CHECK(left_visual.outgoing_opacity == Approx(1.0F));
+  CHECK(left_visual.incoming_opacity == Approx(1.0F));
+  CHECK(left_visual.outgoing_offset_x == Approx(-24.0F));
+  CHECK(left_visual.incoming_offset_x == Approx(24.0F));
+  CHECK(gisland::context_outgoing_opacity(gisland::ContextTransitionKind::aligned_content_crossfade,
+                                          left_visual) == Approx(1.0F));
+
+  gisland::ContextTransition right;
+  right.start(geometry, geometry, 200ms, gisland::Easing::linear,
+              gisland::ContentTransition::slide_right, 48.0F);
+  right.update(0.1F);
+  CHECK(right.visual().outgoing_offset_x == Approx(24.0F));
+  CHECK(right.visual().incoming_offset_x == Approx(-24.0F));
+}
+
+TEST_CASE("reduced motion content slide settles without displacement") {
+  const gisland::IslandGeometry geometry{360.0F, 232.0F, 24.0F};
+  gisland::ContextTransition transition;
+  transition.start(geometry, geometry, 0ms, gisland::Easing::ease_in_out,
+                   gisland::ContentTransition::slide_left, 48.0F);
+  CHECK_FALSE(transition.active());
+  CHECK(transition.visual().outgoing_offset_x == Approx(0.0F));
+  CHECK(transition.visual().incoming_offset_x == Approx(0.0F));
+}
+
 TEST_CASE("context transition policy aligns revisions with stable identity") {
   const std::optional<gisland::ContextKey> clock{gisland::ContextKey{"clock", "configured"}};
   const std::optional<gisland::ContextKey> history{gisland::ContextKey{"notifications", "history"}};
@@ -660,8 +692,8 @@ TEST_CASE("aligned content transition keeps incoming content fully opaque") {
   transition.update(0.125F);
 
   const auto visual = transition.visual();
-  CHECK(gisland::context_outgoing_opacity(
-            gisland::ContextTransitionKind::aligned_content_crossfade, visual) == Approx(0.5F));
+  CHECK(gisland::context_outgoing_opacity(gisland::ContextTransitionKind::aligned_content_crossfade,
+                                          visual) == Approx(0.5F));
   CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::aligned_content_crossfade,
                                           visual) == Approx(1.0F));
   CHECK(gisland::context_outgoing_opacity(gisland::ContextTransitionKind::full_crossfade, visual) ==

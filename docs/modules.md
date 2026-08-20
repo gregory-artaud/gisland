@@ -271,6 +271,7 @@ Do not send other records before `ready`. Feature introduction by protocol minor
 | 1.6 | `status-indicator` |
 | 1.7 | `compact-view-styles`, `icon-roles`, and `progress-transitions` |
 | 1.8 | correlated `action_result`, required for confirmed `gislandctl action` calls |
+| 1.9 | `content-transitions` on `publish` and `data` records |
 
 The core may then send:
 
@@ -298,6 +299,10 @@ records are:
 
 Log levels are `debug`, `info`, `warning`, and `error`. A `data.value` must be an object and requires
 the negotiated `data-snapshots` capability plus a configured declarative view.
+
+With protocol 1.9 and `content-transitions`, `publish` and `data` records may select `crossfade`,
+`slide-left`, or `slide-right` independently under `transitions.compact` and
+`transitions.expanded`. The theme controls timing, distance, easing, and reduced-motion behavior.
 
 A direct scene publication can target the legacy coupled slots:
 

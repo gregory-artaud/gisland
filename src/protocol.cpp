@@ -803,6 +803,55 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
   return ModuleMessage{DismissMessage{std::move(*context_id)}};
 }
 
+[[nodiscard]] std::expected<ViewTransitions, ProtocolError>
+parse_view_transitions(const Json &object) {
+  const auto iterator = object.find("transitions");
+  if (iterator == object.end()) {
+    return ViewTransitions{};
+  }
+  if (!iterator->is_object()) {
+    return std::unexpected(error_at("/transitions", "expected an object"));
+  }
+  auto known = reject_unknown_fields(*iterator, {"compact", "expanded"}, "/transitions");
+  if (!known) {
+    return std::unexpected(known.error());
+  }
+  if (iterator->empty()) {
+    return std::unexpected(error_at("/transitions", "at least one view transition is required"));
+  }
+  const auto parse_one = [&](std::string_view field)
+      -> std::expected<std::optional<ContentTransition>, ProtocolError> {
+    const auto value = iterator->find(std::string{field});
+    if (value == iterator->end()) {
+      return std::nullopt;
+    }
+    if (!value->is_string()) {
+      return std::unexpected(error_at(field_path("/transitions", field), "expected a string"));
+    }
+    const auto name = value->get<std::string>();
+    if (name == "crossfade") {
+      return std::optional{ContentTransition::crossfade};
+    }
+    if (name == "slide-left") {
+      return std::optional{ContentTransition::slide_left};
+    }
+    if (name == "slide-right") {
+      return std::optional{ContentTransition::slide_right};
+    }
+    return std::unexpected(
+        error_at(field_path("/transitions", field), "unknown content transition"));
+  };
+  auto compact = parse_one("compact");
+  auto expanded = parse_one("expanded");
+  if (!compact) {
+    return std::unexpected(compact.error());
+  }
+  if (!expanded) {
+    return std::unexpected(expanded.error());
+  }
+  return ViewTransitions{*compact, *expanded};
+}
+
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_data(const Json &object) {
   auto value = required_field(object, "value", "");
   if (!value.has_value()) {
@@ -811,7 +860,11 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
   if (!(*value)->is_object()) {
     return std::unexpected(error_at("/value", "expected an object"));
   }
-  return ModuleMessage{DataMessage{**value}};
+  auto transitions = parse_view_transitions(object);
+  if (!transitions) {
+    return std::unexpected(transitions.error());
+  }
+  return ModuleMessage{DataMessage{**value, *transitions}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_publish(const Json &object) {
@@ -829,6 +882,10 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
   auto resources = parse_image_resources(object);
   if (!resources) {
     return std::unexpected(resources.error());
+  }
+  auto transitions = parse_view_transitions(object);
+  if (!transitions) {
+    return std::unexpected(transitions.error());
   }
 
   std::optional<std::chrono::milliseconds> expires_in;
@@ -908,6 +965,14 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
       }
       expanded = std::move(*parsed_expanded);
     }
+  }
+  if (transitions->compact && !compact) {
+    return std::unexpected(
+        error_at("/transitions/compact", "transition requires an updated compact view"));
+  }
+  if (transitions->expanded && !expanded) {
+    return std::unexpected(
+        error_at("/transitions/expanded", "transition requires an updated expanded view"));
   }
 
   std::optional<PresentationIntent> presentation;
@@ -990,7 +1055,7 @@ validate_image_references(const SceneNode &scene, const std::set<std::string> &r
 
   return ModuleMessage{PublishMessage{
       std::move(*context_id), *priority, expires_in, std::move(compact), std::move(expanded),
-      std::move(*resources), presentation, views_iterator != object.end()}};
+      std::move(*resources), presentation, views_iterator != object.end(), *transitions}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_action_result(const Json &object) {
