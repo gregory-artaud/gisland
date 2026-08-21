@@ -741,7 +741,7 @@ TEST_CASE("input shape does not clip antialiased rendering") {
                                       static_cast<unsigned int>(canvas.height), 0, 0, 0);
   XSync(display, False);
 
-  gisland::RoundedWindowShape shape;
+  gisland::RoundedWindowShape shape{display};
   shape.apply(&window, geometry, placement);
   XSync(display, False);
 

@@ -1,4 +1,5 @@
 #include "gisland/raylib_renderer.hpp"
+#include "gisland/rlgl_font_book.hpp"
 
 #include "gisland/layout.hpp"
 #include "gisland/theme.hpp"
@@ -7,12 +8,14 @@
 
 #include <raylib.h>
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -106,6 +109,14 @@ duration_ms = 0
 [icons.calendar]
 font = "symbols"
 codepoint = 0xF133
+
+[icons.chevron-left]
+font = "symbols"
+codepoint = 0xF053
+
+[icons.chevron-right]
+font = "symbols"
+codepoint = 0xF054
 )";
 
 class HiddenWindow {
@@ -138,6 +149,21 @@ public:
 [[nodiscard]] bool same_color(Color left, gisland::Rgba right) {
   return left.r == right.red && left.g == right.green && left.b == right.blue &&
          left.a == right.alpha;
+}
+
+[[nodiscard]] std::vector<int> pinned_text_codepoints() {
+  constexpr std::array ranges{
+      std::pair{0x0020, 0x007E}, std::pair{0x00A0, 0x024F}, std::pair{0x0300, 0x052F},
+      std::pair{0x1C80, 0x1C8F}, std::pair{0x1D00, 0x1FFF}, std::pair{0x2000, 0x206F},
+      std::pair{0x2C60, 0x2C7F}, std::pair{0x2DE0, 0x2DFF}, std::pair{0xA640, 0xA69F},
+      std::pair{0xA720, 0xA7FF}, std::pair{0xAB30, 0xAB6F}, std::pair{0x10780, 0x107BF}};
+  std::set<int> codepoints;
+  for (const auto &[first, last] : ranges) {
+    for (int codepoint = first; codepoint <= last; ++codepoint) {
+      codepoints.insert(codepoint);
+    }
+  }
+  return {codepoints.begin(), codepoints.end()};
 }
 
 [[nodiscard]] bool same_color(Color left, Color right) {
@@ -209,6 +235,73 @@ TEST_CASE_METHOD(HiddenWindow, "font book loads pinned glyphs and measures UTF-8
   CHECK(latin.height >= body.size);
   CHECK(icon.width > 0.0);
   CHECK(icon.height >= body.size);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "portable atlas data exactly matches raylib") {
+  const auto path = asset_root() / "fonts/Inter-Regular.ttf";
+  const auto codepoints = pinned_text_codepoints();
+  const auto portable = gisland::build_font_atlas(path, 16, codepoints);
+  REQUIRE(portable.has_value());
+
+  Font reference =
+      LoadFontEx(path.c_str(), 16, codepoints.data(), static_cast<int>(codepoints.size()));
+  REQUIRE(IsFontValid(reference));
+  CHECK(portable->base_size == reference.baseSize);
+  CHECK(portable->padding == reference.glyphPadding);
+  CHECK(portable->width == reference.texture.width);
+  CHECK(portable->height == reference.texture.height);
+  REQUIRE(portable->glyphs.size() == static_cast<std::size_t>(reference.glyphCount));
+  for (std::size_t index = 0; index < portable->glyphs.size(); ++index) {
+    const auto &actual = portable->glyphs[index];
+    const auto &expected = reference.glyphs[index];
+    const auto &rectangle = reference.recs[index];
+    CHECK(actual.codepoint == static_cast<char32_t>(expected.value));
+    CHECK(actual.offset_x == expected.offsetX);
+    CHECK(actual.offset_y == expected.offsetY);
+    CHECK(actual.advance_x == expected.advanceX);
+    CHECK(actual.rectangle ==
+          gisland::Rect{static_cast<int>(rectangle.x), static_cast<int>(rectangle.y),
+                        static_cast<int>(rectangle.width), static_cast<int>(rectangle.height)});
+  }
+
+  Image image = LoadImageFromTexture(reference.texture);
+  REQUIRE(image.data != nullptr);
+  const auto *pixels = static_cast<const std::uint8_t *>(image.data);
+  REQUIRE(image.format == PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA);
+  std::vector<std::uint8_t> reference_alpha(portable->alpha.size());
+  for (std::size_t index = 0; index < reference_alpha.size(); ++index) {
+    reference_alpha[index] = pixels[index * 2U + 1U];
+  }
+  CHECK(portable->alpha == reference_alpha);
+  UnloadImage(image);
+  UnloadFont(reference);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "portable font book exactly matches raylib gallery measurements") {
+  const auto theme = make_theme();
+  const auto raylib = gisland::RaylibFontBook::load(theme, asset_root());
+  const auto portable = gisland::RlglFontBook::load(theme, asset_root());
+  REQUIRE(raylib.has_value());
+  REQUIRE(portable.has_value());
+
+  const auto &body = theme.typography().at("body");
+  const auto &title = theme.typography().at("title");
+  const auto body_resource = theme.fonts().at(body.font);
+  const auto title_resource = theme.fonts().at(title.font);
+  const auto icon_resource = theme.fonts().at(theme.icons().at("calendar").font);
+  for (const auto &[role, resource, value] :
+       std::array{std::tuple{&body, &body_resource, std::string_view{"Text and icon"}},
+                  std::tuple{&body, &body_resource, std::string_view{"Muted"}},
+                  std::tuple{&title, &title_resource, std::string_view{"Primitive gallery"}}}) {
+    CHECK(portable->measure_text(*resource, *role, value).width ==
+          raylib->measure_text(*resource, *role, value).width);
+    CHECK(portable->measure_text(*resource, *role, value).height ==
+          raylib->measure_text(*resource, *role, value).height);
+  }
+  for (const auto codepoint : std::array{U'\uF133', U'\uF053', U'\uF054'}) {
+    CHECK(portable->measure_codepoint(icon_resource, body, codepoint).width ==
+          raylib->measure_codepoint(icon_resource, body, codepoint).width);
+  }
 }
 
 TEST_CASE_METHOD(HiddenWindow, "pinned Inter glyphs accept Cyrillic and reject unsupported text") {

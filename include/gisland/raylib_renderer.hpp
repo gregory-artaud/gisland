@@ -27,11 +27,6 @@ struct RendererError {
   std::string message;
 };
 
-struct RenderOrigin {
-  int x{};
-  int y{};
-};
-
 struct IndicatorAnimationState {
   double elapsed_seconds{};
   bool reduced_motion{};

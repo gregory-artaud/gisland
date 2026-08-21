@@ -14,6 +14,7 @@ include(GNUInstallDirs)
 include(cmake/ProjectOptions.cmake)
 
 option(GISLAND_BUILD_GRAPHICAL_TESTS "Build tests that require an X11/OpenGL display" OFF)
+option(GISLAND_BUILD_WAYLAND_PROTOTYPE "Build the isolated Wayland/EGL/rlgl prototype" OFF)
 set(GISLAND_LGI_ROOT "" CACHE PATH "Optional root containing a Lua 5.4-compatible lgi")
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -55,6 +56,184 @@ if(BUILD_TESTING)
     SYSTEM
     EXCLUDE_FROM_ALL
   )
+endif()
+
+if(GISLAND_BUILD_WAYLAND_PROTOTYPE)
+  enable_language(C)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+  pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl)
+  pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
+  find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
+  FetchContent_Declare(
+    wlr_protocols
+    GIT_REPOSITORY https://gitlab.freedesktop.org/wlroots/wlr-protocols.git
+    GIT_TAG bf4fc79abc359eea5a0edec0ac6d4a2b2955f82a
+    GIT_SHALLOW FALSE
+  )
+  FetchContent_MakeAvailable(wlr_protocols)
+
+  set(
+    GISLAND_LAYER_SHELL_XML
+    "${wlr_protocols_SOURCE_DIR}/unstable/wlr-layer-shell-unstable-v1.xml"
+  )
+  set(GISLAND_WAYLAND_GENERATED_DIR "${PROJECT_BINARY_DIR}/generated/wayland")
+  set(
+    GISLAND_LAYER_SHELL_HEADER
+    "${GISLAND_WAYLAND_GENERATED_DIR}/wlr-layer-shell-unstable-v1-client-protocol.h"
+  )
+  set(
+    GISLAND_LAYER_SHELL_RAW_HEADER
+    "${GISLAND_WAYLAND_GENERATED_DIR}/wlr-layer-shell-unstable-v1-client-protocol.raw.h"
+  )
+  set(
+    GISLAND_LAYER_SHELL_CODE
+    "${GISLAND_WAYLAND_GENERATED_DIR}/wlr-layer-shell-unstable-v1-protocol.c"
+  )
+  add_custom_command(
+    OUTPUT
+      "${GISLAND_LAYER_SHELL_HEADER}"
+      "${GISLAND_LAYER_SHELL_CODE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${GISLAND_WAYLAND_GENERATED_DIR}"
+    COMMAND
+      "${WAYLAND_SCANNER_EXECUTABLE}" client-header "${GISLAND_LAYER_SHELL_XML}"
+      "${GISLAND_LAYER_SHELL_RAW_HEADER}"
+    COMMAND
+      ${CMAKE_COMMAND} -DINPUT=${GISLAND_LAYER_SHELL_RAW_HEADER}
+      -DOUTPUT=${GISLAND_LAYER_SHELL_HEADER}
+      -P "${PROJECT_SOURCE_DIR}/cmake/SanitizeLayerShellHeader.cmake"
+    COMMAND
+      "${WAYLAND_SCANNER_EXECUTABLE}" private-code "${GISLAND_LAYER_SHELL_XML}"
+      "${GISLAND_LAYER_SHELL_CODE}"
+    DEPENDS
+      "${GISLAND_LAYER_SHELL_XML}"
+      "${PROJECT_SOURCE_DIR}/cmake/SanitizeLayerShellHeader.cmake"
+    BYPRODUCTS "${GISLAND_LAYER_SHELL_RAW_HEADER}"
+    VERBATIM
+  )
+
+  add_library(gisland_wayland_prototype_options STATIC prototype/wayland/options.cpp)
+  target_compile_features(gisland_wayland_prototype_options PUBLIC cxx_std_23)
+  target_include_directories(
+    gisland_wayland_prototype_options
+    PUBLIC ${PROJECT_SOURCE_DIR}/prototype/wayland
+  )
+  gisland_set_project_options(gisland_wayland_prototype_options)
+
+  add_library(gisland_wayland_protocol STATIC "${GISLAND_LAYER_SHELL_CODE}")
+  set_source_files_properties(
+    "${GISLAND_LAYER_SHELL_CODE}"
+    PROPERTIES LANGUAGE C
+  )
+
+  add_executable(
+    gisland_wayland_prototype
+    prototype/wayland/main.cpp
+    prototype/wayland/runtime.cpp
+    prototype/wayland/xdg_popup_interface.cpp
+    tests/fixtures/primitive_gallery.cpp
+    "${GISLAND_LAYER_SHELL_HEADER}"
+  )
+  target_compile_features(gisland_wayland_prototype PRIVATE cxx_std_23)
+  target_include_directories(
+    gisland_wayland_prototype
+    PRIVATE
+      ${PROJECT_SOURCE_DIR}/prototype/wayland
+      ${PROJECT_SOURCE_DIR}/tests/fixtures
+      ${GISLAND_WAYLAND_GENERATED_DIR}
+  )
+  target_compile_definitions(gisland_wayland_prototype PRIVATE GRAPHICS_API_OPENGL_33)
+  target_compile_definitions(
+    gisland_wayland_prototype
+    PRIVATE
+      GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+  )
+  target_link_libraries(
+    gisland_wayland_prototype
+    PRIVATE
+      gisland_wayland_prototype_options
+      PkgConfig::WAYLAND_CLIENT
+      PkgConfig::WAYLAND_EGL
+      PkgConfig::EGL
+      gisland_rlgl_gpu
+      gisland_scene_layout
+      gisland_wayland_protocol
+  )
+  gisland_set_project_options(gisland_wayland_prototype)
+
+  if(BUILD_TESTING)
+    add_executable(
+      gisland_rlgl_x11_gallery_reference
+      tests/fixtures/primitive_gallery.cpp
+      tests/rlgl_x11_gallery_reference.cpp
+    )
+    target_compile_features(gisland_rlgl_x11_gallery_reference PRIVATE cxx_std_23)
+    target_include_directories(
+      gisland_rlgl_x11_gallery_reference
+      PRIVATE ${PROJECT_SOURCE_DIR}/tests/fixtures
+    )
+    target_compile_definitions(
+      gisland_rlgl_x11_gallery_reference
+      PRIVATE GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+    )
+    target_link_libraries(
+      gisland_rlgl_x11_gallery_reference
+      PRIVATE gisland_rlgl_gpu gisland_scene_layout PkgConfig::EGL
+    )
+    gisland_set_project_options(gisland_rlgl_x11_gallery_reference)
+
+    add_executable(
+      gisland_raylib_gallery_reference
+      tests/fixtures/primitive_gallery.cpp
+      tests/raylib_gallery_reference.cpp
+    )
+    target_compile_features(gisland_raylib_gallery_reference PRIVATE cxx_std_23)
+    target_include_directories(
+      gisland_raylib_gallery_reference
+      PRIVATE ${PROJECT_SOURCE_DIR}/tests/fixtures
+    )
+    target_compile_definitions(
+      gisland_raylib_gallery_reference
+      PRIVATE GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+    )
+    target_link_libraries(gisland_raylib_gallery_reference PRIVATE gisland_app raylib)
+    gisland_set_project_options(gisland_raylib_gallery_reference)
+
+    add_executable(
+      gisland_wayland_prototype_tests
+      tests/wayland_prototype_options_test.cpp
+    )
+    target_compile_features(gisland_wayland_prototype_tests PRIVATE cxx_std_23)
+    target_link_libraries(
+      gisland_wayland_prototype_tests
+      PRIVATE gisland_wayland_prototype_options Catch2::Catch2WithMain
+    )
+    gisland_set_project_options(gisland_wayland_prototype_tests)
+    add_test(NAME wayland_prototype_options COMMAND gisland_wayland_prototype_tests)
+    find_program(GISLAND_SWAY_EXECUTABLE NAMES sway)
+    if(GISLAND_SWAY_EXECUTABLE)
+      find_program(GISLAND_XVFB_EXECUTABLE NAMES Xvfb REQUIRED)
+      add_test(
+        NAME wayland_rlgl_prototype
+        COMMAND
+          bash ${PROJECT_SOURCE_DIR}/scripts/run-wayland-prototype-test.sh
+          "${GISLAND_SWAY_EXECUTABLE}"
+          "${GISLAND_XVFB_EXECUTABLE}"
+          $<TARGET_FILE:gisland_raylib_gallery_reference>
+          $<TARGET_FILE:gisland_rlgl_x11_gallery_reference>
+          $<TARGET_FILE:gisland_wayland_prototype>
+      )
+      set_tests_properties(
+        wayland_rlgl_prototype
+        PROPERTIES LABELS graphical RUN_SERIAL true TIMEOUT 30
+      )
+    else()
+      message(
+        STATUS
+        "Wayland prototype runtime test disabled: install sway for a headless layer-shell compositor"
+      )
+    endif()
+  endif()
 endif()
 
 FetchContent_MakeAvailable(raylib nlohmann_json tomlplusplus)
@@ -164,6 +343,95 @@ add_custom_command(
   VERBATIM
 )
 add_custom_target(gisland_assets DEPENDS "${GISLAND_ASSET_STAMP}")
+if(TARGET gisland_wayland_prototype)
+  add_dependencies(gisland_wayland_prototype gisland_assets)
+endif()
+if(TARGET gisland_rlgl_x11_gallery_reference)
+  add_dependencies(gisland_rlgl_x11_gallery_reference gisland_assets)
+endif()
+if(TARGET gisland_raylib_gallery_reference)
+  add_dependencies(gisland_raylib_gallery_reference gisland_assets)
+endif()
+
+add_library(gisland_theme STATIC src/theme.cpp)
+add_library(gisland::theme ALIAS gisland_theme)
+target_compile_features(gisland_theme PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_theme
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+target_link_libraries(gisland_theme PRIVATE tomlplusplus::tomlplusplus)
+gisland_set_project_options(gisland_theme)
+
+add_library(gisland_rich_text STATIC src/rich_text.cpp)
+add_library(gisland::rich_text ALIAS gisland_rich_text)
+target_compile_features(gisland_rich_text PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_rich_text
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+target_link_libraries(
+  gisland_rich_text
+  PRIVATE
+    PkgConfig::PANGOCAIRO
+    PkgConfig::PANGOFT2
+    PkgConfig::CAIRO
+    PkgConfig::FONTCONFIG
+)
+gisland_set_project_options(gisland_rich_text)
+
+add_library(gisland_scene_layout STATIC src/layout.cpp src/scene.cpp)
+add_library(gisland::scene_layout ALIAS gisland_scene_layout)
+target_compile_features(gisland_scene_layout PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_scene_layout
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+)
+target_link_libraries(gisland_scene_layout PUBLIC gisland::rich_text gisland::theme)
+gisland_set_project_options(gisland_scene_layout)
+
+add_library(
+  gisland_rlgl_renderer_model STATIC
+  src/rlgl_font_book.cpp
+  src/rlgl_renderer_model.cpp
+)
+add_library(gisland::rlgl_renderer_model ALIAS gisland_rlgl_renderer_model)
+set_source_files_properties(src/rlgl_font_book.cpp PROPERTIES COMPILE_OPTIONS "-w")
+target_compile_features(gisland_rlgl_renderer_model PUBLIC cxx_std_23)
+target_include_directories(
+  gisland_rlgl_renderer_model
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+  PRIVATE ${raylib_SOURCE_DIR}/src/external
+)
+gisland_set_project_options(gisland_rlgl_renderer_model)
+
+add_library(
+  gisland_rlgl_gpu STATIC
+  src/rlgl_gpu.cpp
+  src/rlgl_impl.cpp
+  src/rlgl_painter.cpp
+  src/rlgl_texture_books.cpp
+)
+add_library(gisland::rlgl_gpu ALIAS gisland_rlgl_gpu)
+target_compile_features(gisland_rlgl_gpu PUBLIC cxx_std_23)
+target_compile_definitions(gisland_rlgl_gpu PRIVATE GRAPHICS_API_OPENGL_33)
+target_include_directories(
+  gisland_rlgl_gpu
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+  PRIVATE ${raylib_SOURCE_DIR}/src
+)
+target_link_libraries(
+  gisland_rlgl_gpu
+  PUBLIC gisland::rlgl_renderer_model
+  PRIVATE gisland::rich_text
+)
+set_source_files_properties(src/rlgl_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+gisland_set_project_options(gisland_rlgl_gpu)
 
 add_library(gisland_io STATIC src/line_buffer.cpp src/poll.cpp src/write_queue.cpp)
 add_library(gisland::io ALIAS gisland_io)
@@ -221,11 +489,11 @@ add_library(
   src/control_client.cpp
   src/control_dispatcher.cpp
   src/context.cpp
+  src/display.cpp
   src/file_watcher.cpp
   src/interaction.cpp
   src/ipc_server.cpp
   src/island.cpp
-  src/layout.cpp
   src/module_lifecycle.cpp
   src/module_manifest.cpp
   src/module_supervisor.cpp
@@ -233,13 +501,9 @@ add_library(
   src/protocol.cpp
   src/raylib_renderer.cpp
   src/reload.cpp
-  src/rich_text.cpp
   src/runtime.cpp
-  src/scene.cpp
   src/scene_template.cpp
-  src/theme.cpp
-  src/x11_monitor.cpp
-  src/x11_window_host.cpp
+  src/x11_platform_host.cpp
   src/x11_shape.cpp
 )
 add_library(gisland::app ALIAS gisland_app)
@@ -253,6 +517,9 @@ target_link_libraries(
   gisland_app
   PUBLIC
     nlohmann_json::nlohmann_json
+    gisland::rich_text
+    gisland::scene_layout
+    gisland::theme
   PRIVATE
     gisland::io
     raylib
@@ -528,6 +795,29 @@ if(BUILD_TESTING)
   target_link_libraries(fake_module PRIVATE nlohmann_json::nlohmann_json)
   gisland_set_project_options(fake_module)
 
+  add_executable(gisland_rlgl_renderer_model_tests tests/rlgl_renderer_model_test.cpp)
+  target_compile_features(gisland_rlgl_renderer_model_tests PRIVATE cxx_std_23)
+  target_link_libraries(
+    gisland_rlgl_renderer_model_tests
+    PRIVATE gisland::rlgl_renderer_model Catch2::Catch2WithMain
+  )
+  gisland_set_project_options(gisland_rlgl_renderer_model_tests)
+  add_test(NAME rlgl_renderer_model COMMAND gisland_rlgl_renderer_model_tests)
+
+  add_executable(gisland_rlgl_font_book_tests tests/rlgl_font_book_test.cpp)
+  target_compile_features(gisland_rlgl_font_book_tests PRIVATE cxx_std_23)
+  target_link_libraries(
+    gisland_rlgl_font_book_tests
+    PRIVATE gisland::rlgl_renderer_model gisland::app Catch2::Catch2WithMain
+  )
+  target_compile_definitions(
+    gisland_rlgl_font_book_tests
+    PRIVATE GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+  )
+  add_dependencies(gisland_rlgl_font_book_tests gisland_assets)
+  gisland_set_project_options(gisland_rlgl_font_book_tests)
+  add_test(NAME rlgl_font_book COMMAND gisland_rlgl_font_book_tests)
+
   add_executable(
     gisland_tests
     tests/application_config_test.cpp
@@ -536,6 +826,7 @@ if(BUILD_TESTING)
     tests/control_client_test.cpp
     tests/control_dispatcher_test.cpp
     tests/control_test.cpp
+    tests/display_test.cpp
   tests/context_test.cpp
   tests/file_watcher_test.cpp
   tests/interaction_test.cpp
@@ -547,6 +838,7 @@ if(BUILD_TESTING)
     tests/module_manifest_test.cpp
     tests/module_supervisor_test.cpp
     tests/posix_process_backend_test.cpp
+    tests/platform_host_test.cpp
     tests/protocol_serialization_test.cpp
     tests/protocol_test.cpp
     tests/reload_test.cpp
@@ -556,7 +848,6 @@ if(BUILD_TESTING)
     tests/scene_template_test.cpp
     tests/theme_test.cpp
     tests/write_queue_test.cpp
-    tests/x11_monitor_test.cpp
   )
   target_compile_features(gisland_tests PRIVATE cxx_std_23)
   target_link_libraries(
@@ -650,6 +941,51 @@ if(BUILD_TESTING)
     DISCOVERY_MODE PRE_TEST
   )
   if(GISLAND_BUILD_GRAPHICAL_TESTS)
+    find_package(PNG REQUIRED)
+    if(NOT TARGET PkgConfig::EGL)
+      pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
+    endif()
+    add_executable(
+      gisland_rlgl_gpu_tests
+      tests/fixtures/primitive_gallery.cpp
+      tests/rlgl_gpu_test.cpp
+    )
+    target_compile_features(gisland_rlgl_gpu_tests PRIVATE cxx_std_23)
+    target_compile_definitions(gisland_rlgl_gpu_tests PRIVATE GRAPHICS_API_OPENGL_33)
+    target_include_directories(
+      gisland_rlgl_gpu_tests
+      PRIVATE ${PROJECT_SOURCE_DIR}/include ${raylib_SOURCE_DIR}/src
+    )
+    target_link_libraries(
+      gisland_rlgl_gpu_tests
+      PRIVATE
+        gisland::rlgl_gpu
+        gisland::rich_text
+        gisland::scene_layout
+        gisland::theme
+        Catch2::Catch2WithMain
+        PNG::PNG
+        PkgConfig::EGL
+    )
+    gisland_set_project_options(gisland_rlgl_gpu_tests)
+    target_compile_definitions(
+      gisland_rlgl_gpu_tests
+      PRIVATE
+        GISLAND_TEST_ASSET_ROOT="${PROJECT_BINARY_DIR}/assets"
+        GISLAND_TEST_BASELINE_ROOT="${PROJECT_SOURCE_DIR}/tests/baselines"
+        GISLAND_VISUAL_ARTIFACT_ROOT="${PROJECT_BINARY_DIR}/visual-artifacts"
+    )
+    add_dependencies(gisland_rlgl_gpu_tests gisland_assets)
+    catch_discover_tests(
+      gisland_rlgl_gpu_tests
+      TEST_PREFIX "rlgl_gpu::"
+      PROPERTIES
+        LABELS graphical
+        RUN_SERIAL true
+        ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1"
+      DISCOVERY_MODE PRE_TEST
+    )
+
     add_executable(gisland_application_x11_smoke_tests tests/application_x11_smoke_test.cpp)
     target_compile_features(gisland_application_x11_smoke_tests PRIVATE cxx_std_23)
     target_link_libraries(
@@ -689,7 +1025,7 @@ if(BUILD_TESTING)
       DISCOVERY_MODE PRE_TEST
     )
 
-    add_executable(gisland_x11_window_tests tests/x11_window_host_test.cpp)
+    add_executable(gisland_x11_window_tests tests/x11_platform_host_test.cpp)
     target_compile_features(gisland_x11_window_tests PRIVATE cxx_std_23)
     target_link_libraries(
       gisland_x11_window_tests
@@ -707,7 +1043,7 @@ if(BUILD_TESTING)
     target_compile_features(gisland_raylib_renderer_tests PRIVATE cxx_std_23)
     target_link_libraries(
       gisland_raylib_renderer_tests
-      PRIVATE gisland::app Catch2::Catch2WithMain raylib
+      PRIVATE gisland::app gisland::rlgl_renderer_model Catch2::Catch2WithMain raylib
     )
     target_compile_definitions(
       gisland_raylib_renderer_tests
@@ -722,7 +1058,11 @@ if(BUILD_TESTING)
       DISCOVERY_MODE PRE_TEST
     )
 
-    add_executable(gisland_visual_regression_tests tests/visual_regression_test.cpp)
+    add_executable(
+      gisland_visual_regression_tests
+      tests/fixtures/primitive_gallery.cpp
+      tests/visual_regression_test.cpp
+    )
     target_compile_features(gisland_visual_regression_tests PRIVATE cxx_std_23)
     target_link_libraries(
       gisland_visual_regression_tests
@@ -768,6 +1108,7 @@ set(
   include/gisland/control_client.hpp
   include/gisland/control_dispatcher.hpp
   include/gisland/context.hpp
+  include/gisland/display.hpp
   include/gisland/file_watcher.hpp
   include/gisland/glib_main_context.hpp
   include/gisland/interaction.hpp
@@ -782,10 +1123,16 @@ set(
   include/gisland/module_lifecycle.hpp
   include/gisland/module_manifest.hpp
   include/gisland/module_supervisor.hpp
+  include/gisland/platform_host.hpp
   include/gisland/poll.hpp
   include/gisland/process_backend.hpp
   include/gisland/protocol.hpp
   include/gisland/raylib_renderer.hpp
+  include/gisland/rlgl_font_book.hpp
+  include/gisland/rlgl_gpu.hpp
+  include/gisland/rlgl_painter.hpp
+  include/gisland/rlgl_renderer_model.hpp
+  include/gisland/rlgl_texture_books.hpp
   include/gisland/reload.hpp
   include/gisland/rich_text.hpp
   include/gisland/runtime.hpp
@@ -793,9 +1140,15 @@ set(
   include/gisland/scene_template.hpp
   include/gisland/theme.hpp
   include/gisland/write_queue.hpp
-  include/gisland/x11_monitor.hpp
-  include/gisland/x11_window_host.hpp
+  include/gisland/x11_platform_host.hpp
   include/gisland/x11_shape.hpp
+  prototype/wayland/layer_shell_protocol.hpp
+  prototype/wayland/main.cpp
+  prototype/wayland/options.cpp
+  prototype/wayland/runtime.cpp
+  prototype/wayland/wayland_prototype_options.hpp
+  prototype/wayland/wayland_prototype_runtime.hpp
+  prototype/wayland/xdg_popup_interface.cpp
   src/application.cpp
   src/bootstrap.cpp
   src/config.cpp
@@ -804,6 +1157,7 @@ set(
   src/control_main.cpp
   src/control_dispatcher.cpp
   src/context.cpp
+  src/display.cpp
   src/file_watcher.cpp
   src/glib_main_context.cpp
   src/interaction.cpp
@@ -824,6 +1178,12 @@ set(
   src/posix_process_backend.cpp
   src/protocol.cpp
   src/raylib_renderer.cpp
+  src/rlgl_font_book.cpp
+  src/rlgl_gpu.cpp
+  src/rlgl_impl.cpp
+  src/rlgl_painter.cpp
+  src/rlgl_renderer_model.cpp
+  src/rlgl_texture_books.cpp
   src/reload.cpp
   src/rich_text.cpp
   src/runtime.cpp
@@ -831,10 +1191,11 @@ set(
   src/scene_template.cpp
   src/theme.cpp
   src/write_queue.cpp
-  src/x11_monitor.cpp
-  src/x11_window_host.cpp
+  src/x11_platform_host.cpp
   src/x11_shape.cpp
   tests/fake_module.cpp
+  tests/fixtures/primitive_gallery.cpp
+  tests/fixtures/primitive_gallery.hpp
   tests/audio/audio_process.hpp
   tests/application_x11_smoke_test.cpp
   tests/application_config_test.cpp
@@ -843,6 +1204,7 @@ set(
   tests/control_client_test.cpp
   tests/control_dispatcher_test.cpp
   tests/control_test.cpp
+  tests/display_test.cpp
   tests/context_test.cpp
   tests/file_watcher_test.cpp
   tests/interaction_test.cpp
@@ -857,19 +1219,25 @@ set(
   tests/module_manifest_test.cpp
   tests/module_supervisor_test.cpp
   tests/posix_process_backend_test.cpp
+  tests/platform_host_test.cpp
   tests/protocol_serialization_test.cpp
   tests/protocol_test.cpp
   tests/reload_test.cpp
   tests/rich_text_test.cpp
   tests/runtime_test.cpp
   tests/raylib_renderer_test.cpp
+  tests/raylib_gallery_reference.cpp
+  tests/rlgl_font_book_test.cpp
+  tests/rlgl_gpu_test.cpp
+  tests/rlgl_x11_gallery_reference.cpp
+  tests/rlgl_renderer_model_test.cpp
   tests/scene_test.cpp
   tests/scene_template_test.cpp
   tests/theme_test.cpp
   tests/visual_regression_test.cpp
+  tests/wayland_prototype_options_test.cpp
   tests/write_queue_test.cpp
-  tests/x11_monitor_test.cpp
-  tests/x11_window_host_test.cpp
+   tests/x11_platform_host_test.cpp
 )
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format)
 if(CLANG_FORMAT_EXECUTABLE)
