@@ -58,7 +58,7 @@ TEST_CASE("shadow-aware canvas placement preserves its surface anchor") {
         gisland::IslandPlacement{26.0F, 14.0F});
 }
 
-TEST_CASE("fixed canvas contains every named compact style") {
+TEST_CASE("fixed canvas contains every named compact and expanded style") {
   constexpr std::string_view theme_text = R"(
 [palette]
 surface = "#000000"
@@ -109,6 +109,14 @@ min_width = 200
 max_width = 400
 min_height = 100
 max_height = 300
+[view.expanded.styles.palette]
+padding = 8
+radius = 24
+border = 0
+min_width = 1200
+max_width = 1200
+min_height = 700
+max_height = 700
 [progress]
 ring_diameter = 32
 ring_thickness = 4
@@ -142,8 +150,8 @@ codepoint = 0x41
 
   const auto canvas = gisland::fixed_canvas_for(*theme);
 
-  CHECK(canvas.surface_width == Approx(1000.0F));
-  CHECK(canvas.surface_height == Approx(300.0F));
+  CHECK(canvas.surface_width == Approx(1200.0F));
+  CHECK(canvas.surface_height == Approx(700.0F));
 }
 
 TEST_CASE("spring motion has subtle overshoot and preserves reversal velocity") {

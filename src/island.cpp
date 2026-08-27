@@ -71,8 +71,15 @@ IslandCanvasSize fixed_canvas_for(const Theme &theme) {
     maximum_compact_width = std::max(maximum_compact_width, style.max_width);
     maximum_compact_height = std::max(maximum_compact_height, style.max_height);
   }
-  const int surface_width = rounded(std::max(maximum_compact_width, views.expanded.max_width));
-  const int surface_height = rounded(std::max(maximum_compact_height, views.expanded.max_height));
+  double maximum_expanded_width = views.expanded.max_width;
+  double maximum_expanded_height = views.expanded.max_height;
+  for (const auto &[name, style] : views.expanded_styles) {
+    (void)name;
+    maximum_expanded_width = std::max(maximum_expanded_width, style.max_width);
+    maximum_expanded_height = std::max(maximum_expanded_height, style.max_height);
+  }
+  const int surface_width = rounded(std::max(maximum_compact_width, maximum_expanded_width));
+  const int surface_height = rounded(std::max(maximum_compact_height, maximum_expanded_height));
   const int shadow_radius = rounded(shadow.blur) + rounded(shadow.spread);
   const int shadow_x = rounded(shadow.offset_x);
   const int shadow_y = rounded(shadow.offset_y);
