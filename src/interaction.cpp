@@ -10,10 +10,29 @@
 
 namespace gisland {
 
-bool KeyboardActivationGate::update(bool pressed) noexcept {
-  const bool activated = pressed && !pressed_;
-  pressed_ = pressed;
-  return activated;
+bool KeyboardActivationGate::update(bool pressed, std::chrono::milliseconds elapsed) noexcept {
+  constexpr auto release_debounce = std::chrono::milliseconds{100};
+  if (pressed) {
+    release_observed_ = false;
+    released_for_ = {};
+    if (!armed_) {
+      return false;
+    }
+    armed_ = false;
+    return true;
+  }
+  if (!armed_) {
+    if (!release_observed_) {
+      release_observed_ = true;
+      released_for_ = {};
+      return false;
+    }
+    released_for_ += std::max(elapsed, std::chrono::milliseconds{0});
+    if (released_for_ >= release_debounce) {
+      armed_ = true;
+    }
+  }
+  return false;
 }
 
 namespace {

@@ -2,6 +2,7 @@
 
 #include "gisland/layout.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -52,10 +53,12 @@ private:
 
 class KeyboardActivationGate final {
 public:
-  [[nodiscard]] bool update(bool pressed) noexcept;
+  [[nodiscard]] bool update(bool pressed, std::chrono::milliseconds elapsed) noexcept;
 
 private:
-  bool pressed_{};
+  bool armed_{true};
+  bool release_observed_{};
+  std::chrono::milliseconds released_for_{};
 };
 
 class KeyboardNavigationController final {

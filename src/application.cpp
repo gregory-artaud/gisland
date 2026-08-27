@@ -980,7 +980,9 @@ int Application::run() {
     const float delta_seconds = GetFrameTime();
     const MonotonicTime now = std::chrono::steady_clock::now();
     const bool activate_from_keyboard =
-        keyboard_activation.update(IsKeyDown(KEY_ENTER) || IsKeyDown(KEY_KP_ENTER));
+        keyboard_activation.update(IsKeyDown(KEY_ENTER) || IsKeyDown(KEY_KP_ENTER),
+                                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::duration<float>{delta_seconds}));
     if (watcher) {
       auto changed_paths = watcher->poll();
       if (!changed_paths) {
@@ -1178,16 +1180,20 @@ int Application::run() {
     }
     if (mode_controller.explicitly_open() && !keyboard_session && rendered && rendered->expanded &&
         rendered->expanded_key) {
-      keyboard_session = true;
-      keyboard_context = rendered->expanded_key;
-      keyboard_navigation.reconcile(*rendered->expanded);
-      if (auto *input = first_text_input(*rendered->expanded); input != nullptr) {
-        keyboard_input_id = input->input_id;
-        text_editor.emplace(input->initial_value);
-      }
+      bool focus_acquired = true;
       if (host) {
         if (auto focused = host->begin_keyboard_focus(); !focused) {
           std::cerr << focused.error().message << '\n';
+          focus_acquired = false;
+        }
+      }
+      if (focus_acquired) {
+        keyboard_session = true;
+        keyboard_context = rendered->expanded_key;
+        keyboard_navigation.reconcile(*rendered->expanded);
+        if (auto *input = first_text_input(*rendered->expanded); input != nullptr) {
+          keyboard_input_id = input->input_id;
+          text_editor.emplace(input->initial_value);
         }
       }
     } else if (!mode_controller.explicitly_open() && keyboard_session) {

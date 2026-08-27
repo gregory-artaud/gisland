@@ -253,14 +253,32 @@ std::expected<void, PlatformError> X11PlatformHost::begin_keyboard_focus() {
     return {};
   }
   Window focused = None;
+  Window acquired = None;
   int revert = RevertToPointerRoot;
+  int acquired_revert = RevertToPointerRoot;
   const bool succeeded = checked_request(display_, [&] {
+    const Window root = DefaultRootWindow(display_);
     XGetInputFocus(display_, &focused, &revert);
     set_focusable(display_, window_, true);
+    const unsigned long all_desktops = 0xFFFFFFFFUL;
+    XChangeProperty(display_, window_, XInternAtom(display_, "_NET_WM_DESKTOP", False), XA_CARDINAL,
+                    32, PropModeReplace, reinterpret_cast<const unsigned char *>(&all_desktops), 1);
+    XEvent activation{};
+    activation.xclient.type = ClientMessage;
+    activation.xclient.window = window_;
+    activation.xclient.message_type = XInternAtom(display_, "_NET_ACTIVE_WINDOW", False);
+    activation.xclient.format = 32;
+    activation.xclient.data.l[0] = 1;
+    activation.xclient.data.l[1] = CurrentTime;
+    activation.xclient.data.l[2] = static_cast<long>(focused);
+    XSendEvent(display_, root, False, SubstructureRedirectMask | SubstructureNotifyMask,
+               &activation);
+    XRaiseWindow(display_, window_);
     XSetInputFocus(display_, window_, RevertToPointerRoot, CurrentTime);
+    XGetInputFocus(display_, &acquired, &acquired_revert);
   });
-  if (!succeeded) {
-    set_focusable(display_, window_, false);
+  if (!succeeded || acquired != window_) {
+    static_cast<void>(checked_request(display_, [&] { set_focusable(display_, window_, false); }));
     return std::unexpected(error(PlatformOperation::update_keyboard_focus,
                                  PlatformErrorSeverity::recoverable,
                                  "could not focus the X11 overlay window"));

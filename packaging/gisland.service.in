@@ -6,7 +6,7 @@ After=graphical-session.target
 [Service]
 Type=simple
 ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/gisland
-Restart=on-failure
+Restart=always
 RestartSec=2s
 
 [Install]
