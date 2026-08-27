@@ -9,6 +9,13 @@
 #include <vector>
 
 namespace gisland {
+
+bool KeyboardActivationGate::update(bool pressed) noexcept {
+  const bool activated = pressed && !pressed_;
+  pressed_ = pressed;
+  return activated;
+}
+
 namespace {
 
 [[nodiscard]] bool contains(const Rect &bounds, int x, int y) {

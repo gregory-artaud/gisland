@@ -610,6 +610,7 @@ int Application::run() {
   std::optional<std::string> keyboard_input_id;
   std::optional<TextInputEditor> text_editor;
   KeyboardNavigationController keyboard_navigation;
+  KeyboardActivationGate keyboard_activation;
   bool text_action_pending = false;
   double indicator_elapsed_seconds = 0.0;
 
@@ -978,6 +979,8 @@ int Application::run() {
   while (!WindowShouldClose()) {
     const float delta_seconds = GetFrameTime();
     const MonotonicTime now = std::chrono::steady_clock::now();
+    const bool activate_from_keyboard =
+        keyboard_activation.update(IsKeyDown(KEY_ENTER) || IsKeyDown(KEY_KP_ENTER));
     if (watcher) {
       auto changed_paths = watcher->poll();
       if (!changed_paths) {
@@ -1264,7 +1267,7 @@ int Application::run() {
           const bool reverse = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
           keyboard_navigation.move_focus(expanded_plan, reverse);
         }
-        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
+        if (activate_from_keyboard) {
           const auto *target = keyboard_navigation.activation_target(expanded_plan);
           if (target != nullptr && target->kind == InteractionKind::text_input &&
               target->submit_action_id) {

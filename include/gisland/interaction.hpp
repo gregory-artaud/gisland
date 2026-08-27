@@ -50,6 +50,14 @@ private:
   bool all_selected_{};
 };
 
+class KeyboardActivationGate final {
+public:
+  [[nodiscard]] bool update(bool pressed) noexcept;
+
+private:
+  bool pressed_{};
+};
+
 class KeyboardNavigationController final {
 public:
   void reconcile(const LayoutPlan &layout);

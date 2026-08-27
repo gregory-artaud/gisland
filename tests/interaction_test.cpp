@@ -170,3 +170,13 @@ TEST_CASE("keyboard navigation continues into a republished result window") {
   navigation.reconcile(scrolled);
   CHECK(navigation.selected_action_id() == std::optional<std::string>{"calculator"});
 }
+
+TEST_CASE("keyboard activation requires a release before another activation") {
+  gisland::KeyboardActivationGate gate;
+
+  CHECK_FALSE(gate.update(false));
+  CHECK(gate.update(true));
+  CHECK_FALSE(gate.update(true));
+  CHECK_FALSE(gate.update(false));
+  CHECK(gate.update(true));
+}
