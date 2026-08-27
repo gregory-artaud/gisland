@@ -75,11 +75,16 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
           }
         } else if constexpr (std::is_same_v<Command, CloseControl>) {
           mode_.close();
+          runtime_.clear_activation();
         } else if constexpr (std::is_same_v<Command, ToggleControl>) {
           const auto selected = runtime_.active(ViewSlot::expanded, now);
+          const bool was_expanded = mode_.mode() == IslandMode::expanded;
           if (!mode_.toggle(selected.context != nullptr)) {
             return control_error(ControlErrorCode::unavailable_context,
                                  "the active context has no expanded view");
+          }
+          if (was_expanded) {
+            runtime_.clear_activation();
           }
         } else if constexpr (std::is_same_v<Command, StatusControl>) {
           return status(now);

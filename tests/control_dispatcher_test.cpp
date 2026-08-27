@@ -188,6 +188,38 @@ TEST_CASE("activate-open atomically selects and opens the expanded owner") {
   CHECK(status.expanded->context_id == "history");
 }
 
+TEST_CASE("closing an activate-open session releases its selected context") {
+  const gisland::MonotonicTime now{};
+  gisland::RuntimeCoordinator runtime{config()};
+  gisland::OverlayModeController mode;
+  publish(runtime, "clock", "configured", 0, true, now);
+  REQUIRE(
+      runtime
+          .consume(gisland::ModuleMessageEvent{"status",
+                                               gisland::PublishMessage{.context_id = "launcher",
+                                                                       .priority = 100,
+                                                                       .expanded = text("launcher"),
+                                                                       .activation_only = true},
+                                               now + 1ms})
+          .has_value());
+  gisland::ControlDispatcher dispatcher{
+      runtime, mode,
+      [](std::string, std::uint64_t) -> std::expected<void, gisland::SupervisorCommandError> {
+        return {};
+      },
+      "/tmp/gisland.sock"};
+
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::ActivateOpenControl{"status"}, now + 1ms).value()));
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::CloseControl{}, now + 2ms).value()));
+
+  const auto status = std::get<gisland::ControlStatus>(
+      dispatcher.dispatch(gisland::StatusControl{}, now + 2ms).value());
+  REQUIRE(status.expanded.has_value());
+  CHECK(status.expanded->instance_id == "clock");
+}
+
 TEST_CASE("control dispatcher opens and dismisses the independently selected expanded owner") {
   const gisland::MonotonicTime now{};
   gisland::RuntimeCoordinator runtime{config()};

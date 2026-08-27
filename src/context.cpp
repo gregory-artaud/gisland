@@ -119,6 +119,15 @@ ContextArbiter::activate(std::string_view instance_id, std::optional<MonotonicTi
   return best->context.key;
 }
 
+bool ContextArbiter::clear_activation(std::optional<ContextKey> expected) {
+  activation_held_ = false;
+  if (!activation_ || (expected && activation_->key != *expected)) {
+    return false;
+  }
+  activation_.reset();
+  return true;
+}
+
 void ContextArbiter::set_activation_held(bool held) { activation_held_ = held; }
 
 bool ContextArbiter::dismiss_active(std::string_view context_id, MonotonicTime now) {

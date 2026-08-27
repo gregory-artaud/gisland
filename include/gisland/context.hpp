@@ -68,6 +68,7 @@ public:
   void set_defaults(std::string compact_default, std::string expanded_default);
   [[nodiscard]] std::expected<ContextKey, ContextActivationError>
   activate(std::string_view instance_id, std::optional<MonotonicTime> deadline, MonotonicTime now);
+  [[nodiscard]] bool clear_activation(std::optional<ContextKey> expected = std::nullopt);
   void set_activation_held(bool held);
   [[nodiscard]] bool dismiss_active(std::string_view context_id, MonotonicTime now);
   [[nodiscard]] bool available(std::string_view instance_id, MonotonicTime now);

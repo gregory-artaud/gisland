@@ -164,6 +164,10 @@ TEST_CASE("runtime keeps activation-only publications out of passive slot arbitr
   REQUIRE(runtime.activate("status", std::nullopt, now).has_value());
   REQUIRE(runtime.active(gisland::ViewSlot::expanded, now).context != nullptr);
   CHECK(runtime.active(gisland::ViewSlot::expanded, now).context->key.instance_id == "status");
+
+  runtime.clear_activation();
+  REQUIRE(runtime.active(gisland::ViewSlot::expanded, now).context != nullptr);
+  CHECK(runtime.active(gisland::ViewSlot::expanded, now).context->key.instance_id == "clock");
 }
 
 TEST_CASE("runtime rejection restores the last accepted context resources atomically") {

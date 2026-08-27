@@ -1164,6 +1164,7 @@ int Application::run() {
       apply_native_canvas();
     }
     const auto end_keyboard_session = [&] {
+      const auto closing_context = keyboard_context;
       if (host) {
         if (auto restored = host->end_keyboard_focus(); !restored) {
           std::cerr << restored.error().message << '\n';
@@ -1175,6 +1176,9 @@ int Application::run() {
       text_editor.reset();
       keyboard_navigation = KeyboardNavigationController{};
       text_action_pending = false;
+      if (closing_context) {
+        runtime.clear_activation(*closing_context);
+      }
     };
     if (keyboard_focus_lost && keyboard_session) {
       mode_controller.close();

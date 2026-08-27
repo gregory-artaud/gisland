@@ -283,6 +283,18 @@ RuntimeCoordinator::activate(std::string_view instance_id,
   return *activated;
 }
 
+void RuntimeCoordinator::clear_activation() {
+  if (arbiter_.clear_activation()) {
+    ++revision_;
+  }
+}
+
+void RuntimeCoordinator::clear_activation(const ContextKey &expected) {
+  if (arbiter_.clear_activation(expected)) {
+    ++revision_;
+  }
+}
+
 void RuntimeCoordinator::set_activation_held(bool held) { arbiter_.set_activation_held(held); }
 
 std::expected<ContextKey, RuntimeError>

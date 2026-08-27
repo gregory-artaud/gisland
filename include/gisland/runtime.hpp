@@ -94,6 +94,8 @@ public:
   [[nodiscard]] std::expected<ContextKey, RuntimeError>
   activate(std::string_view instance_id, std::optional<std::chrono::milliseconds> duration,
            MonotonicTime now);
+  void clear_activation();
+  void clear_activation(const ContextKey &expected);
   void set_activation_held(bool held);
   [[nodiscard]] std::expected<ContextKey, RuntimeError> dismiss_active(std::string_view context_id,
                                                                        MonotonicTime now);
