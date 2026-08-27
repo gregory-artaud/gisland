@@ -29,6 +29,7 @@ local function publish()
   gisland.publish {
     context_id = "launcher",
     priority = 100,
+    activation_only = true,
     views = {
       compact = ui.text { value = "Apps", role = "compact-primary" },
       expanded = ui.column { gap = "small", children = children },

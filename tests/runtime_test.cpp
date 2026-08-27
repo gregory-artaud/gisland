@@ -140,6 +140,32 @@ TEST_CASE("runtime arbitrates direct publications, dismissals, and rejected layo
   CHECK(runtime.active(now).context == nullptr);
 }
 
+TEST_CASE("runtime keeps activation-only publications out of passive slot arbitration") {
+  gisland::RuntimeCoordinator runtime{config()};
+  const auto now = gisland::MonotonicTime{} + std::chrono::seconds{2};
+  REQUIRE(
+      runtime
+          .consume(message(
+              "clock",
+              gisland::DataMessage{nlohmann::json{{"label", "12:34"}, {"details", "Monday"}}}, now))
+          .has_value());
+  REQUIRE(runtime
+              .consume(message("status",
+                               gisland::PublishMessage{.context_id = "launcher",
+                                                       .priority = 100,
+                                                       .expanded = gisland::SceneNode{gisland::Text{
+                                                           "Applications", "body"}},
+                                                       .activation_only = true},
+                               now))
+              .has_value());
+
+  REQUIRE(runtime.active(gisland::ViewSlot::expanded, now).context != nullptr);
+  CHECK(runtime.active(gisland::ViewSlot::expanded, now).context->key.instance_id == "clock");
+  REQUIRE(runtime.activate("status", std::nullopt, now).has_value());
+  REQUIRE(runtime.active(gisland::ViewSlot::expanded, now).context != nullptr);
+  CHECK(runtime.active(gisland::ViewSlot::expanded, now).context->key.instance_id == "status");
+}
+
 TEST_CASE("runtime rejection restores the last accepted context resources atomically") {
   gisland::RuntimeCoordinator runtime{config()};
   const auto now = gisland::MonotonicTime{} + std::chrono::seconds{2};

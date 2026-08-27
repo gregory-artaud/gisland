@@ -61,6 +61,7 @@ struct PublishMessage {
   std::optional<PresentationIntent> presentation{};
   bool independent_views{false};
   ViewTransitions transitions{};
+  bool activation_only{false};
 };
 
 struct DismissMessage {

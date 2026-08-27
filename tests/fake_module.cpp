@@ -538,6 +538,21 @@ void read_init() {
     });
     return silent();
   }
+  if (mode == "activation-only" || mode == "activation-only-on-1.9") {
+    read_init();
+    write_json({{"type", "ready"},
+                {"protocol_major", 1},
+                {"protocol_minor", mode == "activation-only" ? 10 : 9},
+                {"capabilities", nlohmann::json::array()}});
+    write_json({
+        {"type", "publish"},
+        {"context_id", "explicit-surface"},
+        {"priority", 20},
+        {"activation_only", true},
+        {"compact", {{"type", "text"}, {"value", "Explicit"}, {"role", "body"}}},
+    });
+    return silent();
+  }
   if (mode == "independent" || mode == "independent-high" ||
       mode == "independent-without-capability") {
     read_init();

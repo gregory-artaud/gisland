@@ -305,6 +305,15 @@ TEST_CASE("lua scene API reports useful paths for malformed fields", "[lua_scene
     CHECK(result.error().message.find("publish/color") != std::string::npos);
     CHECK(records.empty());
   }
+  SECTION("activation-only must be a boolean") {
+    const auto [result, records] = run_script(R"lua(return gisland.module { init = function()
+      gisland.publish { context_id = "x", priority = 1, activation_only = "yes",
+        views = { compact = gisland.ui.spacer {} } }
+    end })lua");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find("publish/activation_only") != std::string::npos);
+    CHECK(records.empty());
+  }
 }
 
 TEST_CASE("lua publish accepts strict content transitions", "[lua_scene]") {

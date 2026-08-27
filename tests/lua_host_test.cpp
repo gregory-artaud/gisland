@@ -1415,6 +1415,7 @@ TEST_CASE("Lua 1.10 launcher fixture republishes live results and declares closi
               .has_value());
   REQUIRE(records.size() == 2);
   const auto &initial = records.back();
+  CHECK(initial.at("activation_only") == true);
   CHECK(initial.at("presentation").at("expanded_style") == "palette");
   CHECK(initial.at("views").at("expanded").at("children").size() == 3);
   CHECK(initial.at("views").at("expanded").at("children").at(1).at("close_on_activate") == true);

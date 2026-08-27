@@ -355,6 +355,30 @@ TEST_CASE("supervisor gates interactive launcher features on protocol 1.10 capab
   }
 }
 
+TEST_CASE("supervisor gates activation-only publications on protocol 1.10") {
+  for (const auto &[instance, mode, accepted] :
+       {std::tuple{"explicit", "activation-only", true},
+        std::tuple{"explicit-early", "activation-only-on-1.9", false}}) {
+    CAPTURE(instance, mode, accepted);
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request(instance, mode);
+    request.init.maximum = {.major = 1, .minor = 10};
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [instance](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, instance) ||
+             count_events<gisland::ProtocolViolationEvent>(observed, instance) > 0;
+    });
+    CHECK(has_message<gisland::PublishMessage>(events, instance) == accepted);
+    if (!accepted) {
+      REQUIRE(last_violation(events, instance) != nullptr);
+      CHECK(last_violation(events, instance)->error.path == "/activation_only");
+    }
+    stop_and_wait(supervisor, events, instance);
+  }
+}
+
 TEST_CASE("supervisor emits image publications only after capability negotiation") {
   SECTION("negotiated images are emitted") {
     gisland::ModuleSupervisor supervisor;

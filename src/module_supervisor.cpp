@@ -1114,6 +1114,14 @@ private:
       return;
     }
     if (const auto *publish = std::get_if<PublishMessage>(&*message); publish != nullptr) {
+      if (publish->activation_only &&
+          (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 10})) {
+        record_violation(instance,
+                         ProtocolError{"/activation_only",
+                                       "activation-only contexts require protocol version 1.10"},
+                         now);
+        return;
+      }
       if (const auto feature_path = scene_feature_path(*publish, scene_uses_text_input_features);
           feature_path) {
         if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 10}) {

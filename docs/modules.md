@@ -280,7 +280,7 @@ Do not send other records before `ready`. Feature introduction by protocol minor
 | 1.7 | `compact-view-styles`, `icon-roles`, and `progress-transitions` |
 | 1.8 | correlated `action_result`, required for confirmed `gislandctl action` calls |
 | 1.9 | `indicator-effects`; `content-transitions` on `publish` and `data` records |
-| 1.10 | `text-input`, `close_on_activate`, and `expanded-view-styles` |
+| 1.10 | `text-input`, `close_on_activate`, `expanded-view-styles`, and activation-only contexts |
 
 The core may then send:
 
@@ -328,6 +328,9 @@ must be present. An optional expanded reveal lasts 1 through 60000 milliseconds:
 
 `priority` is an integer; higher priority wins, then newer publication. `expires_in_ms` removes the
 context after a positive duration. Publishing the same `context_id` replaces that module's context.
+Set `activation_only` to `true` for a context that must remain available to
+`gislandctl activate[-open]` without replacing configured compact or expanded views during passive
+display. This is useful for launchers and other explicitly opened surfaces.
 `presentation.compact_style` selects a named compact geometry from the theme and requires protocol
 1.7 with `compact-view-styles`.
 `presentation.expanded_style` selects a named expanded geometry and requires protocol 1.10 with

@@ -958,6 +958,10 @@ parse_view_transitions(const Json &object) {
   if (!priority.has_value()) {
     return std::unexpected(priority.error());
   }
+  auto activation_only = optional_bool(object, "activation_only", false, "");
+  if (!activation_only) {
+    return std::unexpected(activation_only.error());
+  }
   auto resources = parse_image_resources(object);
   if (!resources) {
     return std::unexpected(resources.error());
@@ -1146,9 +1150,10 @@ parse_view_transitions(const Json &object) {
     }
   }
 
-  return ModuleMessage{PublishMessage{
-      std::move(*context_id), *priority, expires_in, std::move(compact), std::move(expanded),
-      std::move(*resources), presentation, views_iterator != object.end(), *transitions}};
+  return ModuleMessage{
+      PublishMessage{std::move(*context_id), *priority, expires_in, std::move(compact),
+                     std::move(expanded), std::move(*resources), presentation,
+                     views_iterator != object.end(), *transitions, *activation_only}};
 }
 
 [[nodiscard]] std::expected<ModuleMessage, ProtocolError> parse_action_result(const Json &object) {

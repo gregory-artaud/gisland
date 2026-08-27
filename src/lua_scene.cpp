@@ -504,7 +504,7 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
 [[nodiscard]] std::expected<void, std::string> validate_publication(const Json &context) {
   if (auto result = known_fields(context,
                                  {"context_id", "priority", "expires_in_ms", "views", "resources",
-                                  "presentation", "transitions"},
+                                  "presentation", "transitions", "activation_only"},
                                  "publish");
       !result) {
     return result;
@@ -527,6 +527,10 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
       expires != context.end() &&
       (!expires->is_number_integer() || expires->get<std::int64_t>() < 0)) {
     return std::unexpected(path_error("publish/expires_in_ms", "expected a non-negative integer"));
+  }
+  if (const auto activation_only = context.find("activation_only");
+      activation_only != context.end() && !activation_only->is_boolean()) {
+    return std::unexpected(path_error("publish/activation_only", "expected a boolean"));
   }
   const auto views = context.find("views");
   if (views == context.end() || !views->is_object()) {

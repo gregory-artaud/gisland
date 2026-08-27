@@ -182,6 +182,7 @@ RuntimeCoordinator::consume_message(const ModuleMessageEvent &event) {
                   .resources = message.resources,
                   .presentation = message.presentation,
                   .revision = revision_ + 1,
+                  .fallback_only = message.activation_only,
                   .transitions = message.transitions,
               },
               event.at);

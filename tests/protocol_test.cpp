@@ -95,7 +95,7 @@ TEST_CASE("protocol 1.9 parses independent content transitions") {
 
 TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") {
   const auto result = gisland::parse_module_message(R"({
-    "type":"publish","context_id":"launcher","priority":100,
+    "type":"publish","context_id":"launcher","priority":100,"activation_only":true,
     "views":{"expanded":{"type":"column","children":[
       {"type":"text_input","input_id":"query","action_id":"query-changed",
        "submit_action_id":"submit","navigation_action_id":"navigate-results",
@@ -110,6 +110,7 @@ TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") 
 
   REQUIRE(result.has_value());
   const auto &publish = std::get<gisland::PublishMessage>(*result);
+  CHECK(publish.activation_only);
   REQUIRE(publish.presentation.has_value());
   CHECK(publish.presentation->expanded_style == "palette");
   const auto &column = std::get<gisland::Column>(publish.expanded->value);
@@ -489,6 +490,13 @@ TEST_CASE("protocol errors identify the failing JSON path") {
         R"({"type":"publish","context_id":"x","priority":"high","compact":{"type":"text","value":"x","role":"body"}})");
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().path == "/priority");
+  }
+
+  SECTION("activation-only must be a boolean") {
+    const auto result = gisland::parse_module_message(
+        R"({"type":"publish","context_id":"x","priority":0,"activation_only":"yes","compact":{"type":"text","value":"x","role":"body"}})");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().path == "/activation_only");
   }
 
   SECTION("unknown primitive") {
