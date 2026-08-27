@@ -276,6 +276,41 @@ TEST_CASE("module view templates reject unknown properties and root repeats") {
   CHECK(repeat.error().path == "modules[0].view.compact");
 }
 
+TEST_CASE("module view TOML parses interactive launcher primitives") {
+  constexpr auto source = R"(
+monitor = "primary"
+theme = "default"
+default_module = "launcher"
+[[modules]]
+id = "launcher"
+command = ["launcher"]
+[modules.view.compact]
+type = "text"
+value = "Apps"
+role = "body"
+[modules.view.expanded]
+type = "column"
+children = [
+  { type = "text_input", input_id = "query", action_id = "query-changed", submit_action_id = "launch", initial_value = { bind = "query" }, placeholder = "Search", accessible_label = "Search applications" },
+  { type = "button", action_id = "launch", close_on_activate = true, accessible_label = "Launch", content = { type = "text", value = "Terminal", role = "body" } }
+]
+  )";
+  const auto config = gisland::parse_config(source, "launcher-view.toml");
+  if (!config) {
+    INFO(config.error().path << ": " << config.error().message);
+    REQUIRE(config.has_value());
+  }
+  REQUIRE(config.has_value());
+  REQUIRE(config->modules.front().view.has_value());
+  REQUIRE(config->modules.front().view->expanded.has_value());
+  const auto scene =
+      gisland::instantiate_template(*config->modules.front().view->expanded, {{"query", "term"}});
+  REQUIRE(scene.has_value());
+  const auto &children = std::get<gisland::Column>(scene->value).children;
+  CHECK(std::get<gisland::TextInput>(children[0]->value).initial_value == "term");
+  CHECK(std::get<gisland::Button>(children[1]->value).close_on_activate);
+}
+
 TEST_CASE("module view templates reject duplicate aliases in one scope") {
   constexpr auto source = R"(
 monitor = "primary"

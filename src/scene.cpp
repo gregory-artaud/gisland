@@ -18,6 +18,7 @@ constexpr std::size_t maximum_identifier_bytes = 128;
 constexpr std::size_t maximum_rich_items = 128;
 constexpr std::size_t maximum_rich_text_bytes = 16 * 1024;
 constexpr std::size_t maximum_rich_links = 32;
+constexpr std::size_t maximum_input_bytes = 1024;
 
 [[nodiscard]] SceneValidation validate_text(std::string_view value, const std::string &path) {
   if (value.size() > maximum_text_bytes) {
@@ -151,6 +152,43 @@ private:
     return validate_text(indicator.accessible_label, path + "/accessible_label");
   }
 
+  [[nodiscard]] SceneValidation validate_primitive(const TextInput &input, std::size_t /*depth*/,
+                                                   const std::string &path) {
+    if (input.input_id.empty()) {
+      return std::unexpected(SceneError{SceneErrorCode::empty_identifier, path + "/input_id"});
+    }
+    if (!input_ids_.insert(input.input_id).second) {
+      return std::unexpected(SceneError{SceneErrorCode::duplicate_identifier, path + "/input_id"});
+    }
+    if (input.action_id.empty()) {
+      return std::unexpected(SceneError{SceneErrorCode::empty_action, path + "/action_id"});
+    }
+    if (input.initial_value.size() > maximum_input_bytes) {
+      return std::unexpected(SceneError{SceneErrorCode::text_too_long, path + "/initial_value"});
+    }
+    for (const auto &[value, suffix] :
+         {std::pair{std::string_view{input.input_id}, "/input_id"},
+          std::pair{std::string_view{input.action_id}, "/action_id"}}) {
+      if (auto result = validate_identifier(value, path + suffix); !result) {
+        return result;
+      }
+    }
+    if (input.submit_action_id) {
+      if (input.submit_action_id->empty()) {
+        return std::unexpected(
+            SceneError{SceneErrorCode::empty_action, path + "/submit_action_id"});
+      }
+      if (auto result = validate_identifier(*input.submit_action_id, path + "/submit_action_id");
+          !result) {
+        return result;
+      }
+    }
+    if (auto result = validate_text(input.placeholder, path + "/placeholder"); !result) {
+      return result;
+    }
+    return validate_text(input.accessible_label, path + "/accessible_label");
+  }
+
   [[nodiscard]] SceneValidation validate_primitive(const Row &row, std::size_t depth,
                                                    const std::string &path) {
     if (auto result = validate_identifier(row.alignment, path + "/alignment"); !result) {
@@ -271,6 +309,7 @@ private:
   }
 
   std::size_t node_count_{0};
+  std::set<std::string> input_ids_;
 };
 
 } // namespace
@@ -284,16 +323,27 @@ Column::Column(std::vector<SceneNode> nodes, std::string alignment_value, std::s
       gap(std::move(gap_value)) {}
 
 Button::Button(SceneNode content_value, std::string action_id_value, bool enabled_value,
-               std::string accessible_label_value)
+               std::string accessible_label_value, bool close_on_activate_value)
     : content(std::make_shared<const SceneNode>(std::move(content_value))),
       action_id(std::move(action_id_value)), enabled(enabled_value),
+      accessible_label(std::move(accessible_label_value)),
+      close_on_activate(close_on_activate_value) {}
+
+TextInput::TextInput(std::string input_id_value, std::string action_id_value,
+                     std::string initial_value_value, std::string placeholder_value,
+                     std::string accessible_label_value,
+                     std::optional<std::string> submit_action_id_value)
+    : input_id(std::move(input_id_value)), action_id(std::move(action_id_value)),
+      submit_action_id(std::move(submit_action_id_value)),
+      initial_value(std::move(initial_value_value)), placeholder(std::move(placeholder_value)),
       accessible_label(std::move(accessible_label_value)) {}
 
 ActionRegion::ActionRegion(SceneNode content_value, std::string action_id_value, bool enabled_value,
-                           std::string accessible_label_value)
+                           std::string accessible_label_value, bool close_on_activate_value)
     : content(std::make_shared<const SceneNode>(std::move(content_value))),
       action_id(std::move(action_id_value)), enabled(enabled_value),
-      accessible_label(std::move(accessible_label_value)) {}
+      accessible_label(std::move(accessible_label_value)),
+      close_on_activate(close_on_activate_value) {}
 
 SceneValidation validate_scene(const SceneNode &root) {
   return SceneValidator{}.validate(root, 1, "");

@@ -44,6 +44,7 @@ struct ThemeViews {
   ViewGeometry compact;
   ViewGeometry expanded;
   std::map<std::string, ViewGeometry, std::less<>> compact_styles;
+  std::map<std::string, ViewGeometry, std::less<>> expanded_styles;
 };
 
 using ThemeColor = std::variant<std::string, Rgba>;
@@ -52,6 +53,16 @@ struct ButtonStyle {
   ThemeColor background;
   ThemeColor disabled_background;
   ThemeColor hover_overlay;
+};
+
+struct InputStyle {
+  double height;
+  double padding_horizontal;
+  double radius;
+  ThemeColor background;
+  ThemeColor focused_background;
+  ThemeColor caret;
+  ThemeColor placeholder;
 };
 
 struct ProgressStyle {
@@ -179,6 +190,7 @@ public:
   [[nodiscard]] const PixelTokens &spacers() const noexcept { return spacers_; }
   [[nodiscard]] const ThemeViews &views() const noexcept { return views_; }
   [[nodiscard]] const ButtonStyle &buttons() const noexcept { return buttons_; }
+  [[nodiscard]] const InputStyle &inputs() const noexcept { return inputs_; }
   [[nodiscard]] const ProgressStyle &progress() const noexcept { return progress_; }
   [[nodiscard]] const IndicatorStyle &indicator() const noexcept { return indicator_; }
   [[nodiscard]] const ShadowStyle &shadow() const noexcept { return shadow_; }
@@ -189,9 +201,9 @@ public:
 
 private:
   Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-        ThemeViews views, ButtonStyle buttons, ProgressStyle progress, IndicatorStyle indicator,
-        ShadowStyle shadow, AnimationStyle animation, FontResources fonts, Icons icons,
-        ImageRoles images);
+        ThemeViews views, ButtonStyle buttons, InputStyle inputs, ProgressStyle progress,
+        IndicatorStyle indicator, ShadowStyle shadow, AnimationStyle animation, FontResources fonts,
+        Icons icons, ImageRoles images);
 
   Palette palette_;
   Typography typography_;
@@ -199,6 +211,7 @@ private:
   PixelTokens spacers_;
   ThemeViews views_;
   ButtonStyle buttons_;
+  InputStyle inputs_;
   ProgressStyle progress_;
   IndicatorStyle indicator_;
   ShadowStyle shadow_;

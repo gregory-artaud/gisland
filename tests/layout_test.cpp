@@ -723,6 +723,44 @@ max_height = 68)");
   CHECK(result->view.radius == 21);
 }
 
+TEST_CASE("named expanded palette style lays out a full-width text input") {
+  const auto theme = make_theme_with(
+      "padding = 10\nradius = 12\nborder = 2\nmin_width = 100\nmax_width = 200\nmin_height = "
+      "60\nmax_height = 140",
+      R"(padding = 10
+radius = 12
+border = 2
+min_width = 100
+max_width = 200
+min_height = 60
+max_height = 140
+
+[view.expanded.styles.palette]
+padding = 10
+radius = 24
+border = 0
+min_width = 180
+max_width = 180
+min_height = 80
+max_height = 80)");
+  const gisland::SceneNode scene{
+      gisland::TextInput{"query", "query-changed", "", "Search", "Search applications", "launch"}};
+
+  const auto result = gisland::layout_scene(scene, theme, gisland::ViewMode::expanded,
+                                            TestGlyphMetrics{}, "palette");
+
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 180, 80});
+  CHECK(result->view.radius == 24);
+  const auto &input = command_at<gisland::TextInputDrawCommand>(*result, 0);
+  CHECK(input.bounds == gisland::Rect{10, 16, 160, 48});
+  CHECK(input.placeholder == "Search");
+  CHECK(input.initial_value.empty());
+  REQUIRE(result->interactions.size() == 1);
+  CHECK(result->interactions.front().kind == gisland::InteractionKind::text_input);
+  CHECK(result->interactions.front().submit_action_id == std::optional<std::string>{"launch"});
+}
+
 TEST_CASE("unlabeled linear progress fills remaining row width") {
   const auto theme = make_theme_with(
       "padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = 100\nmin_height = "

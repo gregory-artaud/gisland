@@ -459,6 +459,8 @@ IslandMode OverlayModeController::mode() const {
                                                                            : hover_.mode();
 }
 
+bool OverlayModeController::explicitly_open() const noexcept { return explicit_open_; }
+
 void OverlayModeController::set_exit_tolerance(std::chrono::milliseconds exit_tolerance) {
   hover_.set_exit_tolerance(exit_tolerance);
 }

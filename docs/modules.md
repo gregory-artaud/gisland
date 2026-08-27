@@ -209,7 +209,9 @@ Supported template nodes are:
 | `spacer` | optional `flexible` and theme `size_token` |
 | `progress` | `value` in `0..1`, optional `label`, `state`, `shape` (`linear` or `ring`) |
 | `indicator` | `state`, `accessible_label` |
-| `button` | `content`, `action_id`, optional `enabled`, `accessible_label` |
+| `text_input` | `input_id`, `action_id`, optional `submit_action_id`, `initial_value`, `placeholder`, `accessible_label` |
+| `button` | `content`, `action_id`, optional `enabled`, `accessible_label`, `close_on_activate` |
+| `action_region` | `content`, `action_id`, optional `enabled`, `accessible_label`, `close_on_activate` |
 
 Names such as typography roles, gap tokens, icons, and semantic states are resolved by the active
 global theme. Module views should express meaning, not hard-code fonts, colors, pixels, or animation.
@@ -239,8 +241,9 @@ arrays; use `gisland.array()` for an empty array. Other tables must have string 
 
 For direct context publication, Lua also provides `gisland.publish(context)`,
 `gisland.dismiss(context_id)`, and `gisland.log(level, message)`. `gisland.ui` constructors cover
-`text`, `icon`, `image`, `rich_text`, `row`, `column`, `spacer`, `progress`, `indicator`, `button`,
-and `action_region`. See the executable examples in
+`text`, `icon`, `image`, `rich_text`, `row`, `column`, `spacer`, `progress`, `indicator`,
+`text_input`, `button`, and `action_region`. See the executable launcher example in
+[`tests/fixtures/lua/launcher.lua`](../tests/fixtures/lua/launcher.lua), plus
 [`tests/fixtures/lua/example_data_module.lua`](../tests/fixtures/lua/example_data_module.lua) and
 [`tests/fixtures/lua/example_action_module.lua`](../tests/fixtures/lua/example_action_module.lua).
 
@@ -253,7 +256,7 @@ or a protocol `log` record. Keep processing stdin until `shutdown` or EOF.
 The core starts the handshake with `init`:
 
 ```json
-{"type":"init","protocol":{"minimum":{"major":1,"minor":1},"maximum":{"major":1,"minor":9}},"instance_id":"weather-main","capabilities":["data-snapshots","context-images","rich-content","independent-views","ring-progress","status-indicator","compact-view-styles","icon-roles","progress-transitions","indicator-effects","content-transitions"],"configuration":{"units":"metric"},"locale":"en_US.UTF-8","timezone":"Europe/Paris"}
+{"type":"init","protocol":{"minimum":{"major":1,"minor":1},"maximum":{"major":1,"minor":10}},"instance_id":"weather-main","capabilities":["data-snapshots","context-images","rich-content","independent-views","ring-progress","status-indicator","compact-view-styles","icon-roles","progress-transitions","indicator-effects","content-transitions","text-input","expanded-view-styles"],"configuration":{"units":"metric"},"locale":"en_US.UTF-8","timezone":"Europe/Paris"}
 ```
 
 Choose one version inside both the offered and manifest ranges, and echo only capabilities you will
@@ -277,6 +280,7 @@ Do not send other records before `ready`. Feature introduction by protocol minor
 | 1.7 | `compact-view-styles`, `icon-roles`, and `progress-transitions` |
 | 1.8 | correlated `action_result`, required for confirmed `gislandctl action` calls |
 | 1.9 | `indicator-effects`; `content-transitions` on `publish` and `data` records |
+| 1.10 | `text-input`, `close_on_activate`, and `expanded-view-styles` |
 
 The core may then send:
 
@@ -326,6 +330,16 @@ must be present. An optional expanded reveal lasts 1 through 60000 milliseconds:
 context after a positive duration. Publishing the same `context_id` replaces that module's context.
 `presentation.compact_style` selects a named compact geometry from the theme and requires protocol
 1.7 with `compact-view-styles`.
+`presentation.expanded_style` selects a named expanded geometry and requires protocol 1.10 with
+`expanded-view-styles`; the distributed `palette` style is sized for one input and eight results.
+
+With protocol 1.10 and `text-input`, `text_input` emits its complete UTF-8 value through
+`action_id` at most once per rendered frame. Values are limited to 1024 bytes. The core preserves
+the draft and caret when the same context republishes the same `input_id`, then resets to
+`initial_value` after close and reopen. `close_on_activate = true` closes the overlay only after the
+action was delivered successfully. An explicit `gislandctl activate-open <instance>` session owns
+keyboard focus; hover-only expansion remains non-focusable. Escape closes the session, while
+Up/Down select results, Enter activates, and Tab/Shift+Tab traverse targets.
 
 Image resources require protocol 1.2 and are scoped to one publication. They are top-to-bottom,
 tightly packed, sRGB, straight-alpha RGBA8 encoded as base64. Each axis is at most 512 pixels; a

@@ -57,6 +57,25 @@ namespace {
       scene.value);
 }
 
+[[nodiscard]] bool scene_uses_text_input_features(const SceneNode &scene) {
+  return std::visit(
+      [](const auto &primitive) {
+        using Primitive = std::decay_t<decltype(primitive)>;
+        if constexpr (std::is_same_v<Primitive, TextInput>) {
+          return true;
+        } else if constexpr (std::is_same_v<Primitive, Row> || std::is_same_v<Primitive, Column>) {
+          return std::ranges::any_of(primitive.children, [](const auto &child) {
+            return scene_uses_text_input_features(*child);
+          });
+        } else if constexpr (std::is_same_v<Primitive, Button> ||
+                             std::is_same_v<Primitive, ActionRegion>) {
+          return primitive.close_on_activate || scene_uses_text_input_features(*primitive.content);
+        }
+        return false;
+      },
+      scene.value);
+}
+
 [[nodiscard]] bool scene_uses_indicator(const SceneNode &scene) {
   return std::visit(
       [](const auto &primitive) {
@@ -1095,6 +1114,38 @@ private:
       return;
     }
     if (const auto *publish = std::get_if<PublishMessage>(&*message); publish != nullptr) {
+      if (const auto feature_path = scene_feature_path(*publish, scene_uses_text_input_features);
+          feature_path) {
+        if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 10}) {
+          record_violation(
+              instance,
+              ProtocolError{*feature_path, "text input features require protocol version 1.10"},
+              now);
+          return;
+        }
+        if (!instance.negotiated_capabilities.contains("text-input")) {
+          record_violation(instance,
+                           ProtocolError{*feature_path, "text-input capability was not negotiated"},
+                           now);
+          return;
+        }
+      }
+      if (publish->presentation && publish->presentation->expanded_style) {
+        if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 10}) {
+          record_violation(instance,
+                           ProtocolError{"/presentation/expanded_style",
+                                         "expanded style requires protocol version 1.10"},
+                           now);
+          return;
+        }
+        if (!instance.negotiated_capabilities.contains("expanded-view-styles")) {
+          record_violation(instance,
+                           ProtocolError{"/presentation/expanded_style",
+                                         "expanded-view-styles capability was not negotiated"},
+                           now);
+          return;
+        }
+      }
       const auto path = indicator_path(*publish);
       if (path &&
           (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 6})) {
@@ -1235,6 +1286,13 @@ private:
             instance,
             ProtocolError{"/capabilities", "content-transitions requires protocol version 1.9"},
             now);
+        return false;
+      }
+      if ((capability == "text-input" || capability == "expanded-view-styles") &&
+          selected < ProtocolVersion{1, 10}) {
+        record_violation(
+            instance,
+            ProtocolError{"/capabilities", capability + " requires protocol version 1.10"}, now);
         return false;
       }
     }

@@ -2,6 +2,7 @@
 #include <X11/Xutil.h>
 #include <X11/extensions/XTest.h>
 #include <X11/extensions/shape.h>
+#include <X11/keysym.h>
 
 #include "gisland/control_client.hpp"
 
@@ -1046,11 +1047,15 @@ TEST_CASE("external notification history grows on repeated commands and resets a
   }));
   REQUIRE(open_notification_history(config.home()));
   std::this_thread::sleep_for(std::chrono::milliseconds{800});
-  REQUIRE(wait_until([&] {
+  int reset_height = 0;
+  const bool reset = wait_until([&] {
     XSync(display, False);
     const auto reset_shape = input_shape_bounds(display, *window);
-    return reset_shape && reset_shape->height == heights[0];
-  }));
+    reset_height = reset_shape ? reset_shape->height : 0;
+    return reset_height == heights[0];
+  });
+  INFO("reset height: " << reset_height);
+  REQUIRE(reset);
   const auto history_application_log = read_text(config.application_log());
   INFO(history_application_log);
   CHECK(history_application_log.find("[notifications] layout:") == std::string::npos);
@@ -1209,4 +1214,150 @@ TEST_CASE("Lua audio publication precedes deferred close without a compact fallb
   REQUIRE(audio != compact_owners.end());
   CHECK(std::ranges::all_of(audio, compact_owners.end(),
                             [](const auto &owner) { return owner == "audio"; }));
+}
+
+TEST_CASE("activate-open owns keyboard focus for a live Lua launcher session") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  const Window root = DefaultRootWindow(display);
+  const Window previous = XCreateSimpleWindow(display, root, 40, 300, 160, 80, 0, 0, 0);
+  XMapWindow(display, previous);
+  XSetInputFocus(display, previous, RevertToPointerRoot, CurrentTime);
+  XSync(display, False);
+
+  TemporaryConfig config{false};
+  write_text(config.config_path(), std::string{"monitor = \"primary\"\n"
+                                               "theme = \"default\"\n"
+                                               "[defaults]\n"
+                                               "compact = \"launcher\"\n"
+                                               "expanded = \"launcher\"\n"
+                                               "[[modules]]\n"
+                                               "id = \"launcher\"\n"
+                                               "command = [\""} +
+                                       GISLAND_LUA_HOST_PATH + "\", \"" +
+                                       GISLAND_LAUNCHER_LUA_PATH +
+                                       "\"]\nprotocol_min = \"1.10\"\nprotocol_max = \"1.10\"\n"
+                                       "restart = \"never\"\n");
+  ChildProcess child{config.home(), config.application_log()};
+  const std::string socket = (config.home() / "gisland.sock").string();
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    if (!window) {
+      return false;
+    }
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status && std::get<gisland::ControlStatus>(status->value()).compact.has_value();
+  }));
+
+  XSetInputFocus(display, previous, RevertToPointerRoot, CurrentTime);
+  XSync(display, False);
+
+  const auto focused_window = [&] {
+    Window focused = None;
+    int revert = 0;
+    XGetInputFocus(display, &focused, &revert);
+    return focused;
+  };
+  CHECK(focused_window() == previous);
+
+  auto position = root_position(display, *window);
+  auto compact_shape = input_shape_bounds(display, *window);
+  REQUIRE(position.has_value());
+  REQUIRE(compact_shape.has_value());
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                               position->x + compact_shape->x + compact_shape->width / 2,
+                               position->y + compact_shape->y + compact_shape->height / 2,
+                               CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  CHECK(focused_window() == previous);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
+
+  REQUIRE(
+      gisland::send_control_command(socket, gisland::ActivateOpenControl{"launcher"}).has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode ==
+               gisland::IslandMode::expanded &&
+           focused_window() == *window;
+  }));
+
+  const auto type_key = [&](KeySym symbol) {
+    const KeyCode code = XKeysymToKeycode(display, symbol);
+    REQUIRE(code != 0);
+    REQUIRE(XTestFakeKeyEvent(display, code, True, CurrentTime) != 0);
+    XSync(display, False);
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    REQUIRE(XTestFakeKeyEvent(display, code, False, CurrentTime) != 0);
+    XSync(display, False);
+  };
+  type_key(XK_t);
+  type_key(XK_e);
+  type_key(XK_r);
+  REQUIRE(wait_until([&] {
+    return read_text(config.application_log()).find("action 'query-changed' accepted") !=
+           std::string::npos;
+  }));
+
+  type_key(XK_Escape);
+  const bool escaped = wait_until([&] {
+    XSync(display, False);
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::compact &&
+           focused_window() == previous;
+  });
+  INFO("focus after Escape: " << focused_window() << ", expected " << previous);
+  const auto escape_status = gisland::send_control_command(socket, gisland::StatusControl{});
+  std::string escape_mode = "unavailable";
+  if (escape_status) {
+    escape_mode = std::get<gisland::ControlStatus>(escape_status->value()).mode ==
+                          gisland::IslandMode::compact
+                      ? "compact"
+                      : "expanded";
+  }
+  CAPTURE(escape_mode);
+  REQUIRE(escaped);
+
+  REQUIRE(
+      gisland::send_control_command(socket, gisland::ActivateOpenControl{"launcher"}).has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    return focused_window() == *window;
+  }));
+  XSetInputFocus(display, previous, RevertToPointerRoot, CurrentTime);
+  XSync(display, False);
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::compact;
+  }));
+
+  REQUIRE(
+      gisland::send_control_command(socket, gisland::ActivateOpenControl{"launcher"}).has_value());
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    return focused_window() == *window;
+  }));
+  type_key(XK_Return);
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status &&
+           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::compact &&
+           read_text(config.application_log()).find("action 'launch:terminal' accepted") !=
+               std::string::npos &&
+           focused_window() == previous;
+  }));
+
+  XDestroyWindow(display, previous);
+  XCloseDisplay(display);
 }

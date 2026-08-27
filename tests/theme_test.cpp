@@ -203,6 +203,38 @@ max_height = 68
   CHECK(style.radius == 21.0);
 }
 
+TEST_CASE("theme parses named expanded view styles and input appearance") {
+  const auto themed = replace_once(std::string{valid_theme}, "[progress]", R"(
+[view.expanded.styles.palette]
+padding_horizontal = 20
+padding_vertical = 16
+radius = 30
+border = 0
+min_width = 600
+max_width = 600
+min_height = 120
+max_height = 520
+
+[inputs]
+height = 48
+padding_horizontal = 14
+radius = 14
+background = "#FFFFFF0D"
+focused_background = "#FFFFFF14"
+caret = "foreground"
+placeholder = "muted"
+
+[progress])");
+
+  const auto result = gisland::parse_theme(themed, "palette-theme.toml");
+
+  REQUIRE(result.has_value());
+  CHECK(result->views().expanded_styles.at("palette").max_width == 600.0);
+  CHECK(result->inputs().height == 48.0);
+  CHECK(result->inputs().radius == 14.0);
+  CHECK(std::get<std::string>(result->inputs().caret) == "foreground");
+}
+
 TEST_CASE("indicator theme diameter is optional and bounded") {
   const auto custom = gisland::parse_theme(
       std::string{valid_theme} + "\n[indicator]\ndiameter = 9.5\n", "indicator.toml");

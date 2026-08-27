@@ -999,6 +999,7 @@ if(BUILD_TESTING)
         GISLANDCTL_BINARY_PATH="$<TARGET_FILE:gislandctl>"
         GISLAND_FAKE_MODULE_PATH="$<TARGET_FILE:fake_module>"
         GISLAND_LUA_HOST_PATH="$<TARGET_FILE:gisland-lua-host>"
+        GISLAND_LAUNCHER_LUA_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/lua/launcher.lua"
         GISLAND_AUDIO_LUA_PATH="${PROJECT_SOURCE_DIR}/assets/modules/audio/audio.lua"
         GISLAND_AUDIO_FAKE_PACTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-pactl"
         GISLAND_AUDIO_FAKE_GISLANDCTL_PATH="${PROJECT_SOURCE_DIR}/tests/audio/fixtures/fake-gislandctl"

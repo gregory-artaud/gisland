@@ -92,6 +92,27 @@ struct TextDrawCommand {
   Rgba color;
 };
 
+struct TextInputDrawCommand {
+  Rect bounds;
+  Rect clip;
+  std::string input_id;
+  std::string text;
+  std::string initial_value;
+  std::string placeholder;
+  std::string font_resource;
+  TypographyRole typography;
+  Rgba text_color;
+  Rgba placeholder_color;
+  Rgba background;
+  Rgba focused_background;
+  Rgba caret_color;
+  int radius;
+  int padding_horizontal;
+  std::size_t caret_byte{};
+  bool focused{};
+  bool caret_visible{};
+};
+
 struct RichTextDrawCommand {
   Rect bounds;
   Rect clip;
@@ -161,11 +182,11 @@ struct ButtonDecorationDrawCommand {
 };
 
 using ContentDrawCommand =
-    std::variant<TextDrawCommand, RichTextDrawCommand, IconDrawCommand, ImageDrawCommand,
-                 ProgressDrawCommand, RingProgressDrawCommand, IndicatorDrawCommand,
-                 ButtonDecorationDrawCommand>;
+    std::variant<TextDrawCommand, TextInputDrawCommand, RichTextDrawCommand, IconDrawCommand,
+                 ImageDrawCommand, ProgressDrawCommand, RingProgressDrawCommand,
+                 IndicatorDrawCommand, ButtonDecorationDrawCommand>;
 
-enum class InteractionKind { button, link, action_region };
+enum class InteractionKind { button, link, action_region, text_input };
 
 struct InteractionTarget {
   Rect bounds;
@@ -174,6 +195,9 @@ struct InteractionTarget {
   bool enabled;
   std::string accessible_label;
   InteractionKind kind{InteractionKind::action_region};
+  std::string input_id{};
+  std::optional<std::string> submit_action_id{};
+  bool close_on_activate{};
 
   bool operator==(const InteractionTarget &) const = default;
 };
@@ -187,6 +211,7 @@ struct LayoutPlan {
 enum class LayoutErrorCode {
   unknown_role,
   unknown_compact_style,
+  unknown_expanded_style,
   unknown_image_role,
   invalid_image_placement,
   unknown_gap,

@@ -427,6 +427,52 @@ private:
   }
 
   [[nodiscard]] std::expected<MeasuredNode, LayoutError>
+  measure_primitive(const SceneNode &scene, const TextInput &input, const std::string &path) const {
+    auto role = typography("body", path + "/input_id");
+    if (!role) {
+      return std::unexpected(role.error());
+    }
+    auto font = font_resource((*role)->font, path + "/input_id");
+    if (!font) {
+      return std::unexpected(font.error());
+    }
+    const std::string displayed =
+        input.initial_value.empty() ? input.placeholder : input.initial_value;
+    auto size = measure_text(*font, **role, one_line(displayed), path + "/initial_value");
+    if (!size) {
+      return std::unexpected(size.error());
+    }
+    auto height = rounded_pixel(theme_.inputs().height, path + "/input_id");
+    auto padding = rounded_pixel(theme_.inputs().padding_horizontal, path + "/input_id");
+    if (!height) {
+      return std::unexpected(height.error());
+    }
+    if (!padding) {
+      return std::unexpected(padding.error());
+    }
+    auto doubled_padding = checked_multiply(2, *padding, path);
+    if (!doubled_padding) {
+      return std::unexpected(doubled_padding.error());
+    }
+    auto width = checked_add(size->first, *doubled_padding, path);
+    if (!width) {
+      return std::unexpected(width.error());
+    }
+    MeasuredNode result{&scene, path};
+    result.width = *width;
+    result.height = *height;
+    result.minimum_width = *doubled_padding;
+    result.minimum_height = *height;
+    result.padding = *padding;
+    result.expands_width = true;
+    result.typography = *role;
+    result.font_resource = std::move(*font);
+    result.text = one_line(input.initial_value);
+    result.color = theme_.palette().at((*role)->color);
+    return result;
+  }
+
+  [[nodiscard]] std::expected<MeasuredNode, LayoutError>
   measure_primitive(const SceneNode &scene, const RichText &rich, const std::string &path) const {
     auto role = typography(rich.role, path + "/role");
     if (!role) {
@@ -834,6 +880,16 @@ private:
     return {};
   }
 
+  [[nodiscard]] static std::expected<void, LayoutError>
+  constrain_primitive(MeasuredNode &node, const TextInput & /*input*/, int available_width) {
+    if (available_width < node.minimum_width) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "text input cannot fit the assigned width"));
+    }
+    node.width = available_width;
+    return {};
+  }
+
   [[nodiscard]] std::expected<std::vector<int>, LayoutError>
   horizontal_sizes(const MeasuredNode &node, int available_width) const {
     auto gap_total = checked_multiply(
@@ -1062,6 +1118,50 @@ private:
     commands.emplace_back(TextDrawCommand{Rect{assigned.x, *y, width, node.height}, *clipped,
                                           std::move(rendered), node.font_resource, *node.typography,
                                           node.color});
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, LayoutError>
+  place_primitive(const MeasuredNode &node, const TextInput &input, Rect assigned, Rect clip,
+                  std::vector<ContentDrawCommand> &commands,
+                  std::vector<InteractionTarget> &interactions) const {
+    if (assigned.width < node.minimum_width || assigned.height < node.minimum_height) {
+      return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                   "text input cannot fit the assigned bounds"));
+    }
+    auto y = checked_add(assigned.y, (assigned.height - node.height) / 2, node.path);
+    if (!y) {
+      return std::unexpected(y.error());
+    }
+    const Rect bounds{assigned.x, *y, assigned.width, node.height};
+    auto clipped = intersect(clip, bounds, node.path);
+    if (!clipped) {
+      return std::unexpected(clipped.error());
+    }
+    auto radius = rounded_pixel(theme_.inputs().radius, node.path);
+    if (!radius) {
+      return std::unexpected(radius.error());
+    }
+    commands.emplace_back(TextInputDrawCommand{
+        bounds,
+        *clipped,
+        input.input_id,
+        node.text,
+        node.text,
+        one_line(input.placeholder),
+        node.font_resource,
+        *node.typography,
+        node.color,
+        resolve_theme_color(theme_, theme_.inputs().placeholder),
+        resolve_theme_color(theme_, theme_.inputs().background),
+        resolve_theme_color(theme_, theme_.inputs().focused_background),
+        resolve_theme_color(theme_, theme_.inputs().caret),
+        *radius,
+        node.padding,
+    });
+    interactions.push_back(InteractionTarget{bounds, *clipped, input.action_id, true,
+                                             input.accessible_label, InteractionKind::text_input,
+                                             input.input_id, input.submit_action_id, false});
     return {};
   }
 
@@ -1414,8 +1514,15 @@ private:
         button.enabled ? theme_.buttons().background : theme_.buttons().disabled_background;
     commands.emplace_back(ButtonDecorationDrawCommand{
         bounds, *clipped, resolve_theme_color(theme_, background), button.enabled});
-    interactions.push_back(InteractionTarget{bounds, *clipped, button.action_id, button.enabled,
-                                             button.accessible_label, InteractionKind::button});
+    interactions.push_back(InteractionTarget{bounds,
+                                             *clipped,
+                                             button.action_id,
+                                             button.enabled,
+                                             button.accessible_label,
+                                             InteractionKind::button,
+                                             {},
+                                             {},
+                                             button.close_on_activate});
 
     const auto &child = node.children.front();
     auto doubled_padding = checked_multiply(2, node.padding, node.path);
@@ -1465,9 +1572,15 @@ private:
     if (!clipped) {
       return std::unexpected(clipped.error());
     }
-    interactions.push_back(InteractionTarget{assigned, *clipped, region.action_id, region.enabled,
+    interactions.push_back(InteractionTarget{assigned,
+                                             *clipped,
+                                             region.action_id,
+                                             region.enabled,
                                              region.accessible_label,
-                                             InteractionKind::action_region});
+                                             InteractionKind::action_region,
+                                             {},
+                                             {},
+                                             region.close_on_activate});
     return place(node.children.front(), assigned, *clipped, commands, interactions);
   }
 
@@ -1479,14 +1592,23 @@ private:
 };
 
 [[nodiscard]] std::expected<const ViewGeometry *, LayoutError>
-geometry_for(const Theme &theme, ViewMode mode, std::string_view compact_style) {
+geometry_for(const Theme &theme, ViewMode mode, std::string_view view_style) {
   if (mode == ViewMode::expanded) {
+    if (!view_style.empty()) {
+      const auto style = theme.views().expanded_styles.find(view_style);
+      if (style == theme.views().expanded_styles.end()) {
+        return std::unexpected(LayoutError{LayoutErrorCode::unknown_expanded_style,
+                                           "/presentation/expanded_style",
+                                           "unknown expanded style"});
+      }
+      return &style->second;
+    }
     return &theme.views().expanded;
   }
-  if (compact_style.empty()) {
+  if (view_style.empty()) {
     return &theme.views().compact;
   }
-  const auto style = theme.views().compact_styles.find(compact_style);
+  const auto style = theme.views().compact_styles.find(view_style);
   if (style == theme.views().compact_styles.end()) {
     return std::unexpected(LayoutError{LayoutErrorCode::unknown_compact_style,
                                        "/presentation/compact_style", "unknown compact style"});

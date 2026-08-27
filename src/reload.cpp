@@ -124,11 +124,19 @@ bool equal_template(const SceneTemplate &left, const SceneTemplate &right) {
         } else if constexpr (std::is_same_v<Value, TemplateIndicator>) {
           return equal_template_value(left_value.state, right_value.state) &&
                  equal_template_value(left_value.accessible_label, right_value.accessible_label);
+        } else if constexpr (std::is_same_v<Value, TemplateTextInput>) {
+          return left_value.input_id == right_value.input_id &&
+                 left_value.action_id == right_value.action_id &&
+                 left_value.submit_action_id == right_value.submit_action_id &&
+                 equal_template_value(left_value.initial_value, right_value.initial_value) &&
+                 equal_template_value(left_value.placeholder, right_value.placeholder) &&
+                 equal_template_value(left_value.accessible_label, right_value.accessible_label);
         } else {
           return equal_template_pointer(left_value.content, right_value.content) &&
                  left_value.action_id == right_value.action_id &&
                  equal_template_value(left_value.enabled, right_value.enabled) &&
-                 equal_template_value(left_value.accessible_label, right_value.accessible_label);
+                 equal_template_value(left_value.accessible_label, right_value.accessible_label) &&
+                 equal_template_value(left_value.close_on_activate, right_value.close_on_activate);
         }
       },
       left.value);

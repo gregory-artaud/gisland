@@ -605,6 +605,50 @@ parse_scene_template(const toml::table &table, const std::string &path,
     }
     return SceneTemplate{TemplateIndicator{std::move(*state), std::move(*label)}};
   }
+  if (*type == "text_input") {
+    auto keys = require_keys(table,
+                             {"type", "input_id", "action_id", "submit_action_id", "initial_value",
+                              "placeholder", "accessible_label"},
+                             path, source_name);
+    auto input = required_non_empty_string(table, "input_id", path + ".input_id", source_name);
+    auto action = required_non_empty_string(table, "action_id", path + ".action_id", source_name);
+    std::optional<std::string> submit;
+    if (table.contains("submit_action_id")) {
+      auto parsed = required_non_empty_string(table, "submit_action_id", path + ".submit_action_id",
+                                              source_name);
+      if (!parsed) {
+        return std::unexpected(parsed.error());
+      }
+      submit = std::move(*parsed);
+    }
+    auto initial = template_field<std::string>(table, "initial_value", path + ".initial_value",
+                                               source_name, std::string{});
+    auto placeholder = template_field<std::string>(table, "placeholder", path + ".placeholder",
+                                                   source_name, std::string{});
+    auto label = template_field<std::string>(table, "accessible_label", path + ".accessible_label",
+                                             source_name, std::string{});
+    if (!keys) {
+      return std::unexpected(keys.error());
+    }
+    if (!input) {
+      return std::unexpected(input.error());
+    }
+    if (!action) {
+      return std::unexpected(action.error());
+    }
+    if (!initial) {
+      return std::unexpected(initial.error());
+    }
+    if (!placeholder) {
+      return std::unexpected(placeholder.error());
+    }
+    if (!label) {
+      return std::unexpected(label.error());
+    }
+    return SceneTemplate{TemplateTextInput{std::move(*input), std::move(*action), std::move(submit),
+                                           std::move(*initial), std::move(*placeholder),
+                                           std::move(*label)}};
+  }
   if (*type == "row" || *type == "column") {
     auto keys = require_keys(table, {"type", "children", "alignment", "gap"}, path, source_name);
     auto children = parse_template_children(table, path, source_name);
@@ -631,15 +675,18 @@ parse_scene_template(const toml::table &table, const std::string &path,
     return SceneTemplate{
         TemplateColumn{std::move(*children), std::move(*alignment), std::move(*gap)}};
   }
-  if (*type == "button") {
-    auto keys = require_keys(table, {"type", "content", "action_id", "enabled", "accessible_label"},
-                             path, source_name);
+  if (*type == "button" || *type == "action_region") {
+    auto keys = require_keys(
+        table, {"type", "content", "action_id", "enabled", "accessible_label", "close_on_activate"},
+        path, source_name);
     const auto *content_node = table.get("content");
     const auto *content = content_node == nullptr ? nullptr : content_node->as_table();
     auto action = required_non_empty_string(table, "action_id", path + ".action_id", source_name);
     auto enabled = template_field<bool>(table, "enabled", path + ".enabled", source_name, true);
     auto label = template_field<std::string>(table, "accessible_label", path + ".accessible_label",
                                              source_name, std::string{});
+    auto close = template_field<bool>(table, "close_on_activate", path + ".close_on_activate",
+                                      source_name, false);
     if (!keys) {
       return std::unexpected(keys.error());
     }
@@ -660,9 +707,18 @@ parse_scene_template(const toml::table &table, const std::string &path,
     if (!label) {
       return std::unexpected(label.error());
     }
-    return SceneTemplate{
-        TemplateButton{std::make_shared<const SceneTemplate>(std::move(*parsed_content)),
-                       std::move(*action), std::move(*enabled), std::move(*label)}};
+    if (!close) {
+      return std::unexpected(close.error());
+    }
+    auto content_pointer = std::make_shared<const SceneTemplate>(std::move(*parsed_content));
+    if (*type == "button") {
+      return SceneTemplate{TemplateButton{std::move(content_pointer), std::move(*action),
+                                          std::move(*enabled), std::move(*label),
+                                          std::move(*close)}};
+    }
+    return SceneTemplate{TemplateActionRegion{std::move(content_pointer), std::move(*action),
+                                              std::move(*enabled), std::move(*label),
+                                              std::move(*close)}};
   }
   return std::unexpected(
       error_at(source_name, path + ".type", "unknown template node type", table.get("type")));
@@ -777,7 +833,7 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
     std::string module_id;
     std::optional<std::filesystem::path> manifest_path;
     ProtocolVersion minimum_protocol{1, 0};
-    ProtocolVersion maximum_protocol{1, 9};
+    ProtocolVersion maximum_protocol{1, 10};
     std::expected<std::vector<std::string>, ConfigError> command =
         has_command
             ? parse_command(*module_table, index, source_name)
@@ -817,13 +873,13 @@ parse_modules(const toml::table &root, std::string_view source_name, const Modul
         }
       }
       if (manifest->minimum_protocol.major != 1 || manifest->maximum_protocol.major != 1 ||
-          manifest->minimum_protocol.minor > 9 || manifest->maximum_protocol.minor < 0) {
+          manifest->minimum_protocol.minor > 10 || manifest->maximum_protocol.minor < 0) {
         return std::unexpected(error_at(source_name, base_path + ".module",
                                         "module protocol range is incompatible",
                                         module_table->get("module")));
       }
       minimum_protocol = {1, std::max(0, manifest->minimum_protocol.minor)};
-      maximum_protocol = {1, std::min(9, manifest->maximum_protocol.minor)};
+      maximum_protocol = {1, std::min(10, manifest->maximum_protocol.minor)};
       auto arguments = parse_arguments(*module_table, index, source_name);
       if (!arguments) {
         return std::unexpected(arguments.error());

@@ -313,6 +313,15 @@ redraw_content(const LayoutPlan &plan, const RaylibPainter &painter, RenderTextu
   });
 }
 
+[[nodiscard]] TextInputDrawCommand *first_text_input(LayoutPlan &plan) {
+  for (auto &content : plan.content) {
+    if (auto *input = std::get_if<TextInputDrawCommand>(&content)) {
+      return input;
+    }
+  }
+  return nullptr;
+}
+
 [[nodiscard]] std::expected<RenderedContext, RenderContextError>
 render_context(const RuntimeSelection &compact_selection,
                const RuntimeSelection &expanded_selection, const Theme &theme,
@@ -325,12 +334,15 @@ render_context(const RuntimeSelection &compact_selection,
 
   const auto render_slot = [&](const RuntimeSelection &selection,
                                ViewMode mode) -> std::expected<RenderedSlot, std::string> {
-    std::string_view compact_style;
-    if (mode == ViewMode::compact && selection.context->presentation &&
-        selection.context->presentation->compact_style) {
-      compact_style = *selection.context->presentation->compact_style;
+    std::string_view view_style;
+    if (selection.context->presentation) {
+      if (mode == ViewMode::compact && selection.context->presentation->compact_style) {
+        view_style = *selection.context->presentation->compact_style;
+      } else if (mode == ViewMode::expanded && selection.context->presentation->expanded_style) {
+        view_style = *selection.context->presentation->expanded_style;
+      }
     }
-    auto plan = layout_scene(*selection.scene, theme, mode, fonts, rich_text, compact_style);
+    auto plan = layout_scene(*selection.scene, theme, mode, fonts, rich_text, view_style);
     if (!plan) {
       return std::unexpected(plan.error().path + ": " + plan.error().message);
     }
@@ -593,6 +605,12 @@ int Application::run() {
   bool visible = false;
   bool actions_ready = false;
   bool compact_refresh_deferred = false;
+  bool keyboard_session = false;
+  std::optional<ContextKey> keyboard_context;
+  std::optional<std::string> keyboard_input_id;
+  std::optional<TextInputEditor> text_editor;
+  KeyboardNavigationController keyboard_navigation;
+  bool text_action_pending = false;
   double indicator_elapsed_seconds = 0.0;
 
   const auto refresh_output = [&] {
@@ -710,6 +728,25 @@ int Application::run() {
       unload(*rendered);
     }
     rendered.emplace(std::move(candidate));
+    if (keyboard_session && rendered->expanded && rendered->expanded_key) {
+      auto *input = first_text_input(*rendered->expanded);
+      const auto input_id =
+          input == nullptr ? std::nullopt : std::optional<std::string>{input->input_id};
+      if (!keyboard_context || *keyboard_context != *rendered->expanded_key ||
+          keyboard_input_id != input_id) {
+        keyboard_context = rendered->expanded_key;
+        keyboard_input_id = input_id;
+        text_editor =
+            input == nullptr ? std::nullopt : std::optional<TextInputEditor>{input->initial_value};
+      }
+      keyboard_navigation.reconcile(*rendered->expanded);
+      if (input != nullptr && text_editor) {
+        input->text = text_editor->value();
+        input->caret_byte = text_editor->caret();
+        input->focused = true;
+        input->caret_visible = true;
+      }
+    }
     if (compact_progress.active()) {
       const RaylibPainter slot_painter{*fonts, *rendered->compact_images,
                                        *rendered->compact_rich_text};
@@ -1072,23 +1109,31 @@ int Application::run() {
       }
     }
 
-    const auto send_action = [&](const std::optional<std::string> &action) {
-      if (!action || !rendered) {
-        return;
+    const auto send_action = [&](const InteractionTarget *target,
+                                 std::optional<nlohmann::json> value = std::nullopt) {
+      if (target == nullptr || !rendered) {
+        return false;
       }
       const auto &owner =
           mode == IslandMode::expanded ? rendered->expanded_key : rendered->compact_key;
       if (!owner) {
-        return;
+        return false;
       }
-      if (auto sent = supervisor.send(owner->instance_id,
-                                      ActionMessage{.action_id = *action, .value = std::nullopt});
+      if (auto sent =
+              supervisor.send(owner->instance_id, ActionMessage{.action_id = target->action_id,
+                                                                .value = std::move(value)});
           !sent) {
         std::cerr << '[' << owner->instance_id << "] action delivery failed\n";
+        return false;
       }
+      if (target->close_on_activate) {
+        mode_controller.close();
+      }
+      return true;
     };
 
     bool topology_changed = false;
+    bool keyboard_focus_lost = false;
     if (host) {
       auto events = host->poll_events();
       if (!events) {
@@ -1097,6 +1142,8 @@ int Application::run() {
         for (const auto &event : *events) {
           if (event.kind == PlatformEventKind::output_topology_changed) {
             topology_changed = true;
+          } else if (event.kind == PlatformEventKind::keyboard_focus_lost) {
+            keyboard_focus_lost = true;
           }
         }
       }
@@ -1105,7 +1152,120 @@ int Application::run() {
       refresh_output();
       apply_native_canvas();
     }
+    const auto end_keyboard_session = [&] {
+      if (host) {
+        if (auto restored = host->end_keyboard_focus(); !restored) {
+          std::cerr << restored.error().message << '\n';
+        }
+      }
+      keyboard_session = false;
+      keyboard_context.reset();
+      keyboard_input_id.reset();
+      text_editor.reset();
+      keyboard_navigation = KeyboardNavigationController{};
+      text_action_pending = false;
+    };
+    if (keyboard_focus_lost && keyboard_session) {
+      mode_controller.close();
+      end_keyboard_session();
+    }
+    if (mode_controller.explicitly_open() && !keyboard_session && rendered && rendered->expanded &&
+        rendered->expanded_key) {
+      keyboard_session = true;
+      keyboard_context = rendered->expanded_key;
+      keyboard_navigation.reconcile(*rendered->expanded);
+      if (auto *input = first_text_input(*rendered->expanded); input != nullptr) {
+        keyboard_input_id = input->input_id;
+        text_editor.emplace(input->initial_value);
+      }
+      if (host) {
+        if (auto focused = host->begin_keyboard_focus(); !focused) {
+          std::cerr << focused.error().message << '\n';
+        }
+      }
+    } else if (!mode_controller.explicitly_open() && keyboard_session) {
+      end_keyboard_session();
+    }
+
+    if (keyboard_session && rendered && rendered->expanded) {
+      auto &expanded_plan = *rendered->expanded;
+      bool edited = false;
+      const bool control = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+      if (IsKeyPressed(KEY_ESCAPE)) {
+        mode_controller.close();
+        end_keyboard_session();
+      } else {
+        if (text_editor) {
+          if (control && IsKeyPressed(KEY_A)) {
+            text_editor->select_all();
+          } else if (control && IsKeyPressed(KEY_V)) {
+            const char *clipboard = GetClipboardText();
+            edited = clipboard != nullptr && text_editor->paste(clipboard);
+          } else {
+            int codepoint = GetCharPressed();
+            while (codepoint > 0) {
+              edited = text_editor->insert(static_cast<char32_t>(codepoint)) || edited;
+              codepoint = GetCharPressed();
+            }
+          }
+          if (IsKeyPressed(KEY_BACKSPACE)) {
+            edited = text_editor->backspace() || edited;
+          }
+          if (IsKeyPressed(KEY_DELETE)) {
+            edited = text_editor->delete_forward() || edited;
+          }
+          if (IsKeyPressed(KEY_LEFT)) {
+            text_editor->move_left();
+          }
+          if (IsKeyPressed(KEY_RIGHT)) {
+            text_editor->move_right();
+          }
+          if (IsKeyPressed(KEY_HOME)) {
+            text_editor->home();
+          }
+          if (IsKeyPressed(KEY_END)) {
+            text_editor->end();
+          }
+        }
+        if (IsKeyPressed(KEY_UP)) {
+          keyboard_navigation.move_result(expanded_plan, -1);
+        }
+        if (IsKeyPressed(KEY_DOWN)) {
+          keyboard_navigation.move_result(expanded_plan, 1);
+        }
+        if (IsKeyPressed(KEY_TAB)) {
+          const bool reverse = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+          keyboard_navigation.move_focus(expanded_plan, reverse);
+        }
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
+          const auto *target = keyboard_navigation.activation_target(expanded_plan);
+          if (target != nullptr && target->kind == InteractionKind::text_input &&
+              target->submit_action_id) {
+            InteractionTarget submitted = *target;
+            submitted.action_id = *target->submit_action_id;
+            static_cast<void>(send_action(&submitted));
+          } else {
+            static_cast<void>(send_action(target));
+          }
+        }
+        text_action_pending = text_action_pending || edited;
+        if (auto *input = first_text_input(expanded_plan); input != nullptr && text_editor) {
+          input->text = text_editor->value();
+          input->caret_byte = text_editor->caret();
+          input->focused = true;
+          input->caret_visible = std::fmod(indicator_elapsed_seconds, 1.0) < 0.5;
+        }
+        if (text_action_pending) {
+          const auto *input_target = keyboard_navigation.input_target(expanded_plan);
+          if (input_target != nullptr && text_editor) {
+            static_cast<void>(send_action(input_target, text_editor->value()));
+          }
+          text_action_pending = false;
+        }
+      }
+    }
     std::optional<ButtonDecorationDrawCommand> button_hover;
+    std::optional<ButtonDecorationDrawCommand> keyboard_highlight;
     if (actions_ready && rendered && rendered->expanded && IsCursorOnScreen()) {
       const int pointer_x = static_cast<int>(std::lround(pointer.x - placement.x));
       const int pointer_y = static_cast<int>(std::lround(pointer.y - placement.y));
@@ -1113,8 +1273,16 @@ int Application::run() {
           *rendered->expanded, pointer_x, pointer_y,
           resolve_theme_color(bootstrap_.theme, bootstrap_.theme.buttons().hover_overlay));
       if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        send_action(controls.pointer_action(*rendered->expanded, pointer_x, pointer_y));
+        const auto *target = controls.pointer_target(*rendered->expanded, pointer_x, pointer_y);
+        if (target == nullptr || target->kind != InteractionKind::text_input) {
+          static_cast<void>(send_action(target));
+        }
       }
+    }
+    if (keyboard_session && rendered && rendered->expanded) {
+      keyboard_highlight = keyboard_navigation.selection_highlight(
+          *rendered->expanded,
+          resolve_theme_color(bootstrap_.theme, bootstrap_.theme.buttons().hover_overlay));
     }
 
     mode_controller.update(hovered, rendered && rendered->expanded.has_value(), delta_seconds);
@@ -1155,7 +1323,7 @@ int Application::run() {
     }
     if (rendered && rendered->expanded && rendered->expanded_content && rendered->expanded_images &&
         rendered->expanded_rich_text &&
-        (expanded_progress_was_active ||
+        (keyboard_session || expanded_progress_was_active ||
          (!indicator_animation.reduced_motion && has_indicator_breathe(*rendered->expanded)))) {
       const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
                                        *rendered->expanded_rich_text};
@@ -1245,6 +1413,15 @@ int Application::run() {
         if (auto drawn = painter.draw_content(
                 hover_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
                                          static_cast<int>(std::lround(placement.y))});
+            !drawn) {
+          std::cerr << drawn.error().message << '\n';
+        }
+      }
+      if (keyboard_highlight) {
+        const LayoutPlan highlight_plan{{}, {*keyboard_highlight}, {}};
+        if (auto drawn = painter.draw_content(
+                highlight_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
+                                             static_cast<int>(std::lround(placement.y))});
             !drawn) {
           std::cerr << drawn.error().message << '\n';
         }

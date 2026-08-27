@@ -328,9 +328,35 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
     }
     return {};
   }
+  if (type == "text_input") {
+    if (auto result = known_fields(node,
+                                   {"type", "input_id", "action_id", "submit_action_id",
+                                    "initial_value", "placeholder", "accessible_label"},
+                                   path);
+        !result) {
+      return result;
+    }
+    for (const auto field : {"input_id", "action_id"}) {
+      if (auto result = required_string(node, field, path, maximum_identifier_bytes, true);
+          !result) {
+        return result;
+      }
+    }
+    if (auto result = optional_string(node, "submit_action_id", path); !result) {
+      return result;
+    }
+    for (const auto field : {"initial_value", "placeholder", "accessible_label"}) {
+      if (auto result = optional_string(node, field, path, maximum_text_bytes); !result) {
+        return result;
+      }
+    }
+    return {};
+  }
   if (type == "button" || type == "action_region") {
     if (auto result = known_fields(
-            node, {"type", "content", "action_id", "enabled", "accessible_label"}, path);
+            node,
+            {"type", "content", "action_id", "enabled", "accessible_label", "close_on_activate"},
+            path);
         !result) {
       return result;
     }
@@ -343,6 +369,9 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
       return result;
     }
     if (auto result = optional_bool(node, "enabled", path); !result) {
+      return result;
+    }
+    if (auto result = optional_bool(node, "close_on_activate", path); !result) {
       return result;
     }
     const auto content = node.find("content");
@@ -560,12 +589,13 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
     if (!presentation->is_object()) {
       return std::unexpected(path_error("publish/presentation", "expected an object"));
     }
-    if (auto result = known_fields(*presentation, {"reveal", "duration_ms", "compact_style"},
+    if (auto result = known_fields(*presentation,
+                                   {"reveal", "duration_ms", "compact_style", "expanded_style"},
                                    "publish/presentation");
         !result) {
       return result;
     }
-    for (const auto field : {"reveal", "compact_style"}) {
+    for (const auto field : {"reveal", "compact_style", "expanded_style"}) {
       if (auto result = optional_string(*presentation, field, "publish/presentation"); !result) {
         return result;
       }
@@ -609,9 +639,9 @@ std::expected<void, std::string> LuaSceneApi::register_into(lua_State *state) {
     lua_setfield(state, -2, name);
   }
 
-  lua_createtable(state, 0, 11);
+  lua_createtable(state, 0, 12);
   for (const char *name : {"text", "icon", "image", "rich_text", "row", "column", "spacer",
-                           "progress", "indicator", "button", "action_region"}) {
+                           "progress", "indicator", "text_input", "button", "action_region"}) {
     lua_pushlightuserdata(state, this);
     lua_pushstring(state, name);
     lua_pushcclosure(state, &LuaSceneApi::construct, 2);

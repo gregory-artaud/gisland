@@ -93,6 +93,33 @@ TEST_CASE("protocol 1.9 parses independent content transitions") {
         gisland::ContentTransition::slide_right);
 }
 
+TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") {
+  const auto result = gisland::parse_module_message(R"({
+    "type":"publish","context_id":"launcher","priority":100,
+    "views":{"expanded":{"type":"column","children":[
+      {"type":"text_input","input_id":"query","action_id":"query-changed",
+       "submit_action_id":"submit","initial_value":"","placeholder":"Search",
+       "accessible_label":"Application search"},
+      {"type":"action_region","action_id":"launch:terminal","close_on_activate":true,
+       "accessible_label":"Launch Terminal",
+       "content":{"type":"text","value":"Terminal","role":"body"}}
+    ]}},
+    "presentation":{"expanded_style":"palette"}
+  })");
+
+  REQUIRE(result.has_value());
+  const auto &publish = std::get<gisland::PublishMessage>(*result);
+  REQUIRE(publish.presentation.has_value());
+  CHECK(publish.presentation->expanded_style == "palette");
+  const auto &column = std::get<gisland::Column>(publish.expanded->value);
+  const auto &input = std::get<gisland::TextInput>(column.children[0]->value);
+  CHECK(input.input_id == "query");
+  CHECK(input.action_id == "query-changed");
+  CHECK(input.submit_action_id == "submit");
+  CHECK(input.placeholder == "Search");
+  CHECK(std::get<gisland::ActionRegion>(column.children[1]->value).close_on_activate);
+}
+
 TEST_CASE("protocol rejects unknown content transitions and transition views") {
   for (const auto line : {R"({"type":"data","value":{},"transitions":{"expanded":"zoom"}})",
                           R"({"type":"data","value":{},"transitions":{"other":"crossfade"}})"}) {

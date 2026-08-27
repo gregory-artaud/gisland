@@ -76,6 +76,7 @@ public:
   [[nodiscard]] std::expected<void, ModeControlError> toggle(bool has_expanded);
   void set_exit_tolerance(std::chrono::milliseconds exit_tolerance);
   [[nodiscard]] IslandMode mode() const;
+  [[nodiscard]] bool explicitly_open() const noexcept;
 
 private:
   HoverController hover_;

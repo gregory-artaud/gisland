@@ -230,11 +230,40 @@ public:
                                           "body", "end"}};
 }
 
+[[nodiscard]] gisland::SceneNode launcher_palette() {
+  const std::array<std::pair<std::string_view, std::string_view>, 8> applications{{
+      {"Terminal", "calendar"},
+      {"Web Browser", "volume-high"},
+      {"Files", "calendar"},
+      {"Mail", "volume-low"},
+      {"Music", "volume-high"},
+      {"Settings", "calendar"},
+      {"Text Editor", "volume-low"},
+      {"Calculator", "calendar"},
+  }};
+  std::vector<gisland::SceneNode> children;
+  children.emplace_back(gisland::TextInput{"query", "query-changed", "", "Search applications",
+                                           "Search applications"});
+  for (std::size_t index = 0; index < applications.size(); ++index) {
+    const auto &[name, icon_name] = applications[index];
+    children.emplace_back(gisland::Button{
+        gisland::SceneNode{gisland::Row{{icon(std::string{icon_name}, std::string{name}),
+                                         text(std::string{name}, "body"),
+                                         gisland::SceneNode{gisland::Spacer{true, {}}}},
+                                        "center",
+                                        "normal"}},
+        "launch:" + std::to_string(index), true, "Launch " + std::string{name}, true});
+  }
+  return gisland::SceneNode{gisland::Column{std::move(children), "start", "small"}};
+}
+
 [[nodiscard]] Image render_fixture(const gisland::SceneNode &scene, gisland::ViewMode mode,
                                    const std::vector<gisland::ImageResource> &resources = {},
                                    std::string_view compact_style = {},
                                    std::optional<float> progress_elapsed = std::nullopt,
-                                   gisland::IndicatorAnimationState indicator_animation = {}) {
+                                   gisland::IndicatorAnimationState indicator_animation = {},
+                                   bool highlight_first = false, int canvas_width = image_width,
+                                   int canvas_height = image_height) {
   const auto theme = load_theme();
   auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
   REQUIRE(fonts.has_value());
@@ -242,8 +271,8 @@ public:
   REQUIRE(pango.has_value());
   const auto plan = gisland::layout_scene(scene, theme, mode, *fonts, *pango, compact_style);
   REQUIRE(plan.has_value());
-  REQUIRE(plan->view.bounds.width <= image_width);
-  REQUIRE(plan->view.bounds.height <= image_height);
+  REQUIRE(plan->view.bounds.width <= canvas_width);
+  REQUIRE(plan->view.bounds.height <= canvas_height);
   auto images = gisland::RaylibImageBook::load(resources);
   REQUIRE(images.has_value());
   REQUIRE(images->prepare(*plan).has_value());
@@ -252,6 +281,23 @@ public:
   REQUIRE(rich_textures->prepare(*plan).has_value());
 
   gisland::LayoutPlan rendered_plan = *plan;
+  if (highlight_first) {
+    const auto input = std::ranges::find_if(rendered_plan.content, [](const auto &command) {
+      return std::holds_alternative<gisland::TextInputDrawCommand>(command);
+    });
+    REQUIRE(input != rendered_plan.content.end());
+    auto &text_input = std::get<gisland::TextInputDrawCommand>(*input);
+    text_input.focused = true;
+    text_input.caret_visible = true;
+    const auto target = std::ranges::find_if(rendered_plan.interactions, [](const auto &candidate) {
+      return candidate.enabled && candidate.kind != gisland::InteractionKind::text_input &&
+             candidate.kind != gisland::InteractionKind::link;
+    });
+    REQUIRE(target != rendered_plan.interactions.end());
+    rendered_plan.content.emplace_back(gisland::ButtonDecorationDrawCommand{
+        target->bounds, target->clip,
+        gisland::resolve_theme_color(theme, theme.buttons().hover_overlay), true});
+  }
   if (progress_elapsed) {
     gisland::ProgressAnimator animator;
     animator.retarget(rendered_plan, std::chrono::milliseconds{270}, gisland::Easing::ease_out,
@@ -259,10 +305,10 @@ public:
     animator.update(*progress_elapsed);
     rendered_plan = animator.apply(rendered_plan);
   }
-  const gisland::RenderOrigin origin{(image_width - rendered_plan.view.bounds.width) / 2,
-                                     (image_height - rendered_plan.view.bounds.height) / 2};
+  const gisland::RenderOrigin origin{(canvas_width - rendered_plan.view.bounds.width) / 2,
+                                     (canvas_height - rendered_plan.view.bounds.height) / 2};
   const gisland::RaylibPainter painter{*fonts, *images, *rich_textures};
-  RenderTexture2D target = LoadRenderTexture(image_width, image_height);
+  RenderTexture2D target = LoadRenderTexture(canvas_width, canvas_height);
   REQUIRE(IsRenderTextureValid(target));
   BeginTextureMode(target);
   ClearBackground(BLANK);
@@ -290,9 +336,9 @@ void export_failure_artifacts(std::string_view name, const Image &actual, const 
   const auto diff_path = artifact_root() / (std::string{name} + "-diff.png");
   REQUIRE(ExportImage(actual, actual_path.c_str()));
 
-  Image diff = GenImageColor(image_width, image_height, BLANK);
-  for (int y = 0; y < image_height; ++y) {
-    for (int x = 0; x < image_width; ++x) {
+  Image diff = GenImageColor(actual.width, actual.height, BLANK);
+  for (int y = 0; y < actual.height; ++y) {
+    for (int x = 0; x < actual.width; ++x) {
       const Color left = GetImageColor(actual, x, y);
       const Color right = GetImageColor(expected, x, y);
       const int delta = std::max({channel_delta(left.r, right.r), channel_delta(left.g, right.g),
@@ -311,9 +357,11 @@ void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisla
                    const std::vector<gisland::ImageResource> &resources = {},
                    std::string_view compact_style = {},
                    std::optional<float> progress_elapsed = std::nullopt,
-                   gisland::IndicatorAnimationState indicator_animation = {}) {
-  Image actual =
-      render_fixture(scene, mode, resources, compact_style, progress_elapsed, indicator_animation);
+                   gisland::IndicatorAnimationState indicator_animation = {},
+                   bool highlight_first = false, int canvas_width = image_width,
+                   int canvas_height = image_height) {
+  Image actual = render_fixture(scene, mode, resources, compact_style, progress_elapsed,
+                                indicator_animation, highlight_first, canvas_width, canvas_height);
   const auto baseline = baseline_root() / (std::string{name} + ".png");
   const char *update = std::getenv("GISLAND_UPDATE_BASELINES");
   const char *approved_update = std::getenv("GISLAND_BASELINE_UPDATE_TARGET");
@@ -330,12 +378,12 @@ void check_fixture(std::string_view name, const gisland::SceneNode &scene, gisla
   Image expected = LoadImage(baseline.c_str());
   REQUIRE(IsImageValid(expected));
   ImageFormat(&expected, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-  REQUIRE(expected.width == image_width);
-  REQUIRE(expected.height == image_height);
+  REQUIRE(expected.width == canvas_width);
+  REQUIRE(expected.height == canvas_height);
 
   int divergent_pixels = 0;
-  for (int y = 0; y < image_height; ++y) {
-    for (int x = 0; x < image_width; ++x) {
+  for (int y = 0; y < canvas_height; ++y) {
+    for (int x = 0; x < canvas_width; ++x) {
       const Color left = GetImageColor(actual, x, y);
       const Color right = GetImageColor(expected, x, y);
       if (channel_delta(left.r, right.r) > maximum_channel_delta ||
@@ -395,6 +443,11 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: all v1 primitives gallery") {
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: compact time and date capsule") {
   check_fixture("compact-time-date", compact_time_date(), gisland::ViewMode::compact);
+}
+
+TEST_CASE_METHOD(HiddenWindow, "visual regression: launcher palette with eight applications") {
+  check_fixture("launcher-palette", launcher_palette(), gisland::ViewMode::expanded, {}, "palette",
+                std::nullopt, {}, true, 720, 640);
 }
 
 TEST_CASE_METHOD(HiddenWindow, "visual regression: semantic indicator effects") {

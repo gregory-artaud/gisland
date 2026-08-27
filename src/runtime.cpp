@@ -78,6 +78,10 @@ ModuleStartRequest make_module_start_request(const ModuleInstanceConfig &config,
     capabilities.emplace_back("indicator-effects");
     capabilities.emplace_back("content-transitions");
   }
+  if (config.maximum_protocol >= ProtocolVersion{1, 10}) {
+    capabilities.emplace_back("text-input");
+    capabilities.emplace_back("expanded-view-styles");
+  }
   return ModuleStartRequest{
       .instance_id = config.id,
       .process =

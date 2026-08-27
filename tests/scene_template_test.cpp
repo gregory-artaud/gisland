@@ -103,6 +103,35 @@ TEST_CASE("scene templates instantiate every scalar primitive strictly") {
   CHECK(invalid_number.error().code == gisland::TemplateErrorCode::wrong_type);
 }
 
+TEST_CASE("declarative templates instantiate text input and closing action targets") {
+  const gisland::SceneTemplate input{gisland::TemplateTextInput{
+      .input_id = "query",
+      .action_id = "query-changed",
+      .submit_action_id = "launch",
+      .initial_value = gisland::DataBinding{"query"},
+      .placeholder = std::string{"Search"},
+      .accessible_label = std::string{"Search applications"},
+  }};
+  const auto instantiated_input = gisland::instantiate_template(input, {{"query", "term"}});
+  REQUIRE(instantiated_input.has_value());
+  const auto &typed_input = std::get<gisland::TextInput>(instantiated_input->value);
+  CHECK(typed_input.initial_value == "term");
+  CHECK(typed_input.submit_action_id == std::optional<std::string>{"launch"});
+
+  const auto content = std::make_shared<const gisland::SceneTemplate>(
+      gisland::SceneTemplate{gisland::TemplateText{std::string{"Terminal"}, std::string{"body"}}});
+  const gisland::SceneTemplate region{gisland::TemplateActionRegion{
+      .content = content,
+      .action_id = "launch:terminal",
+      .enabled = true,
+      .accessible_label = std::string{"Launch Terminal"},
+      .close_on_activate = gisland::DataBinding{"close"},
+  }};
+  const auto instantiated_region = gisland::instantiate_template(region, {{"close", true}});
+  REQUIRE(instantiated_region.has_value());
+  CHECK(std::get<gisland::ActionRegion>(instantiated_region->value).close_on_activate);
+}
+
 TEST_CASE("instantiated templates retain scene validation bounds") {
   const auto invalid = gisland::instantiate_template(text_template(gisland::DataBinding{"value"}),
                                                      {{"value", std::string(4097, 'x')}});

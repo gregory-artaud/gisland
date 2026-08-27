@@ -106,6 +106,19 @@ struct Indicator {
   std::vector<IndicatorEffect> effects{};
 };
 
+struct TextInput {
+  TextInput(std::string input_id, std::string action_id, std::string initial_value = {},
+            std::string placeholder = {}, std::string accessible_label = {},
+            std::optional<std::string> submit_action_id = std::nullopt);
+
+  std::string input_id;
+  std::string action_id;
+  std::optional<std::string> submit_action_id;
+  std::string initial_value;
+  std::string placeholder;
+  std::string accessible_label;
+};
+
 struct Row {
   explicit Row(std::vector<SceneNode> nodes, std::string alignment = "center",
                std::string gap = "normal");
@@ -126,27 +139,29 @@ struct Column {
 
 struct Button {
   Button(SceneNode content, std::string action_id, bool enabled = true,
-         std::string accessible_label = {});
+         std::string accessible_label = {}, bool close_on_activate = false);
 
   SceneChild content;
   std::string action_id;
   bool enabled;
   std::string accessible_label;
+  bool close_on_activate{};
 };
 
 struct ActionRegion {
   ActionRegion(SceneNode content, std::string action_id, bool enabled = true,
-               std::string accessible_label = {});
+               std::string accessible_label = {}, bool close_on_activate = false);
 
   SceneChild content;
   std::string action_id;
   bool enabled;
   std::string accessible_label;
+  bool close_on_activate{};
 };
 
 struct SceneNode {
   using Value = std::variant<Text, Icon, Image, RichText, Row, Column, Spacer, Progress, Indicator,
-                             Button, ActionRegion>;
+                             TextInput, Button, ActionRegion>;
 
   Value value;
 };
@@ -158,6 +173,8 @@ enum class SceneErrorCode {
   identifier_too_long,
   invalid_progress,
   empty_action,
+  empty_identifier,
+  duplicate_identifier,
   invalid_emphasis
 };
 

@@ -75,6 +75,7 @@ public:
 
   ~X11PlatformHost() override {
     if (display_ != nullptr) {
+      static_cast<void>(end_keyboard_focus());
       static_cast<void>(checked_request(
           display_, [&] { XRRSelectInput(display_, DefaultRootWindow(display_), 0); }));
       XCloseDisplay(display_);
@@ -85,6 +86,8 @@ public:
   select_output(std::string_view requested_name) const override;
   [[nodiscard]] std::expected<void, PlatformError>
   update_input_region(const InputRegion &region) const override;
+  [[nodiscard]] std::expected<void, PlatformError> begin_keyboard_focus() override;
+  [[nodiscard]] std::expected<void, PlatformError> end_keyboard_focus() override;
   [[nodiscard]] std::expected<std::vector<PlatformEvent>, PlatformError> poll_events() override;
 
 private:
@@ -92,6 +95,9 @@ private:
   Window window_{};
   int randr_event_base_{};
   RoundedWindowShape shape_;
+  Window previous_focus_{None};
+  int previous_revert_{RevertToPointerRoot};
+  bool keyboard_focused_{};
 };
 
 std::expected<PlatformHostPtr, PlatformError> create_x11_platform_host(void *native_window_handle) {
@@ -148,7 +154,7 @@ std::expected<PlatformHostPtr, PlatformError> create_x11_platform_host(void *nat
     if (focused == window) {
       XSetInputFocus(display, PointerRoot, RevertToPointerRoot, CurrentTime);
     }
-    XSelectInput(display, window, StructureNotifyMask);
+    XSelectInput(display, window, StructureNotifyMask | FocusChangeMask);
     XRRSelectInput(display, DefaultRootWindow(display),
                    RRScreenChangeNotifyMask | RRCrtcChangeNotifyMask | RROutputChangeNotifyMask);
   });
@@ -242,6 +248,53 @@ X11PlatformHost::update_input_region(const InputRegion &region) const {
   return {};
 }
 
+std::expected<void, PlatformError> X11PlatformHost::begin_keyboard_focus() {
+  if (keyboard_focused_) {
+    return {};
+  }
+  Window focused = None;
+  int revert = RevertToPointerRoot;
+  const bool succeeded = checked_request(display_, [&] {
+    XGetInputFocus(display_, &focused, &revert);
+    set_focusable(display_, window_, true);
+    XSetInputFocus(display_, window_, RevertToPointerRoot, CurrentTime);
+  });
+  if (!succeeded) {
+    set_focusable(display_, window_, false);
+    return std::unexpected(error(PlatformOperation::update_keyboard_focus,
+                                 PlatformErrorSeverity::recoverable,
+                                 "could not focus the X11 overlay window"));
+  }
+  previous_focus_ = focused == window_ ? None : focused;
+  previous_revert_ = revert;
+  keyboard_focused_ = true;
+  return {};
+}
+
+std::expected<void, PlatformError> X11PlatformHost::end_keyboard_focus() {
+  if (!keyboard_focused_) {
+    return {};
+  }
+  const Window restore = previous_focus_;
+  const int revert = previous_revert_;
+  const bool succeeded = checked_request(display_, [&] {
+    set_focusable(display_, window_, false);
+    XSetInputFocus(display_, restore != None ? restore : PointerRoot, revert, CurrentTime);
+  });
+  XEvent focus_event{};
+  while (XCheckTypedWindowEvent(display_, window_, FocusOut, &focus_event) != 0) {
+  }
+  keyboard_focused_ = false;
+  previous_focus_ = None;
+  previous_revert_ = RevertToPointerRoot;
+  if (!succeeded) {
+    return std::unexpected(error(PlatformOperation::update_keyboard_focus,
+                                 PlatformErrorSeverity::recoverable,
+                                 "could not restore the previous X11 focus"));
+  }
+  return {};
+}
+
 std::expected<std::vector<PlatformEvent>, PlatformError> X11PlatformHost::poll_events() {
   std::vector<PlatformEvent> events;
   if (!checked_request(display_, [] {})) {
@@ -254,6 +307,18 @@ std::expected<std::vector<PlatformEvent>, PlatformError> X11PlatformHost::poll_e
     if (event.type == randr_event_base_ + RRScreenChangeNotify ||
         event.type == randr_event_base_ + RRNotify) {
       events.push_back(PlatformEvent{PlatformEventKind::output_topology_changed});
+    } else if (event.type == FocusOut && event.xfocus.window == window_ && keyboard_focused_ &&
+               event.xfocus.mode == NotifyNormal) {
+      Window focused = None;
+      int revert = RevertToPointerRoot;
+      if (!checked_request(display_, [&] { XGetInputFocus(display_, &focused, &revert); })) {
+        return std::unexpected(error(PlatformOperation::poll_events,
+                                     PlatformErrorSeverity::recoverable,
+                                     "could not verify the current X11 keyboard focus"));
+      }
+      if (focused != window_) {
+        events.push_back(PlatformEvent{PlatformEventKind::keyboard_focus_lost});
+      }
     }
   }
   return events;

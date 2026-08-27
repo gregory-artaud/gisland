@@ -506,6 +506,38 @@ void read_init() {
                 {"transitions", {{"expanded", "slide-left"}}}});
     return silent();
   }
+  if (mode == "launcher" || mode == "launcher-without-text-capability" ||
+      mode == "launcher-without-style-capability" || mode == "launcher-capability-on-1.9") {
+    read_init();
+    const int minor = mode == "launcher-capability-on-1.9" ? 9 : 10;
+    nlohmann::json capabilities = {"independent-views"};
+    if (mode != "launcher-without-text-capability") {
+      capabilities.push_back("text-input");
+    }
+    if (mode != "launcher-without-style-capability") {
+      capabilities.push_back("expanded-view-styles");
+    }
+    write_json({{"type", "ready"},
+                {"protocol_major", 1},
+                {"protocol_minor", minor},
+                {"capabilities", capabilities}});
+    write_json({
+        {"type", "publish"},
+        {"context_id", "launcher"},
+        {"priority", 20},
+        {"views",
+         {{"compact", {{"type", "text"}, {"value", "Launcher"}, {"role", "body"}}},
+          {"expanded",
+           {{"type", "text_input"},
+            {"input_id", "query"},
+            {"action_id", "query-changed"},
+            {"initial_value", ""},
+            {"placeholder", "Search"},
+            {"accessible_label", "Search applications"}}}}},
+        {"presentation", {{"expanded_style", "palette"}}},
+    });
+    return silent();
+  }
   if (mode == "independent" || mode == "independent-high" ||
       mode == "independent-without-capability") {
     read_init();

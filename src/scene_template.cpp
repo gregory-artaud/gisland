@@ -206,6 +206,25 @@ public:
               return std::unexpected(label.error());
             }
             return SceneNode{Indicator{std::move(*state), std::move(*label)}};
+          } else if constexpr (std::is_same_v<Primitive, TemplateTextInput>) {
+            auto initial =
+                resolve_value(primitive.initial_value, context_, path + "/initial_value");
+            auto placeholder =
+                resolve_value(primitive.placeholder, context_, path + "/placeholder");
+            auto label =
+                resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
+            if (!initial) {
+              return std::unexpected(initial.error());
+            }
+            if (!placeholder) {
+              return std::unexpected(placeholder.error());
+            }
+            if (!label) {
+              return std::unexpected(label.error());
+            }
+            return SceneNode{TextInput{primitive.input_id, primitive.action_id, std::move(*initial),
+                                       std::move(*placeholder), std::move(*label),
+                                       primitive.submit_action_id}};
           } else if constexpr (std::is_same_v<Primitive, TemplateRow>) {
             auto children = instantiate_children(primitive.children, path);
             auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");
@@ -234,7 +253,8 @@ public:
               return std::unexpected(gap.error());
             }
             return SceneNode{Column{std::move(*children), std::move(*alignment), std::move(*gap)}};
-          } else if constexpr (std::is_same_v<Primitive, TemplateButton>) {
+          } else if constexpr (std::is_same_v<Primitive, TemplateButton> ||
+                               std::is_same_v<Primitive, TemplateActionRegion>) {
             if (primitive.content == nullptr) {
               return std::unexpected(
                   TemplateError{TemplateErrorCode::invalid_template, path + "/content", {}});
@@ -243,6 +263,8 @@ public:
             auto enabled = resolve_value(primitive.enabled, context_, path + "/enabled");
             auto label =
                 resolve_value(primitive.accessible_label, context_, path + "/accessible_label");
+            auto close =
+                resolve_value(primitive.close_on_activate, context_, path + "/close_on_activate");
             if (!content) {
               return std::unexpected(content.error());
             }
@@ -252,8 +274,16 @@ public:
             if (!label) {
               return std::unexpected(label.error());
             }
-            return SceneNode{
-                Button{std::move(*content), primitive.action_id, *enabled, std::move(*label)}};
+            if (!close) {
+              return std::unexpected(close.error());
+            }
+            if constexpr (std::is_same_v<Primitive, TemplateButton>) {
+              return SceneNode{Button{std::move(*content), primitive.action_id, *enabled,
+                                      std::move(*label), *close}};
+            } else {
+              return SceneNode{ActionRegion{std::move(*content), primitive.action_id, *enabled,
+                                            std::move(*label), *close}};
+            }
           } else {
             return std::unexpected(TemplateError{TemplateErrorCode::invalid_template, "", ""});
           }

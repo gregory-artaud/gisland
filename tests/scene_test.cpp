@@ -16,6 +16,7 @@ TEST_CASE("a row containing every primitive is a valid scene") {
   children.emplace_back(gisland::Spacer{true, ""});
   children.emplace_back(gisland::Progress{0.5, "Half complete", "accent"});
   children.emplace_back(gisland::Indicator{"success", "Available"});
+  children.emplace_back(gisland::TextInput{"query", "query-changed", "", "Search", "Search"});
   children.emplace_back(gisland::Button{gisland::SceneNode{gisland::Text{"Open", "label"}}, "open",
                                         true, "Open details"});
   children.emplace_back(gisland::Column{{gisland::SceneNode{gisland::Text{"Today", "caption"}}}});
@@ -23,6 +24,35 @@ TEST_CASE("a row containing every primitive is a valid scene") {
   const gisland::SceneNode scene{gisland::Row{std::move(children)}};
 
   CHECK(gisland::validate_scene(scene).has_value());
+}
+
+TEST_CASE("text input identifiers and initial values are bounded") {
+  CHECK(gisland::validate_scene(gisland::SceneNode{gisland::TextInput{"query", "query-changed", "",
+                                                                      "Search", "Search"}})
+            .has_value());
+
+  const auto empty_id = gisland::validate_scene(
+      gisland::SceneNode{gisland::TextInput{"", "query-changed", "", "Search", "Search"}});
+  REQUIRE_FALSE(empty_id.has_value());
+  CHECK(empty_id.error().code == gisland::SceneErrorCode::empty_identifier);
+  CHECK(empty_id.error().path == "/input_id");
+
+  const auto oversized = gisland::validate_scene(gisland::SceneNode{
+      gisland::TextInput{"query", "query-changed", std::string(1025, 'x'), "Search", "Search"}});
+  REQUIRE_FALSE(oversized.has_value());
+  CHECK(oversized.error().code == gisland::SceneErrorCode::text_too_long);
+  CHECK(oversized.error().path == "/initial_value");
+}
+
+TEST_CASE("text input IDs are unique within one scene") {
+  const auto result = gisland::validate_scene(gisland::SceneNode{gisland::Column{{
+      gisland::SceneNode{gisland::TextInput{"query", "first", "", "One", "One"}},
+      gisland::SceneNode{gisland::TextInput{"query", "second", "", "Two", "Two"}},
+  }}});
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().code == gisland::SceneErrorCode::duplicate_identifier);
+  CHECK(result.error().path == "/children/1/input_id");
 }
 
 TEST_CASE("scene depth is bounded") {

@@ -321,6 +321,40 @@ TEST_CASE("supervisor gates content transitions on protocol 1.9 capability negot
   }
 }
 
+TEST_CASE("supervisor gates interactive launcher features on protocol 1.10 capabilities") {
+  for (const auto &[instance, mode, accepted, path] :
+       std::vector<std::tuple<std::string, std::string, bool, std::string>>{
+           {"launcher", "launcher", true, ""},
+           {"launcher-no-text", "launcher-without-text-capability", false, "/views/expanded"},
+           {"launcher-no-style", "launcher-without-style-capability", false,
+            "/presentation/expanded_style"},
+           {"launcher-early", "launcher-capability-on-1.9", false, "/capabilities"}}) {
+    CAPTURE(instance, mode, accepted, path);
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request(instance, mode);
+    request.init.maximum = {.major = 1, .minor = 10};
+    request.init.capabilities.insert(request.init.capabilities.end(),
+                                     {"independent-views", "text-input", "expanded-view-styles"});
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+
+    collect_until(supervisor, events, [instance](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, instance) ||
+             count_events<gisland::ProtocolViolationEvent>(observed, instance) > 0;
+    });
+    if (accepted && last_violation(events, instance) != nullptr) {
+      INFO(last_violation(events, instance)->error.path);
+      INFO(last_violation(events, instance)->error.message);
+    }
+    CHECK(has_message<gisland::PublishMessage>(events, instance) == accepted);
+    if (!accepted) {
+      REQUIRE(last_violation(events, instance) != nullptr);
+      CHECK(last_violation(events, instance)->error.path == path);
+    }
+    stop_and_wait(supervisor, events, instance);
+  }
+}
+
 TEST_CASE("supervisor emits image publications only after capability negotiation") {
   SECTION("negotiated images are emitted") {
     gisland::ModuleSupervisor supervisor;

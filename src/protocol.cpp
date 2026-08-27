@@ -484,6 +484,7 @@ parse_emphasis(const Json &object, const std::string &path) {
   auto action_id = required_string(object, "action_id", path);
   auto enabled = optional_bool(object, "enabled", true, path);
   auto accessible_label = required_string(object, "accessible_label", path);
+  auto close_on_activate = optional_bool(object, "close_on_activate", false, path);
   if (!content.has_value()) {
     return std::unexpected(content.error());
   }
@@ -496,8 +497,40 @@ parse_emphasis(const Json &object, const std::string &path) {
   if (!accessible_label.has_value()) {
     return std::unexpected(accessible_label.error());
   }
-  return SceneNode{
-      Button{std::move(*content), std::move(*action_id), *enabled, std::move(*accessible_label)}};
+  if (!close_on_activate) {
+    return std::unexpected(close_on_activate.error());
+  }
+  return SceneNode{Button{std::move(*content), std::move(*action_id), *enabled,
+                          std::move(*accessible_label), *close_on_activate}};
+}
+
+[[nodiscard]] std::expected<SceneNode, ProtocolError> parse_text_input(const Json &object,
+                                                                       const std::string &path) {
+  auto input_id = required_string(object, "input_id", path);
+  auto action_id = required_string(object, "action_id", path);
+  auto initial_value = optional_string(object, "initial_value", "", path);
+  auto placeholder = optional_string(object, "placeholder", "", path);
+  auto accessible_label = required_string(object, "accessible_label", path);
+  if (!input_id)
+    return std::unexpected(input_id.error());
+  if (!action_id)
+    return std::unexpected(action_id.error());
+  if (!initial_value)
+    return std::unexpected(initial_value.error());
+  if (!placeholder)
+    return std::unexpected(placeholder.error());
+  if (!accessible_label)
+    return std::unexpected(accessible_label.error());
+  std::optional<std::string> submit_action_id;
+  if (object.contains("submit_action_id")) {
+    auto submit = required_string(object, "submit_action_id", path);
+    if (!submit)
+      return std::unexpected(submit.error());
+    submit_action_id = std::move(*submit);
+  }
+  return SceneNode{TextInput{std::move(*input_id), std::move(*action_id), std::move(*initial_value),
+                             std::move(*placeholder), std::move(*accessible_label),
+                             std::move(submit_action_id)}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_action_region(const Json &object,
@@ -510,6 +543,7 @@ parse_emphasis(const Json &object, const std::string &path) {
   auto action_id = required_string(object, "action_id", path);
   auto enabled = optional_bool(object, "enabled", true, path);
   auto label = required_string(object, "accessible_label", path);
+  auto close_on_activate = optional_bool(object, "close_on_activate", false, path);
   if (!content) {
     return std::unexpected(content.error());
   }
@@ -522,8 +556,11 @@ parse_emphasis(const Json &object, const std::string &path) {
   if (!label) {
     return std::unexpected(label.error());
   }
-  return SceneNode{
-      ActionRegion{std::move(*content), std::move(*action_id), *enabled, std::move(*label)}};
+  if (!close_on_activate) {
+    return std::unexpected(close_on_activate.error());
+  }
+  return SceneNode{ActionRegion{std::move(*content), std::move(*action_id), *enabled,
+                                std::move(*label), *close_on_activate}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_scene(const Json &object,
@@ -563,6 +600,9 @@ parse_emphasis(const Json &object, const std::string &path) {
   if (*type == "indicator") {
     return parse_indicator(object, path);
   }
+  if (*type == "text_input") {
+    return parse_text_input(object, path);
+  }
   if (*type == "button") {
     return parse_button(object, path);
   }
@@ -586,6 +626,10 @@ parse_emphasis(const Json &object, const std::string &path) {
     return "progress value must be between 0 and 1";
   case SceneErrorCode::empty_action:
     return "action ID must not be empty";
+  case SceneErrorCode::empty_identifier:
+    return "scene identifier must not be empty";
+  case SceneErrorCode::duplicate_identifier:
+    return "scene identifier must be unique";
   case SceneErrorCode::invalid_emphasis:
     return "text emphasis values must be unique";
   }
@@ -1014,7 +1058,8 @@ parse_view_transitions(const Json &object) {
     }
     auto known_presentation = reject_unknown_fields(
         *presentation_iterator,
-        std::set<std::string_view>{"reveal", "duration_ms", "compact_style"}, "/presentation");
+        std::set<std::string_view>{"reveal", "duration_ms", "compact_style", "expanded_style"},
+        "/presentation");
     if (!known_presentation) {
       return std::unexpected(known_presentation.error());
     }
@@ -1057,10 +1102,23 @@ parse_view_transitions(const Json &object) {
       }
       compact_style = std::move(*style);
     }
-    if (!reveal && !compact_style) {
+    std::optional<std::string> expanded_style;
+    if (presentation_iterator->contains("expanded_style")) {
+      auto style = required_string(*presentation_iterator, "expanded_style", "/presentation");
+      if (!style) {
+        return std::unexpected(style.error());
+      }
+      if (!expanded) {
+        return std::unexpected(
+            error_at("/presentation/expanded_style", "style requires an expanded view"));
+      }
+      expanded_style = std::move(*style);
+    }
+    if (!reveal && !compact_style && !expanded_style) {
       return std::unexpected(error_at("/presentation", "presentation must not be empty"));
     }
-    presentation = PresentationIntent{reveal, duration, std::move(compact_style)};
+    presentation =
+        PresentationIntent{reveal, duration, std::move(compact_style), std::move(expanded_style)};
   }
 
   std::set<std::string> resource_ids;

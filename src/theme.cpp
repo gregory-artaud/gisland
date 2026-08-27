@@ -416,35 +416,49 @@ parse_geometry(const toml::table &view, std::string_view name, std::string_view 
     return std::unexpected(keys.error());
   }
   auto compact = parse_geometry(**view, "compact", source_name, "view", true);
-  auto expanded = parse_geometry(**view, "expanded", source_name);
+  auto expanded = parse_geometry(**view, "expanded", source_name, "view", true);
   if (!compact) {
     return std::unexpected(compact.error());
   }
   if (!expanded) {
     return std::unexpected(expanded.error());
   }
-  std::map<std::string, ViewGeometry, std::less<>> compact_styles;
-  const auto *compact_table = (*view)->get_as<toml::table>("compact");
-  const auto *styles_node = compact_table == nullptr ? nullptr : compact_table->get("styles");
-  if (styles_node != nullptr) {
+  const auto parse_styles = [&](std::string_view view_name)
+      -> std::expected<std::map<std::string, ViewGeometry, std::less<>>, ThemeError> {
+    std::map<std::string, ViewGeometry, std::less<>> parsed;
+    const auto *view_table = (*view)->get_as<toml::table>(view_name);
+    const auto *styles_node = view_table == nullptr ? nullptr : view_table->get("styles");
+    if (styles_node == nullptr) {
+      return parsed;
+    }
     const auto *styles = styles_node->as_table();
     if (styles == nullptr) {
-      return std::unexpected(
-          error_at(source_name, "view.compact.styles", "expected a table", styles_node));
+      return std::unexpected(error_at(source_name, "view." + std::string{view_name} + ".styles",
+                                      "expected a table", styles_node));
     }
     for (const auto &[name, node] : *styles) {
       if (name.str().empty() || name.str().size() > 128U) {
-        return std::unexpected(error_at(source_name, "view.compact.styles",
+        return std::unexpected(error_at(source_name, "view." + std::string{view_name} + ".styles",
                                         "style name must contain 1 through 128 bytes", &node));
       }
-      auto geometry = parse_geometry(*styles, name.str(), source_name, "view.compact.styles");
+      auto geometry = parse_geometry(*styles, name.str(), source_name,
+                                     "view." + std::string{view_name} + ".styles");
       if (!geometry) {
         return std::unexpected(geometry.error());
       }
-      compact_styles.emplace(name.str(), *geometry);
+      parsed.emplace(name.str(), *geometry);
     }
+    return parsed;
+  };
+  auto compact_styles = parse_styles("compact");
+  auto expanded_styles = parse_styles("expanded");
+  if (!compact_styles) {
+    return std::unexpected(compact_styles.error());
   }
-  return ThemeViews{*compact, *expanded, std::move(compact_styles)};
+  if (!expanded_styles) {
+    return std::unexpected(expanded_styles.error());
+  }
+  return ThemeViews{*compact, *expanded, std::move(*compact_styles), std::move(*expanded_styles)};
 }
 
 [[nodiscard]] std::expected<ThemeColor, ThemeError>
@@ -502,6 +516,70 @@ parse_theme_color(const toml::node *node, const std::string &path, std::string_v
     return std::unexpected(hover.error());
   }
   return ButtonStyle{std::move(*background), std::move(*disabled), std::move(*hover)};
+}
+
+[[nodiscard]] std::expected<InputStyle, ThemeError> parse_inputs(const toml::table &root,
+                                                                 std::string_view source_name) {
+  constexpr Rgba background{255, 255, 255, 13};
+  constexpr Rgba focused_background{255, 255, 255, 20};
+  const auto *node = root.get("inputs");
+  if (node == nullptr) {
+    return InputStyle{48.0,
+                      14.0,
+                      14.0,
+                      background,
+                      focused_background,
+                      std::string{"foreground"},
+                      std::string{"muted"}};
+  }
+  const auto *table = node->as_table();
+  if (table == nullptr) {
+    return std::unexpected(error_at(source_name, "inputs", "expected a table", node));
+  }
+  auto keys = reject_unknown(*table,
+                             {"height", "padding_horizontal", "radius", "background",
+                              "focused_background", "caret", "placeholder"},
+                             "inputs", source_name);
+  if (!keys)
+    return std::unexpected(keys.error());
+  auto height =
+      number_value(table->get("height"), "inputs.height", source_name, 1.0, maximum_pixels);
+  auto padding = number_value(table->get("padding_horizontal"), "inputs.padding_horizontal",
+                              source_name, 0.0, maximum_pixels);
+  auto radius =
+      number_value(table->get("radius"), "inputs.radius", source_name, 0.0, maximum_pixels);
+  auto base = parse_theme_color(table->get("background"), "inputs.background", source_name);
+  auto focused =
+      parse_theme_color(table->get("focused_background"), "inputs.focused_background", source_name);
+  auto caret = parse_theme_color(table->get("caret"), "inputs.caret", source_name);
+  auto placeholder =
+      parse_theme_color(table->get("placeholder"), "inputs.placeholder", source_name);
+  if (!height)
+    return std::unexpected(height.error());
+  if (!padding)
+    return std::unexpected(padding.error());
+  if (!radius)
+    return std::unexpected(radius.error());
+  if (!base)
+    return std::unexpected(base.error());
+  if (!focused)
+    return std::unexpected(focused.error());
+  if (!caret)
+    return std::unexpected(caret.error());
+  if (!placeholder)
+    return std::unexpected(placeholder.error());
+  if ((*padding * 2.0) >= maximum_pixels) {
+    return std::unexpected(error_at(source_name, "inputs.padding_horizontal",
+                                    "input padding is too large",
+                                    table->get("padding_horizontal")));
+  }
+  return InputStyle{*height,
+                    *padding,
+                    *radius,
+                    std::move(*base),
+                    std::move(*focused),
+                    std::move(*caret),
+                    std::move(*placeholder)};
 }
 
 [[nodiscard]] std::expected<ProgressStyle, ThemeError>
@@ -1184,8 +1262,9 @@ parse_image_roles(const toml::table &root, std::string_view source_name) {
 [[nodiscard]] std::expected<void, ThemeError>
 validate_references(const Theme::Typography &typography, const Theme::Icons &icons,
                     const Theme::FontResources &fonts, const Theme::Palette &palette,
-                    const ButtonStyle &buttons, const ProgressStyle &progress,
-                    const ShadowStyle &shadow, std::string_view source_name) {
+                    const ButtonStyle &buttons, const InputStyle &inputs,
+                    const ProgressStyle &progress, const ShadowStyle &shadow,
+                    std::string_view source_name) {
   for (const auto &[role, style] : typography) {
     if (!fonts.contains(style.font)) {
       return std::unexpected(error_at(source_name, "typography." + role + ".font",
@@ -1216,6 +1295,16 @@ validate_references(const Theme::Typography &typography, const Theme::Icons &ico
       return std::unexpected(error_at(source_name, path, "referenced palette role does not exist"));
     }
   }
+  for (const auto &[path, color] :
+       {std::pair{"inputs.background", &inputs.background},
+        std::pair{"inputs.focused_background", &inputs.focused_background},
+        std::pair{"inputs.caret", &inputs.caret},
+        std::pair{"inputs.placeholder", &inputs.placeholder}}) {
+    if (const auto *role = std::get_if<std::string>(color);
+        role != nullptr && !palette.contains(*role)) {
+      return std::unexpected(error_at(source_name, path, "referenced palette role does not exist"));
+    }
+  }
   if (const auto *role = std::get_if<std::string>(&progress.track);
       role != nullptr && !palette.contains(*role)) {
     return std::unexpected(
@@ -1227,22 +1316,22 @@ validate_references(const Theme::Typography &typography, const Theme::Icons &ico
 } // namespace
 
 Theme::Theme(Palette palette, Typography typography, PixelTokens gaps, PixelTokens spacers,
-             ThemeViews views, ButtonStyle buttons, ProgressStyle progress,
+             ThemeViews views, ButtonStyle buttons, InputStyle inputs, ProgressStyle progress,
              IndicatorStyle indicator, ShadowStyle shadow, AnimationStyle animation,
              FontResources fonts, Icons icons, ImageRoles images)
     : palette_(std::move(palette)), typography_(std::move(typography)), gaps_(std::move(gaps)),
-      spacers_(std::move(spacers)), views_(views), buttons_(std::move(buttons)),
-      progress_(std::move(progress)), indicator_(indicator), shadow_(std::move(shadow)),
-      animation_(animation), fonts_(std::move(fonts)), icons_(std::move(icons)),
-      images_(std::move(images)) {}
+      spacers_(std::move(spacers)), views_(std::move(views)), buttons_(std::move(buttons)),
+      inputs_(std::move(inputs)), progress_(std::move(progress)), indicator_(indicator),
+      shadow_(std::move(shadow)), animation_(animation), fonts_(std::move(fonts)),
+      icons_(std::move(icons)), images_(std::move(images)) {}
 
 std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_view source_name) {
   try {
     const auto root = toml::parse(text, source_name);
     auto keys =
         reject_unknown(root,
-                       {"palette", "typography", "gaps", "spacers", "view", "buttons", "progress",
-                        "indicator", "shadow", "animation", "fonts", "icons", "images"},
+                       {"palette", "typography", "gaps", "spacers", "view", "buttons", "inputs",
+                        "progress", "indicator", "shadow", "animation", "fonts", "icons", "images"},
                        "", source_name);
     if (!keys) {
       return std::unexpected(keys.error());
@@ -1255,6 +1344,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     auto spacers = parse_pixel_tokens(root, "spacers", source_name);
     auto views = parse_views(root, source_name);
     auto buttons = parse_buttons(root, source_name);
+    auto inputs = parse_inputs(root, source_name);
     auto progress = parse_progress(root, source_name);
     auto indicator = parse_indicator(root, source_name);
     auto shadow = parse_shadow(root, source_name);
@@ -1282,6 +1372,9 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!buttons) {
       return std::unexpected(buttons.error());
     }
+    if (!inputs) {
+      return std::unexpected(inputs.error());
+    }
     if (!progress) {
       return std::unexpected(progress.error());
     }
@@ -1300,7 +1393,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
     if (!images) {
       return std::unexpected(images.error());
     }
-    auto references = validate_references(*typography, *icons, *fonts, *palette, *buttons,
+    auto references = validate_references(*typography, *icons, *fonts, *palette, *buttons, *inputs,
                                           *progress, *shadow, source_name);
     if (!references) {
       return std::unexpected(references.error());
@@ -1311,6 +1404,7 @@ std::expected<Theme, ThemeError> parse_theme(std::string_view text, std::string_
                  std::move(*spacers),
                  *views,
                  std::move(*buttons),
+                 std::move(*inputs),
                  std::move(*progress),
                  *indicator,
                  std::move(*shadow),

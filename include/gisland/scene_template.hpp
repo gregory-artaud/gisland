@@ -47,6 +47,15 @@ struct TemplateIndicator {
   TemplateValue<std::string> accessible_label;
 };
 
+struct TemplateTextInput {
+  std::string input_id;
+  std::string action_id;
+  std::optional<std::string> submit_action_id;
+  TemplateValue<std::string> initial_value{std::string{}};
+  TemplateValue<std::string> placeholder{std::string{}};
+  TemplateValue<std::string> accessible_label{std::string{}};
+};
+
 struct SceneTemplate;
 using SceneTemplatePtr = std::shared_ptr<const SceneTemplate>;
 
@@ -75,11 +84,21 @@ struct TemplateButton {
   std::string action_id;
   TemplateValue<bool> enabled{true};
   TemplateValue<std::string> accessible_label{std::string{}};
+  TemplateValue<bool> close_on_activate{false};
+};
+
+struct TemplateActionRegion {
+  SceneTemplatePtr content;
+  std::string action_id;
+  TemplateValue<bool> enabled{true};
+  TemplateValue<std::string> accessible_label{std::string{}};
+  TemplateValue<bool> close_on_activate{false};
 };
 
 struct SceneTemplate {
   using Value = std::variant<TemplateText, TemplateIcon, TemplateRow, TemplateColumn,
-                             TemplateSpacer, TemplateProgress, TemplateIndicator, TemplateButton>;
+                             TemplateSpacer, TemplateProgress, TemplateIndicator, TemplateTextInput,
+                             TemplateButton, TemplateActionRegion>;
   Value value;
 };
 

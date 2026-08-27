@@ -38,6 +38,7 @@ struct PresentationIntent {
   std::optional<Reveal> reveal;
   std::optional<std::chrono::milliseconds> duration;
   std::optional<std::string> compact_style;
+  std::optional<std::string> expanded_style;
 };
 
 struct PublishedContext {

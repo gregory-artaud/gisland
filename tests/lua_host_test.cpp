@@ -651,8 +651,9 @@ TEST_CASE("lua_host_lifecycle selects the highest supported protocol overlap",
           "[lua_host_lifecycle]") {
   const auto entry = std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "lifecycle.lua";
 
-  for (const auto &[minimum, maximum, selected] : std::array{
-           std::array{0, 9, 9}, std::array{8, 8, 8}, std::array{9, 9, 9}, std::array{8, 12, 9}}) {
+  for (const auto &[minimum, maximum, selected] :
+       std::array{std::array{0, 9, 9}, std::array{8, 8, 8}, std::array{9, 9, 9},
+                  std::array{10, 10, 10}, std::array{8, 12, 10}}) {
     INFO(minimum << ".." << maximum);
     auto host = gisland::LuaHost::load(entry.string());
     REQUIRE(host.has_value());
@@ -665,7 +666,7 @@ TEST_CASE("lua_host_lifecycle selects the highest supported protocol overlap",
 
     REQUIRE(records.size() == 1);
     CHECK(records[0].at("protocol_minor") == selected);
-    const auto expected = selected == 9 ? nlohmann::json{"data-snapshots", "progress-transitions",
+    const auto expected = selected >= 9 ? nlohmann::json{"data-snapshots", "progress-transitions",
                                                          "indicator-effects", "content-transitions"}
                                         : nlohmann::json{"data-snapshots", "progress-transitions"};
     CHECK(records[0].at("capabilities") == expected);
@@ -704,11 +705,11 @@ TEST_CASE("lua_host_lifecycle rejects invalid records", "[lua_host_lifecycle]") 
     CHECK(result.error().code == gisland::LuaHostErrorCode::protocol_error);
     CHECK(result.error().message == "core must offer protocol 1.8");
   }
-  SECTION("minimum above protocol 1.9 has no overlap") {
+  SECTION("minimum above protocol 1.10 has no overlap") {
     auto host = gisland::LuaHost::load(entry.string());
     REQUIRE(host.has_value());
     Records records;
-    auto record = init_record(nlohmann::json::object(), 10, 12);
+    auto record = init_record(nlohmann::json::object(), 11, 12);
     const auto result = (*host)->handle(record, collect_into(records), {});
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == gisland::LuaHostErrorCode::protocol_error);
@@ -748,7 +749,9 @@ TEST_CASE("lua_host_lifecycle advertises the implemented offered scene capabilit
       "content-transitions", "progress-transitions", "not-implemented",     "data-snapshots",
       "indicator-effects",   "icon-roles",           "compact-view-styles", "status-indicator",
       "ring-progress",       "independent-views",    "rich-content",        "context-images",
+      "text-input",          "expanded-view-styles",
   };
+  record["protocol"]["maximum"]["minor"] = 10;
 
   REQUIRE((*host)->handle(record, collect_into(records), {}).has_value());
 
@@ -756,7 +759,8 @@ TEST_CASE("lua_host_lifecycle advertises the implemented offered scene capabilit
   CHECK(records[0].at("capabilities") ==
         nlohmann::json{"data-snapshots", "context-images", "rich-content", "independent-views",
                        "ring-progress", "status-indicator", "compact-view-styles", "icon-roles",
-                       "progress-transitions", "indicator-effects", "content-transitions"});
+                       "progress-transitions", "indicator-effects", "content-transitions",
+                       "text-input", "expanded-view-styles"});
 }
 
 TEST_CASE("lua_host_lifecycle omits protocol 1.9 scene capabilities on protocol 1.8",
@@ -1395,6 +1399,44 @@ TEST_CASE("lua host process exposes negotiated 1.9 metadata and data transitions
   REQUIRE(::waitpid(child, &status, 0) == child);
   REQUIRE(WIFEXITED(status));
   CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("Lua 1.10 launcher fixture republishes live results and declares closing actions",
+          "[lua_host_action][lua_scene]") {
+  auto host = gisland::LuaHost::load(
+      (std::filesystem::path{GISLAND_LUA_FIXTURE_DIR} / "launcher.lua").string());
+  REQUIRE(host.has_value());
+  Records records;
+  const auto emit = collect_into(records);
+  REQUIRE((*host)
+              ->handle(init_record(nlohmann::json::object(), 10, 10,
+                                   {"independent-views", "text-input", "expanded-view-styles"}),
+                       emit, {})
+              .has_value());
+  REQUIRE(records.size() == 2);
+  const auto &initial = records.back();
+  CHECK(initial.at("presentation").at("expanded_style") == "palette");
+  CHECK(initial.at("views").at("expanded").at("children").size() == 3);
+  CHECK(initial.at("views").at("expanded").at("children").at(1).at("close_on_activate") == true);
+
+  REQUIRE(
+      (*host)
+          ->handle(
+              nlohmann::json{{"type", "action"}, {"action_id", "query-changed"}, {"value", "term"}},
+              emit, {})
+          .has_value());
+  REQUIRE(records.size() == 5);
+  CHECK(records[2].at("value").at("observed_query") == "term");
+  CHECK(records[3].at("views").at("expanded").at("children").size() == 2);
+  CHECK(records[3].at("views").at("expanded").at("children").at(0).at("initial_value") == "");
+
+  REQUIRE(
+      (*host)
+          ->handle(nlohmann::json{{"type", "action"}, {"action_id", "launch:terminal"}}, emit, {})
+          .has_value());
+  REQUIRE(records.size() == 7);
+  CHECK(records[5].at("value") ==
+        nlohmann::json{{"launched", "launch:terminal"}, {"query_at_launch", "term"}});
 }
 
 TEST_CASE("lua host process verifies discovered entry bytes before loading") {

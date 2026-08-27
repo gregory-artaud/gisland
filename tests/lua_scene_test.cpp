@@ -198,10 +198,15 @@ TEST_CASE("lua scene constructors emit every protocol primitive exactly", "[lua_
       {R"(gisland.ui.indicator { state = "warning", accessible_label = "Needs attention",
           effects = { "shadow", "glow", "breathe" } })",
        R"({"type":"indicator","state":"warning","accessible_label":"Needs attention","effects":["shadow","glow","breathe"]})"},
+      {R"(gisland.ui.text_input { input_id = "query", action_id = "query-changed",
+          submit_action_id = "launch", initial_value = "ter", placeholder = "Search",
+          accessible_label = "Search applications" })",
+       R"({"type":"text_input","input_id":"query","action_id":"query-changed","submit_action_id":"launch","initial_value":"ter","placeholder":"Search","accessible_label":"Search applications"})"},
       {R"(gisland.ui.button { action_id = "accept", enabled = false,
-          accessible_label = "Accept", content = gisland.ui.text { value = "OK", role = "button" }
+          accessible_label = "Accept", close_on_activate = true,
+          content = gisland.ui.text { value = "OK", role = "button" }
         })",
-       R"({"type":"button","action_id":"accept","enabled":false,"accessible_label":"Accept","content":{"type":"text","value":"OK","role":"button"}})"},
+       R"({"type":"button","action_id":"accept","enabled":false,"accessible_label":"Accept","close_on_activate":true,"content":{"type":"text","value":"OK","role":"button"}})"},
       {R"(gisland.ui.action_region { action_id = "open", enabled = true,
           accessible_label = "Open item", content = gisland.ui.icon {
             name = "folder", accessible_label = "Folder"

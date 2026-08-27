@@ -66,3 +66,69 @@ TEST_CASE("hover decoration is emitted only for the winning enabled button") {
   CHECK(command.color == overlay);
   CHECK(command.enabled);
 }
+
+TEST_CASE("text input editor edits UTF-8 at codepoint boundaries and enforces its byte limit") {
+  gisland::TextInputEditor editor{"a\xC3\xA9", 7};
+  CHECK(editor.caret() == 3);
+  editor.move_left();
+  REQUIRE(editor.insert(U'🙂'));
+  CHECK(editor.value() == "a🙂é");
+  CHECK_FALSE(editor.insert(U'x'));
+  REQUIRE(editor.backspace());
+  CHECK(editor.value() == "aé");
+  editor.home();
+  REQUIRE(editor.delete_forward());
+  CHECK(editor.value() == "é");
+  editor.select_all();
+  REQUIRE(editor.paste("ok"));
+  CHECK(editor.value() == "ok");
+  CHECK_FALSE(editor.paste("\xFF"));
+}
+
+TEST_CASE("keyboard navigation preserves result actions across live layout updates") {
+  const auto first = plan({
+      gisland::InteractionTarget{{0, 0, 100, 20},
+                                 {0, 0, 100, 20},
+                                 "query",
+                                 true,
+                                 "Search",
+                                 gisland::InteractionKind::text_input,
+                                 "query"},
+      target({0, 20, 100, 20}, {0, 20, 100, 20}, "terminal"),
+      target({0, 40, 100, 20}, {0, 40, 100, 20}, "browser"),
+  });
+  gisland::KeyboardNavigationController navigation;
+  navigation.reconcile(first);
+  CHECK(navigation.selected_action_id() == std::optional<std::string>{"terminal"});
+  navigation.move_result(first, 1);
+  CHECK(navigation.selected_action_id() == std::optional<std::string>{"browser"});
+
+  const auto republished = plan({
+      gisland::InteractionTarget{{0, 0, 100, 20},
+                                 {0, 0, 100, 20},
+                                 "query",
+                                 true,
+                                 "Search",
+                                 gisland::InteractionKind::text_input,
+                                 "query"},
+      target({0, 20, 100, 20}, {0, 20, 100, 20}, "files"),
+      target({0, 40, 100, 20}, {0, 40, 100, 20}, "browser"),
+  });
+  navigation.reconcile(republished);
+  CHECK(navigation.selected_action_id() == std::optional<std::string>{"browser"});
+  REQUIRE(navigation.activation_target(republished) != nullptr);
+  CHECK(navigation.activation_target(republished)->action_id == "browser");
+
+  const auto removed = plan({
+      gisland::InteractionTarget{{0, 0, 100, 20},
+                                 {0, 0, 100, 20},
+                                 "query",
+                                 true,
+                                 "Search",
+                                 gisland::InteractionKind::text_input,
+                                 "query"},
+      target({0, 20, 100, 20}, {0, 20, 100, 20}, "files"),
+  });
+  navigation.reconcile(removed);
+  CHECK(navigation.selected_action_id() == std::optional<std::string>{"files"});
+}

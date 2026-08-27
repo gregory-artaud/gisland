@@ -16,6 +16,7 @@ enum class PlatformOperation {
   attach_window,
   query_outputs,
   update_input_region,
+  update_keyboard_focus,
   poll_events
 };
 
@@ -27,7 +28,7 @@ struct PlatformError {
   std::string message;
 };
 
-enum class PlatformEventKind { output_topology_changed };
+enum class PlatformEventKind { output_topology_changed, keyboard_focus_lost };
 
 struct PlatformEvent {
   PlatformEventKind kind;
@@ -46,6 +47,8 @@ public:
   select_output(std::string_view requested_name) const = 0;
   [[nodiscard]] virtual std::expected<void, PlatformError>
   update_input_region(const InputRegion &region) const = 0;
+  [[nodiscard]] virtual std::expected<void, PlatformError> begin_keyboard_focus() { return {}; }
+  [[nodiscard]] virtual std::expected<void, PlatformError> end_keyboard_focus() { return {}; }
   [[nodiscard]] virtual std::expected<std::vector<PlatformEvent>, PlatformError> poll_events() = 0;
 };
 

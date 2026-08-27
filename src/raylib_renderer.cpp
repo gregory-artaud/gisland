@@ -915,6 +915,40 @@ RaylibPainter::draw_content(const LayoutPlan &plan, RenderOrigin origin,
                                static_cast<float>(rendered_bounds->y)},
                        static_cast<float>(command.typography.size), 0.0F, color(command.color));
           } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
+                                              TextInputDrawCommand>) {
+            const auto font = fonts_.impl_->find(command.font_resource, command.typography);
+            if (!font) {
+              return std::unexpected(font.error());
+            }
+            const Scissor scissor{*rendered_clip};
+            DrawRectangleRounded(
+                rectangle(*rendered_bounds), roundness(*rendered_bounds, command.radius), 16,
+                color(command.focused ? command.focused_background : command.background));
+            const std::string &displayed =
+                command.text.empty() ? command.placeholder : command.text;
+            const Rgba text_color =
+                command.text.empty() ? command.placeholder_color : command.text_color;
+            const Vector2 measured = MeasureTextEx(
+                **font, displayed.c_str(), static_cast<float>(command.typography.size), 0.0F);
+            const float text_y =
+                static_cast<float>(rendered_bounds->y) +
+                ((static_cast<float>(rendered_bounds->height) - measured.y) / 2.0F);
+            DrawTextEx(**font, displayed.c_str(),
+                       Vector2{static_cast<float>(rendered_bounds->x + command.padding_horizontal),
+                               text_y},
+                       static_cast<float>(command.typography.size), 0.0F, color(text_color));
+            if (command.focused && command.caret_visible) {
+              const std::size_t caret = std::min(command.caret_byte, command.text.size());
+              const std::string prefix = command.text.substr(0, caret);
+              const Vector2 prefix_size = MeasureTextEx(
+                  **font, prefix.c_str(), static_cast<float>(command.typography.size), 0.0F);
+              const int caret_x = rendered_bounds->x + command.padding_horizontal +
+                                  static_cast<int>(std::lround(prefix_size.x));
+              const int caret_height = std::max(1, static_cast<int>(std::lround(measured.y)));
+              const int caret_y = rendered_bounds->y + (rendered_bounds->height - caret_height) / 2;
+              DrawRectangle(caret_x, caret_y, 1, caret_height, color(command.caret_color));
+            }
+          } else if constexpr (std::is_same_v<std::decay_t<decltype(command)>,
                                               RichTextDrawCommand>) {
             if (rich_text_ == nullptr) {
               return std::unexpected(renderer_error(RendererErrorCode::missing_resource, {},
