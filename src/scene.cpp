@@ -183,6 +183,17 @@ private:
         return result;
       }
     }
+    if (input.navigation_action_id) {
+      if (input.navigation_action_id->empty()) {
+        return std::unexpected(
+            SceneError{SceneErrorCode::empty_action, path + "/navigation_action_id"});
+      }
+      if (auto result =
+              validate_identifier(*input.navigation_action_id, path + "/navigation_action_id");
+          !result) {
+        return result;
+      }
+    }
     if (auto result = validate_text(input.placeholder, path + "/placeholder"); !result) {
       return result;
     }
@@ -332,9 +343,11 @@ Button::Button(SceneNode content_value, std::string action_id_value, bool enable
 TextInput::TextInput(std::string input_id_value, std::string action_id_value,
                      std::string initial_value_value, std::string placeholder_value,
                      std::string accessible_label_value,
-                     std::optional<std::string> submit_action_id_value)
+                     std::optional<std::string> submit_action_id_value,
+                     std::optional<std::string> navigation_action_id_value)
     : input_id(std::move(input_id_value)), action_id(std::move(action_id_value)),
       submit_action_id(std::move(submit_action_id_value)),
+      navigation_action_id(std::move(navigation_action_id_value)),
       initial_value(std::move(initial_value_value)), placeholder(std::move(placeholder_value)),
       accessible_label(std::move(accessible_label_value)) {}
 

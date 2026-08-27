@@ -528,9 +528,16 @@ parse_emphasis(const Json &object, const std::string &path) {
       return std::unexpected(submit.error());
     submit_action_id = std::move(*submit);
   }
+  std::optional<std::string> navigation_action_id;
+  if (object.contains("navigation_action_id")) {
+    auto navigation = required_string(object, "navigation_action_id", path);
+    if (!navigation)
+      return std::unexpected(navigation.error());
+    navigation_action_id = std::move(*navigation);
+  }
   return SceneNode{TextInput{std::move(*input_id), std::move(*action_id), std::move(*initial_value),
                              std::move(*placeholder), std::move(*accessible_label),
-                             std::move(submit_action_id)}};
+                             std::move(submit_action_id), std::move(navigation_action_id)}};
 }
 
 [[nodiscard]] std::expected<SceneNode, ProtocolError> parse_action_region(const Json &object,

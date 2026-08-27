@@ -743,8 +743,8 @@ min_width = 180
 max_width = 180
 min_height = 80
 max_height = 80)");
-  const gisland::SceneNode scene{
-      gisland::TextInput{"query", "query-changed", "", "Search", "Search applications", "launch"}};
+  const gisland::SceneNode scene{gisland::TextInput{
+      "query", "query-changed", "", "Search", "Search applications", "launch", "navigate-results"}};
 
   const auto result = gisland::layout_scene(scene, theme, gisland::ViewMode::expanded,
                                             TestGlyphMetrics{}, "palette");
@@ -759,6 +759,8 @@ max_height = 80)");
   REQUIRE(result->interactions.size() == 1);
   CHECK(result->interactions.front().kind == gisland::InteractionKind::text_input);
   CHECK(result->interactions.front().submit_action_id == std::optional<std::string>{"launch"});
+  CHECK(result->interactions.front().navigation_action_id ==
+        std::optional<std::string>{"navigate-results"});
 }
 
 TEST_CASE("unlabeled linear progress fills remaining row width") {

@@ -29,8 +29,14 @@ public:
   [[nodiscard]] bool paste(std::string_view utf8);
   [[nodiscard]] bool backspace();
   [[nodiscard]] bool delete_forward();
+  [[nodiscard]] bool delete_word_backward();
+  [[nodiscard]] bool delete_word_forward();
+  [[nodiscard]] bool delete_to_start();
+  [[nodiscard]] bool delete_to_end();
   void move_left();
   void move_right();
+  void move_word_left();
+  void move_word_right();
   void home();
   void end();
   void select_all();
@@ -47,7 +53,8 @@ private:
 class KeyboardNavigationController final {
 public:
   void reconcile(const LayoutPlan &layout);
-  void move_result(const LayoutPlan &layout, int direction);
+  [[nodiscard]] bool move_result(const LayoutPlan &layout, int direction);
+  void continue_result_after_republish(int direction);
   void move_focus(const LayoutPlan &layout, bool reverse);
   [[nodiscard]] const InteractionTarget *activation_target(const LayoutPlan &layout) const;
   [[nodiscard]] const InteractionTarget *input_target(const LayoutPlan &layout) const;
@@ -59,6 +66,7 @@ private:
   std::optional<std::string> selected_action_id_;
   std::optional<std::string> focused_action_id_;
   std::optional<std::string> input_id_;
+  int pending_result_direction_{};
 };
 
 } // namespace gisland

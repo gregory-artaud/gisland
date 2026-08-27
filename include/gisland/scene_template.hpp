@@ -51,6 +51,7 @@ struct TemplateTextInput {
   std::string input_id;
   std::string action_id;
   std::optional<std::string> submit_action_id;
+  std::optional<std::string> navigation_action_id;
   TemplateValue<std::string> initial_value{std::string{}};
   TemplateValue<std::string> placeholder{std::string{}};
   TemplateValue<std::string> accessible_label{std::string{}};

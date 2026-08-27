@@ -1161,7 +1161,8 @@ private:
     });
     interactions.push_back(InteractionTarget{bounds, *clipped, input.action_id, true,
                                              input.accessible_label, InteractionKind::text_input,
-                                             input.input_id, input.submit_action_id, false});
+                                             input.input_id, input.submit_action_id,
+                                             input.navigation_action_id, false});
     return {};
   }
 
@@ -1522,6 +1523,7 @@ private:
                                              InteractionKind::button,
                                              {},
                                              {},
+                                             {},
                                              button.close_on_activate});
 
     const auto &child = node.children.front();
@@ -1578,6 +1580,7 @@ private:
                                              region.enabled,
                                              region.accessible_label,
                                              InteractionKind::action_region,
+                                             {},
                                              {},
                                              {},
                                              region.close_on_activate});

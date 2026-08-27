@@ -128,6 +128,7 @@ bool equal_template(const SceneTemplate &left, const SceneTemplate &right) {
           return left_value.input_id == right_value.input_id &&
                  left_value.action_id == right_value.action_id &&
                  left_value.submit_action_id == right_value.submit_action_id &&
+                 left_value.navigation_action_id == right_value.navigation_action_id &&
                  equal_template_value(left_value.initial_value, right_value.initial_value) &&
                  equal_template_value(left_value.placeholder, right_value.placeholder) &&
                  equal_template_value(left_value.accessible_label, right_value.accessible_label);

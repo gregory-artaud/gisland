@@ -113,6 +113,40 @@ namespace {
   return next;
 }
 
+[[nodiscard]] bool word_codepoint(std::string_view text, std::size_t offset) {
+  const auto first = static_cast<unsigned char>(text[offset]);
+  return first >= 0x80U || (first >= '0' && first <= '9') || (first >= 'A' && first <= 'Z') ||
+         (first >= 'a' && first <= 'z') || first == '_';
+}
+
+[[nodiscard]] std::size_t previous_word(std::string_view text, std::size_t caret) {
+  auto position = caret;
+  while (position > 0) {
+    const auto previous = previous_codepoint(text, position);
+    if (word_codepoint(text, previous))
+      break;
+    position = previous;
+  }
+  while (position > 0) {
+    const auto previous = previous_codepoint(text, position);
+    if (!word_codepoint(text, previous))
+      break;
+    position = previous;
+  }
+  return position;
+}
+
+[[nodiscard]] std::size_t next_word(std::string_view text, std::size_t caret) {
+  auto position = caret;
+  while (position < text.size() && word_codepoint(text, position)) {
+    position = next_codepoint(text, position);
+  }
+  while (position < text.size() && !word_codepoint(text, position)) {
+    position = next_codepoint(text, position);
+  }
+  return position;
+}
+
 [[nodiscard]] std::string encode_utf8(char32_t codepoint) {
   std::string result;
   if (codepoint <= 0x7FU) {
@@ -205,6 +239,46 @@ bool TextInputEditor::delete_forward() {
   return true;
 }
 
+bool TextInputEditor::delete_word_backward() {
+  if (all_selected_)
+    return backspace();
+  const auto beginning = previous_word(value_, caret_);
+  if (beginning == caret_)
+    return false;
+  value_.erase(beginning, caret_ - beginning);
+  caret_ = beginning;
+  return true;
+}
+
+bool TextInputEditor::delete_word_forward() {
+  if (all_selected_)
+    return backspace();
+  const auto ending = next_word(value_, caret_);
+  if (ending == caret_)
+    return false;
+  value_.erase(caret_, ending - caret_);
+  return true;
+}
+
+bool TextInputEditor::delete_to_start() {
+  if (all_selected_)
+    return backspace();
+  if (caret_ == 0)
+    return false;
+  value_.erase(0, caret_);
+  caret_ = 0;
+  return true;
+}
+
+bool TextInputEditor::delete_to_end() {
+  if (all_selected_)
+    return backspace();
+  if (caret_ == value_.size())
+    return false;
+  value_.erase(caret_);
+  return true;
+}
+
 void TextInputEditor::move_left() {
   all_selected_ = false;
   caret_ = previous_codepoint(value_, caret_);
@@ -213,6 +287,16 @@ void TextInputEditor::move_left() {
 void TextInputEditor::move_right() {
   all_selected_ = false;
   caret_ = next_codepoint(value_, caret_);
+}
+
+void TextInputEditor::move_word_left() {
+  all_selected_ = false;
+  caret_ = previous_word(value_, caret_);
+}
+
+void TextInputEditor::move_word_right() {
+  all_selected_ = false;
+  caret_ = next_word(value_, caret_);
 }
 
 void TextInputEditor::home() {
@@ -245,7 +329,25 @@ void KeyboardNavigationController::reconcile(const LayoutPlan &layout) {
     selected_action_id_ = first == layout.interactions.end()
                               ? std::nullopt
                               : std::optional<std::string>{first->action_id};
+  } else if (pending_result_direction_ != 0) {
+    std::vector<const InteractionTarget *> results;
+    for (const auto &target : layout.interactions) {
+      if (keyboard_result(target)) {
+        results.push_back(&target);
+      }
+    }
+    const auto current = std::ranges::find_if(
+        results, [&](const auto *target) { return target->action_id == *selected_action_id_; });
+    if (current != results.end()) {
+      const auto index = static_cast<std::size_t>(std::distance(results.begin(), current));
+      if (pending_result_direction_ < 0 && index > 0) {
+        selected_action_id_ = results[index - 1]->action_id;
+      } else if (pending_result_direction_ > 0 && index + 1 < results.size()) {
+        selected_action_id_ = results[index + 1]->action_id;
+      }
+    }
   }
+  pending_result_direction_ = 0;
   if (!focused_action_id_) {
     focused_action_id_ = input == layout.interactions.end()
                              ? selected_action_id_
@@ -253,7 +355,7 @@ void KeyboardNavigationController::reconcile(const LayoutPlan &layout) {
   }
 }
 
-void KeyboardNavigationController::move_result(const LayoutPlan &layout, int direction) {
+bool KeyboardNavigationController::move_result(const LayoutPlan &layout, int direction) {
   std::vector<const InteractionTarget *> results;
   for (const auto &target : layout.interactions) {
     if (keyboard_result(target)) {
@@ -262,7 +364,7 @@ void KeyboardNavigationController::move_result(const LayoutPlan &layout, int dir
   }
   if (results.empty()) {
     selected_action_id_.reset();
-    return;
+    return false;
   }
   const auto current = std::ranges::find_if(results, [&](const auto *target) {
     return selected_action_id_ && target->action_id == *selected_action_id_;
@@ -271,11 +373,22 @@ void KeyboardNavigationController::move_result(const LayoutPlan &layout, int dir
                           ? 0
                           : static_cast<std::size_t>(std::distance(results.begin(), current));
   if (direction < 0) {
-    index = index == 0 ? results.size() - 1 : index - 1;
+    if (index == 0) {
+      return true;
+    }
+    --index;
   } else if (direction > 0) {
-    index = (index + 1) % results.size();
+    if (index + 1 == results.size()) {
+      return true;
+    }
+    ++index;
   }
   selected_action_id_ = results[index]->action_id;
+  return false;
+}
+
+void KeyboardNavigationController::continue_result_after_republish(int direction) {
+  pending_result_direction_ = direction;
 }
 
 void KeyboardNavigationController::move_focus(const LayoutPlan &layout, bool reverse) {

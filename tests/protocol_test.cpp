@@ -98,7 +98,8 @@ TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") 
     "type":"publish","context_id":"launcher","priority":100,
     "views":{"expanded":{"type":"column","children":[
       {"type":"text_input","input_id":"query","action_id":"query-changed",
-       "submit_action_id":"submit","initial_value":"","placeholder":"Search",
+       "submit_action_id":"submit","navigation_action_id":"navigate-results",
+       "initial_value":"","placeholder":"Search",
        "accessible_label":"Application search"},
       {"type":"action_region","action_id":"launch:terminal","close_on_activate":true,
        "accessible_label":"Launch Terminal",
@@ -116,6 +117,7 @@ TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") 
   CHECK(input.input_id == "query");
   CHECK(input.action_id == "query-changed");
   CHECK(input.submit_action_id == "submit");
+  CHECK(input.navigation_action_id == "navigate-results");
   CHECK(input.placeholder == "Search");
   CHECK(std::get<gisland::ActionRegion>(column.children[1]->value).close_on_activate);
 }

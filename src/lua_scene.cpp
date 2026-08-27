@@ -331,7 +331,8 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
   if (type == "text_input") {
     if (auto result = known_fields(node,
                                    {"type", "input_id", "action_id", "submit_action_id",
-                                    "initial_value", "placeholder", "accessible_label"},
+                                    "navigation_action_id", "initial_value", "placeholder",
+                                    "accessible_label"},
                                    path);
         !result) {
       return result;
@@ -343,6 +344,9 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
       }
     }
     if (auto result = optional_string(node, "submit_action_id", path); !result) {
+      return result;
+    }
+    if (auto result = optional_string(node, "navigation_action_id", path); !result) {
       return result;
     }
     for (const auto field : {"initial_value", "placeholder", "accessible_label"}) {

@@ -678,10 +678,14 @@ int Application::run() {
         mode == IslandMode::compact
             ? (compact_updated ? candidate.compact_transitions.compact : std::nullopt)
             : (expanded_updated ? candidate.expanded_transitions.expanded : std::nullopt);
-    const auto transition_duration =
-        has_declared_transition ? (requested_transition ? animation.content_transition.duration
-                                                        : std::chrono::milliseconds{0})
-                                : animation.context_change_ms;
+    auto transition_duration = has_declared_transition
+                                   ? (requested_transition ? animation.content_transition.duration
+                                                           : std::chrono::milliseconds{0})
+                                   : animation.context_change_ms;
+    if (!has_declared_transition && keyboard_session && rendered && rendered->expanded_key &&
+        candidate.expanded_key == rendered->expanded_key) {
+      transition_duration = std::chrono::milliseconds{0};
+    }
     if (preserve_compact_content && rendered) {
       std::swap(candidate.compact, rendered->compact);
       std::swap(candidate.compact_images, rendered->compact_images);
@@ -1195,43 +1199,66 @@ int Application::run() {
         mode_controller.close();
         end_keyboard_session();
       } else {
+        const auto pressed_or_repeated = [](int key) {
+          return IsKeyPressed(key) || IsKeyPressedRepeat(key);
+        };
         if (text_editor) {
           if (control && IsKeyPressed(KEY_A)) {
             text_editor->select_all();
           } else if (control && IsKeyPressed(KEY_V)) {
             const char *clipboard = GetClipboardText();
             edited = clipboard != nullptr && text_editor->paste(clipboard);
-          } else {
+          } else if (!control) {
             int codepoint = GetCharPressed();
             while (codepoint > 0) {
               edited = text_editor->insert(static_cast<char32_t>(codepoint)) || edited;
               codepoint = GetCharPressed();
             }
           }
-          if (IsKeyPressed(KEY_BACKSPACE)) {
-            edited = text_editor->backspace() || edited;
+          if (pressed_or_repeated(KEY_BACKSPACE)) {
+            edited = (control ? text_editor->delete_word_backward() : text_editor->backspace()) ||
+                     edited;
           }
-          if (IsKeyPressed(KEY_DELETE)) {
-            edited = text_editor->delete_forward() || edited;
+          if (pressed_or_repeated(KEY_DELETE)) {
+            edited =
+                (control ? text_editor->delete_word_forward() : text_editor->delete_forward()) ||
+                edited;
           }
-          if (IsKeyPressed(KEY_LEFT)) {
-            text_editor->move_left();
+          if (control && pressed_or_repeated(KEY_W)) {
+            edited = text_editor->delete_word_backward() || edited;
           }
-          if (IsKeyPressed(KEY_RIGHT)) {
-            text_editor->move_right();
+          if (control && pressed_or_repeated(KEY_U)) {
+            edited = text_editor->delete_to_start() || edited;
+          }
+          if (control && pressed_or_repeated(KEY_K)) {
+            edited = text_editor->delete_to_end() || edited;
+          }
+          if (pressed_or_repeated(KEY_LEFT) || (control && pressed_or_repeated(KEY_B))) {
+            control ? text_editor->move_word_left() : text_editor->move_left();
+          }
+          if (pressed_or_repeated(KEY_RIGHT) || (control && pressed_or_repeated(KEY_F))) {
+            control ? text_editor->move_word_right() : text_editor->move_right();
           }
           if (IsKeyPressed(KEY_HOME)) {
             text_editor->home();
           }
-          if (IsKeyPressed(KEY_END)) {
+          if (IsKeyPressed(KEY_END) || (control && IsKeyPressed(KEY_E))) {
             text_editor->end();
           }
         }
-        if (IsKeyPressed(KEY_UP)) {
-          keyboard_navigation.move_result(expanded_plan, -1);
-        }
-        if (IsKeyPressed(KEY_DOWN)) {
-          keyboard_navigation.move_result(expanded_plan, 1);
+        for (const int direction : {-1, 1}) {
+          const int key = direction < 0 ? KEY_UP : KEY_DOWN;
+          if (pressed_or_repeated(key) &&
+              keyboard_navigation.move_result(expanded_plan, direction)) {
+            const auto *input = keyboard_navigation.input_target(expanded_plan);
+            if (input != nullptr && input->navigation_action_id) {
+              InteractionTarget navigation = *input;
+              navigation.action_id = *input->navigation_action_id;
+              if (send_action(&navigation, nlohmann::json(direction))) {
+                keyboard_navigation.continue_result_after_republish(direction);
+              }
+            }
+          }
         }
         if (IsKeyPressed(KEY_TAB)) {
           const bool reverse = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
@@ -1401,13 +1428,6 @@ int Application::run() {
                    with_opacity(content_crossfade.compact(), incoming_opacity), current, placement,
                    blur_shader, texture_size_location, blur_radius_location,
                    context_content_alignment, transition_visual.incoming_offset_x);
-      if (rendered->expanded_content) {
-        draw_content(*rendered->expanded_content,
-                     with_opacity(content_crossfade.expanded(), incoming_opacity), current,
-                     placement, blur_shader, texture_size_location, blur_radius_location,
-                     context_content_alignment, transition_visual.incoming_offset_x);
-      }
-      EndScissorMode();
       if (button_hover) {
         const LayoutPlan hover_plan{{}, {*button_hover}, {}};
         if (auto drawn = painter.draw_content(
@@ -1426,6 +1446,13 @@ int Application::run() {
           std::cerr << drawn.error().message << '\n';
         }
       }
+      if (rendered->expanded_content) {
+        draw_content(*rendered->expanded_content,
+                     with_opacity(content_crossfade.expanded(), incoming_opacity), current,
+                     placement, blur_shader, texture_size_location, blur_radius_location,
+                     context_content_alignment, transition_visual.incoming_offset_x);
+      }
+      EndScissorMode();
       EndDrawing();
       const bool should_be_visible = mode == IslandMode::expanded || rendered->compact_key;
       if (should_be_visible && !visible) {

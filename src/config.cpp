@@ -606,10 +606,11 @@ parse_scene_template(const toml::table &table, const std::string &path,
     return SceneTemplate{TemplateIndicator{std::move(*state), std::move(*label)}};
   }
   if (*type == "text_input") {
-    auto keys = require_keys(table,
-                             {"type", "input_id", "action_id", "submit_action_id", "initial_value",
-                              "placeholder", "accessible_label"},
-                             path, source_name);
+    auto keys =
+        require_keys(table,
+                     {"type", "input_id", "action_id", "submit_action_id", "navigation_action_id",
+                      "initial_value", "placeholder", "accessible_label"},
+                     path, source_name);
     auto input = required_non_empty_string(table, "input_id", path + ".input_id", source_name);
     auto action = required_non_empty_string(table, "action_id", path + ".action_id", source_name);
     std::optional<std::string> submit;
@@ -620,6 +621,15 @@ parse_scene_template(const toml::table &table, const std::string &path,
         return std::unexpected(parsed.error());
       }
       submit = std::move(*parsed);
+    }
+    std::optional<std::string> navigation;
+    if (table.contains("navigation_action_id")) {
+      auto parsed = required_non_empty_string(table, "navigation_action_id",
+                                              path + ".navigation_action_id", source_name);
+      if (!parsed) {
+        return std::unexpected(parsed.error());
+      }
+      navigation = std::move(*parsed);
     }
     auto initial = template_field<std::string>(table, "initial_value", path + ".initial_value",
                                                source_name, std::string{});
@@ -646,8 +656,8 @@ parse_scene_template(const toml::table &table, const std::string &path,
       return std::unexpected(label.error());
     }
     return SceneTemplate{TemplateTextInput{std::move(*input), std::move(*action), std::move(submit),
-                                           std::move(*initial), std::move(*placeholder),
-                                           std::move(*label)}};
+                                           std::move(navigation), std::move(*initial),
+                                           std::move(*placeholder), std::move(*label)}};
   }
   if (*type == "row" || *type == "column") {
     auto keys = require_keys(table, {"type", "children", "alignment", "gap"}, path, source_name);

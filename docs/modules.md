@@ -209,7 +209,7 @@ Supported template nodes are:
 | `spacer` | optional `flexible` and theme `size_token` |
 | `progress` | `value` in `0..1`, optional `label`, `state`, `shape` (`linear` or `ring`) |
 | `indicator` | `state`, `accessible_label` |
-| `text_input` | `input_id`, `action_id`, optional `submit_action_id`, `initial_value`, `placeholder`, `accessible_label` |
+| `text_input` | `input_id`, `action_id`, optional `submit_action_id` and `navigation_action_id`, `initial_value`, `placeholder`, `accessible_label` |
 | `button` | `content`, `action_id`, optional `enabled`, `accessible_label`, `close_on_activate` |
 | `action_region` | `content`, `action_id`, optional `enabled`, `accessible_label`, `close_on_activate` |
 
@@ -340,6 +340,11 @@ the draft and caret when the same context republishes the same `input_id`, then 
 action was delivered successfully. An explicit `gislandctl activate-open <instance>` session owns
 keyboard focus; hover-only expansion remains non-focusable. Escape closes the session, while
 Up/Down select results, Enter activates, and Tab/Shift+Tab traverse targets.
+
+An optional `navigation_action_id` virtualizes bounded result lists. When Up or Down reaches the
+visible boundary, the core sends that action with `-1` or `1`. The module republishes the preceding
+or following window while retaining the boundary result; the core then advances the selection into
+the new window. Without this field, keyboard navigation stops at the first and last result.
 
 Image resources require protocol 1.2 and are scoped to one publication. They are top-to-bottom,
 tightly packed, sRGB, straight-alpha RGBA8 encoded as base64. Each axis is at most 512 pixels; a

@@ -109,11 +109,13 @@ struct Indicator {
 struct TextInput {
   TextInput(std::string input_id, std::string action_id, std::string initial_value = {},
             std::string placeholder = {}, std::string accessible_label = {},
-            std::optional<std::string> submit_action_id = std::nullopt);
+            std::optional<std::string> submit_action_id = std::nullopt,
+            std::optional<std::string> navigation_action_id = std::nullopt);
 
   std::string input_id;
   std::string action_id;
   std::optional<std::string> submit_action_id;
+  std::optional<std::string> navigation_action_id;
   std::string initial_value;
   std::string placeholder;
   std::string accessible_label;

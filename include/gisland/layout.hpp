@@ -197,6 +197,7 @@ struct InteractionTarget {
   InteractionKind kind{InteractionKind::action_region};
   std::string input_id{};
   std::optional<std::string> submit_action_id{};
+  std::optional<std::string> navigation_action_id{};
   bool close_on_activate{};
 
   bool operator==(const InteractionTarget &) const = default;

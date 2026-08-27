@@ -85,6 +85,25 @@ TEST_CASE("text input editor edits UTF-8 at codepoint boundaries and enforces it
   CHECK_FALSE(editor.paste("\xFF"));
 }
 
+TEST_CASE("text input editor supports word and line control motions") {
+  gisland::TextInputEditor editor{"alpha beta café"};
+  editor.move_word_left();
+  CHECK(editor.caret() == 11);
+  REQUIRE(editor.delete_word_backward());
+  CHECK(editor.value() == "alpha café");
+  editor.home();
+  editor.move_word_right();
+  CHECK(editor.caret() == 6);
+  REQUIRE(editor.delete_word_forward());
+  CHECK(editor.value() == "alpha ");
+  REQUIRE(editor.delete_to_start());
+  CHECK(editor.value().empty());
+  REQUIRE(editor.paste("one two"));
+  editor.home();
+  REQUIRE(editor.delete_to_end());
+  CHECK(editor.value().empty());
+}
+
 TEST_CASE("keyboard navigation preserves result actions across live layout updates") {
   const auto first = plan({
       gisland::InteractionTarget{{0, 0, 100, 20},
@@ -100,7 +119,7 @@ TEST_CASE("keyboard navigation preserves result actions across live layout updat
   gisland::KeyboardNavigationController navigation;
   navigation.reconcile(first);
   CHECK(navigation.selected_action_id() == std::optional<std::string>{"terminal"});
-  navigation.move_result(first, 1);
+  CHECK_FALSE(navigation.move_result(first, 1));
   CHECK(navigation.selected_action_id() == std::optional<std::string>{"browser"});
 
   const auto republished = plan({
@@ -131,4 +150,23 @@ TEST_CASE("keyboard navigation preserves result actions across live layout updat
   });
   navigation.reconcile(removed);
   CHECK(navigation.selected_action_id() == std::optional<std::string>{"files"});
+}
+
+TEST_CASE("keyboard navigation continues into a republished result window") {
+  const auto first = plan({
+      target({0, 20, 100, 20}, {0, 20, 100, 20}, "terminal"),
+      target({0, 40, 100, 20}, {0, 40, 100, 20}, "browser"),
+  });
+  gisland::KeyboardNavigationController navigation;
+  navigation.reconcile(first);
+  CHECK_FALSE(navigation.move_result(first, 1));
+  REQUIRE(navigation.move_result(first, 1));
+  navigation.continue_result_after_republish(1);
+
+  const auto scrolled = plan({
+      target({0, 20, 100, 20}, {0, 20, 100, 20}, "browser"),
+      target({0, 40, 100, 20}, {0, 40, 100, 20}, "calculator"),
+  });
+  navigation.reconcile(scrolled);
+  CHECK(navigation.selected_action_id() == std::optional<std::string>{"calculator"});
 }

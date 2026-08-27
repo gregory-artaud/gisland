@@ -224,7 +224,7 @@ public:
             }
             return SceneNode{TextInput{primitive.input_id, primitive.action_id, std::move(*initial),
                                        std::move(*placeholder), std::move(*label),
-                                       primitive.submit_action_id}};
+                                       primitive.submit_action_id, primitive.navigation_action_id}};
           } else if constexpr (std::is_same_v<Primitive, TemplateRow>) {
             auto children = instantiate_children(primitive.children, path);
             auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");

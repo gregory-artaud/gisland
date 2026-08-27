@@ -108,6 +108,7 @@ TEST_CASE("declarative templates instantiate text input and closing action targe
       .input_id = "query",
       .action_id = "query-changed",
       .submit_action_id = "launch",
+      .navigation_action_id = "navigate-results",
       .initial_value = gisland::DataBinding{"query"},
       .placeholder = std::string{"Search"},
       .accessible_label = std::string{"Search applications"},
@@ -117,6 +118,7 @@ TEST_CASE("declarative templates instantiate text input and closing action targe
   const auto &typed_input = std::get<gisland::TextInput>(instantiated_input->value);
   CHECK(typed_input.initial_value == "term");
   CHECK(typed_input.submit_action_id == std::optional<std::string>{"launch"});
+  CHECK(typed_input.navigation_action_id == std::optional<std::string>{"navigate-results"});
 
   const auto content = std::make_shared<const gisland::SceneTemplate>(
       gisland::SceneTemplate{gisland::TemplateText{std::string{"Terminal"}, std::string{"body"}}});

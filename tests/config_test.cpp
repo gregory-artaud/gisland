@@ -291,7 +291,7 @@ role = "body"
 [modules.view.expanded]
 type = "column"
 children = [
-  { type = "text_input", input_id = "query", action_id = "query-changed", submit_action_id = "launch", initial_value = { bind = "query" }, placeholder = "Search", accessible_label = "Search applications" },
+  { type = "text_input", input_id = "query", action_id = "query-changed", submit_action_id = "launch", navigation_action_id = "navigate-results", initial_value = { bind = "query" }, placeholder = "Search", accessible_label = "Search applications" },
   { type = "button", action_id = "launch", close_on_activate = true, accessible_label = "Launch", content = { type = "text", value = "Terminal", role = "body" } }
 ]
   )";
