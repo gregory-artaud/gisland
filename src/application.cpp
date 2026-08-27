@@ -979,8 +979,10 @@ int Application::run() {
   while (!WindowShouldClose()) {
     const float delta_seconds = GetFrameTime();
     const MonotonicTime now = std::chrono::steady_clock::now();
+    const bool enter_down = IsKeyDown(KEY_ENTER) || IsKeyDown(KEY_KP_ENTER);
+    const bool enter_pressed = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
     const bool activate_from_keyboard =
-        keyboard_activation.update(IsKeyDown(KEY_ENTER) || IsKeyDown(KEY_KP_ENTER),
+        keyboard_activation.update(enter_down, enter_pressed,
                                    std::chrono::duration_cast<std::chrono::milliseconds>(
                                        std::chrono::duration<float>{delta_seconds}));
     if (watcher) {

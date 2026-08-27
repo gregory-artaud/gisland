@@ -174,12 +174,12 @@ TEST_CASE("keyboard navigation continues into a republished result window") {
 TEST_CASE("keyboard activation requires a release before another activation") {
   gisland::KeyboardActivationGate gate;
 
-  CHECK_FALSE(gate.update(false, std::chrono::milliseconds{200}));
-  CHECK(gate.update(true, std::chrono::milliseconds{0}));
-  CHECK_FALSE(gate.update(false, std::chrono::milliseconds{10}));
-  CHECK_FALSE(gate.update(true, std::chrono::milliseconds{0}));
-  CHECK_FALSE(gate.update(false, std::chrono::milliseconds{99}));
-  CHECK_FALSE(gate.update(false, std::chrono::milliseconds{99}));
-  CHECK_FALSE(gate.update(false, std::chrono::milliseconds{1}));
-  CHECK(gate.update(true, std::chrono::milliseconds{0}));
+  CHECK_FALSE(gate.update(false, false, std::chrono::milliseconds{200}));
+  CHECK(gate.update(false, true, std::chrono::milliseconds{0}));
+  CHECK_FALSE(gate.update(false, false, std::chrono::milliseconds{10}));
+  CHECK_FALSE(gate.update(true, true, std::chrono::milliseconds{0}));
+  CHECK_FALSE(gate.update(false, false, std::chrono::milliseconds{99}));
+  CHECK_FALSE(gate.update(false, false, std::chrono::milliseconds{99}));
+  CHECK_FALSE(gate.update(false, false, std::chrono::milliseconds{1}));
+  CHECK(gate.update(true, true, std::chrono::milliseconds{0}));
 }

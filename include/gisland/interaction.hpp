@@ -53,7 +53,7 @@ private:
 
 class KeyboardActivationGate final {
 public:
-  [[nodiscard]] bool update(bool pressed, std::chrono::milliseconds elapsed) noexcept;
+  [[nodiscard]] bool update(bool down, bool pressed, std::chrono::milliseconds elapsed) noexcept;
 
 private:
   bool armed_{true};
