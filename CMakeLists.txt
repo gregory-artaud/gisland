@@ -686,7 +686,7 @@ if(BUILD_TESTING)
         "LUA_CPATH=${GISLAND_LGI_LUA_CPATH}" "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/notifications/notifications_contract.py" --module-command
         "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/notifications/notifications.lua\"]"
-        --protocol-minor 8
+        --protocol-minor 9
     )
   else()
     add_test(
@@ -695,7 +695,7 @@ if(BUILD_TESTING)
         dbus-run-session -- "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/notifications/notifications_contract.py" --module-command
         "[\"$<TARGET_FILE:gisland-lua-host>\",\"${PROJECT_SOURCE_DIR}/assets/modules/notifications/notifications.lua\"]"
-        --protocol-minor 8
+        --protocol-minor 9
     )
   endif()
   if(GISLAND_LGI_ROOT)
