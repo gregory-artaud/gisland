@@ -679,14 +679,13 @@ int Application::run() {
         mode == IslandMode::compact
             ? (compact_updated ? candidate.compact_transitions.compact : std::nullopt)
             : (expanded_updated ? candidate.expanded_transitions.expanded : std::nullopt);
+    const bool layout_only = use_layout_only_transition(
+        keyboard_session, expanded_updated, rendered ? rendered->expanded_key : std::nullopt,
+        candidate.expanded_key, requested_transition);
     auto transition_duration = has_declared_transition
                                    ? (requested_transition ? animation.content_transition.duration
                                                            : std::chrono::milliseconds{0})
                                    : animation.context_change_ms;
-    if (!has_declared_transition && keyboard_session && rendered && rendered->expanded_key &&
-        candidate.expanded_key == rendered->expanded_key) {
-      transition_duration = std::chrono::milliseconds{0};
-    }
     if (preserve_compact_content && rendered) {
       std::swap(candidate.compact, rendered->compact);
       std::swap(candidate.compact_images, rendered->compact_images);
@@ -713,7 +712,7 @@ int Application::run() {
          (candidate.expanded && has_progress_transition(*candidate.expanded)));
 
     std::optional<RenderTexture2D> snapshot;
-    if (!preserve_compact_content && rendered && current_surface &&
+    if (!layout_only && !preserve_compact_content && rendered && current_surface &&
         transition_duration.count() > 0 && !suppress_context_crossfade) {
       const auto transition_visual = context_transition.visual();
       auto captured = snapshot_content(
@@ -797,6 +796,13 @@ int Application::run() {
                                                     : animation.easing,
                                requested_transition.value_or(ContentTransition::crossfade),
                                static_cast<float>(animation.content_transition.distance));
+    } else if (layout_only && current_surface && current != geometry(target)) {
+      transition_source_surface = *current_surface;
+      transition_target_surface = target;
+      context_transition_kind = ContextTransitionKind::layout_only;
+      context_content_alignment = ContentAlignment::top_centered;
+      context_transition.start(current, geometry(target), animation.context_change_ms,
+                               animation.easing);
     } else {
       transition_source_surface.reset();
       transition_target_surface.reset();

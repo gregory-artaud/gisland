@@ -172,7 +172,7 @@ if(notification_command_position EQUAL -1 OR notification_entry_position EQUAL -
   message(FATAL_ERROR "installed notification manifest has the wrong command: ${notification_manifest}")
 endif()
 string(FIND "${notification_manifest}" "minimum_minor = 8" notification_minimum_position)
-string(FIND "${notification_manifest}" "maximum_minor = 9" notification_maximum_position)
+string(FIND "${notification_manifest}" "maximum_minor = 8" notification_maximum_position)
 if(notification_minimum_position EQUAL -1 OR notification_maximum_position EQUAL -1)
   message(FATAL_ERROR "installed notification manifest has the wrong protocol: ${notification_manifest}")
 endif()

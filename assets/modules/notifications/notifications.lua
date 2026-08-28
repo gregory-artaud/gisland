@@ -90,7 +90,6 @@ local history_save_pending
 local history_save_latest
 local history_save_delay_source
 local history_save_cancellable
-local content_transitions = false
 
 local function array(values)
   local result = gisland.array()
@@ -946,11 +945,9 @@ local function history_publication()
     end
   end
   if count == 0 then children[#children + 1] = text("Aucune notification", "caption") end
-  local publication = { context_id = "history", priority = 100, views = { expanded = {
+  return { context_id = "history", priority = 100, views = { expanded = {
     type = "column", alignment = "start", gap = "xsmall", children = array(children),
   } } }
-  if content_transitions then publication.transitions = { expanded = "crossfade" } end
-  return publication
 end
 
 local function cancel_source(source)
@@ -1333,10 +1330,7 @@ local function shutdown()
 end
 
 return gisland.module {
-  init = function(config, metadata)
-    for _, capability in ipairs(metadata.capabilities) do
-      if capability == "content-transitions" then content_transitions = true end
-    end
+  init = function(config)
     configure(config)
     load_history()
     request_name()

@@ -710,6 +710,35 @@ TEST_CASE("aligned content transition keeps incoming content fully opaque") {
         0.0F);
 }
 
+TEST_CASE("live explicit sessions select layout-only transitions for same-context updates") {
+  const std::optional<gisland::ContextKey> history{gisland::ContextKey{"notifications", "history"}};
+  const std::optional<gisland::ContextKey> launcher{gisland::ContextKey{"launcher", "launcher"}};
+
+  CHECK(gisland::use_layout_only_transition(true, true, history, history, std::nullopt));
+  CHECK(gisland::use_layout_only_transition(true, true, launcher, launcher,
+                                            gisland::ContentTransition::crossfade));
+  CHECK_FALSE(gisland::use_layout_only_transition(true, true, history, history,
+                                                  gisland::ContentTransition::slide_left));
+  CHECK_FALSE(gisland::use_layout_only_transition(false, true, history, history, std::nullopt));
+  CHECK_FALSE(gisland::use_layout_only_transition(true, false, history, history, std::nullopt));
+  CHECK_FALSE(gisland::use_layout_only_transition(true, true, history, launcher, std::nullopt));
+}
+
+TEST_CASE("layout-only transitions keep new content opaque without an outgoing layer") {
+  gisland::ContextTransition transition;
+  const gisland::IslandGeometry source{360.0F, 160.0F, 24.0F};
+  const gisland::IslandGeometry target{360.0F, 280.0F, 24.0F};
+  transition.start(source, target, 250ms, gisland::Easing::linear);
+  transition.update(0.125F);
+
+  const auto visual = transition.visual();
+  CHECK(gisland::context_outgoing_opacity(gisland::ContextTransitionKind::layout_only, visual) ==
+        Approx(0.0F));
+  CHECK(gisland::context_incoming_opacity(gisland::ContextTransitionKind::layout_only, visual) ==
+        Approx(1.0F));
+  CHECK(visual.geometry.height == Approx(220.0F));
+}
+
 TEST_CASE("expanded owner switch preserves outgoing compact content") {
   const std::optional<gisland::ContextKey> battery{gisland::ContextKey{"battery", "configured"}};
   const std::optional<gisland::ContextKey> clock{gisland::ContextKey{"clock", "configured"}};

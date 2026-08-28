@@ -1299,7 +1299,24 @@ TEST_CASE("activate-open owns keyboard focus for a live Lua launcher session") {
     REQUIRE(XTestFakeKeyEvent(display, code, False, CurrentTime) != 0);
     XSync(display, False);
   };
+  const auto initial_launcher_shape = input_shape_bounds(display, *window);
+  REQUIRE(initial_launcher_shape.has_value());
   type_key(XK_t);
+  int intermediate_launcher_height = initial_launcher_shape->height;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    if (!shape || shape->height >= initial_launcher_shape->height) {
+      return false;
+    }
+    intermediate_launcher_height = shape->height;
+    return true;
+  }));
+  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+  const auto filtered_launcher_shape = input_shape_bounds(display, *window);
+  REQUIRE(filtered_launcher_shape.has_value());
+  CHECK(filtered_launcher_shape->height < intermediate_launcher_height);
+  CHECK(intermediate_launcher_height < initial_launcher_shape->height);
   type_key(XK_e);
   type_key(XK_r);
   REQUIRE(wait_until([&] {

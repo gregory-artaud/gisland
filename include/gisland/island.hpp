@@ -155,7 +155,7 @@ struct ContextTransitionVisual {
   float surface_progress;
 };
 
-enum class ContextTransitionKind { full_crossfade, aligned_content_crossfade };
+enum class ContextTransitionKind { full_crossfade, aligned_content_crossfade, layout_only };
 
 [[nodiscard]] ContextTransitionKind
 classify_context_transition(const std::optional<ContextKey> &current_compact,
@@ -166,6 +166,11 @@ classify_context_transition(const std::optional<ContextKey> &current_compact,
                                              const ContextTransitionVisual &visual);
 [[nodiscard]] float context_outgoing_opacity(ContextTransitionKind kind,
                                              const ContextTransitionVisual &visual);
+[[nodiscard]] bool
+use_layout_only_transition(bool keyboard_session, bool expanded_updated,
+                           const std::optional<ContextKey> &current_expanded,
+                           const std::optional<ContextKey> &next_expanded,
+                           std::optional<ContentTransition> requested_transition);
 [[nodiscard]] bool
 preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requested_mode,
                                         const std::optional<ContextKey> &current_compact,

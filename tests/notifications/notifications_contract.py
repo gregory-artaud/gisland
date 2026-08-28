@@ -34,15 +34,8 @@ CAPABILITIES = [
     "icon-static",
     "persistence",
 ]
-BASE_PROTOCOL_CAPABILITIES = ["context-images", "rich-content", "independent-views"]
+PROTOCOL_CAPABILITIES = ["context-images", "rich-content", "independent-views"]
 MAX_LIVE_NOTIFICATIONS = 128
-
-
-def protocol_capabilities(protocol_minor):
-    capabilities = list(BASE_PROTOCOL_CAPABILITIES)
-    if protocol_minor >= 9:
-        capabilities.append("content-transitions")
-    return capabilities
 
 
 def parse_command(value):
@@ -60,7 +53,7 @@ def init_message(protocol_minor, configuration=None):
             "maximum": {"major": 1, "minor": protocol_minor},
         },
         "instance_id": "notifications",
-        "capabilities": protocol_capabilities(protocol_minor),
+        "capabilities": PROTOCOL_CAPABILITIES,
         "configuration": configuration or {},
         "locale": "C",
         "timezone": "UTC",
@@ -170,19 +163,16 @@ class NotificationContract(unittest.TestCase):
         self.temporary.cleanup()
 
     def start(self, configuration=None):
-        return self.start_with_protocol(self.protocol_minor, configuration)
-
-    def start_with_protocol(self, protocol_minor, configuration=None):
         self.module = ModuleProcess(
-            self.command, self.environment, protocol_minor, configuration
+            self.command, self.environment, self.protocol_minor, configuration
         )
         self.assertEqual(
             self.module.ready,
             {
                 "type": "ready",
                 "protocol_major": 1,
-                "protocol_minor": protocol_minor,
-                "capabilities": protocol_capabilities(protocol_minor),
+                "protocol_minor": self.protocol_minor,
+                "capabilities": PROTOCOL_CAPABILITIES,
             },
         )
         return self.module
@@ -811,8 +801,6 @@ class NotificationContract(unittest.TestCase):
             if returned is not None:
                 self.assertEqual(returned, count)
             publication = module.next_record()
-            if self.protocol_minor >= 9:
-                self.assertEqual(publication.get("transitions"), {"expanded": "crossfade"})
             values = self.text_values(publication["views"]["expanded"])
             heights.append(len([value for value in values if value.startswith("Item ")]))
         self.assertEqual(heights, [1, 2, 3, 4, 5])
@@ -830,15 +818,6 @@ class NotificationContract(unittest.TestCase):
             len([value for value in self.text_values(publication["views"]["expanded"]) if value.startswith("Item ")]),
             1,
         )
-
-    def test_protocol_1_8_history_fallback_omits_content_transition(self):
-        module = self.start_with_protocol(8)
-        proxy = self.proxy()
-        self.notify(proxy, summary="Legacy")
-        module.next_record()
-        self._show_more()
-        publication = module.next_record()
-        self.assertNotIn("transitions", publication)
 
     def test_new_notification_while_history_expanded_preserves_count_and_order(self):
         module = self.start()

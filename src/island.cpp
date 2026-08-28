@@ -296,12 +296,24 @@ ContextTransitionKind classify_context_transition(const std::optional<ContextKey
 }
 
 float context_incoming_opacity(ContextTransitionKind kind, const ContextTransitionVisual &visual) {
-  return kind == ContextTransitionKind::aligned_content_crossfade ? 1.0F : visual.incoming_opacity;
+  return kind == ContextTransitionKind::full_crossfade ? visual.incoming_opacity : 1.0F;
 }
 
 float context_outgoing_opacity(ContextTransitionKind kind, const ContextTransitionVisual &visual) {
+  if (kind == ContextTransitionKind::layout_only) {
+    return 0.0F;
+  }
   return kind == ContextTransitionKind::aligned_content_crossfade ? visual.local_outgoing_opacity
                                                                   : visual.outgoing_opacity;
+}
+
+bool use_layout_only_transition(bool keyboard_session, bool expanded_updated,
+                                const std::optional<ContextKey> &current_expanded,
+                                const std::optional<ContextKey> &next_expanded,
+                                std::optional<ContentTransition> requested_transition) {
+  return keyboard_session && expanded_updated && current_expanded &&
+         current_expanded == next_expanded &&
+         (!requested_transition || *requested_transition == ContentTransition::crossfade);
 }
 
 bool preserve_compact_during_expanded_switch(IslandMode current_mode, IslandMode requested_mode,
