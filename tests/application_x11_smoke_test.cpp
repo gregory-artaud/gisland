@@ -1481,8 +1481,28 @@ TEST_CASE("Lua power menu toggles and confirms safely with real keyboard and poi
     REQUIRE(std::get<gisland::ControlStatus>(resting->value()).compact.has_value());
     CHECK(std::get<gisland::ControlStatus>(resting->value()).compact->instance_id == "clock");
     open();
+    const auto menu_position = root_position(display, *window);
+    const auto menu_shape = input_shape_bounds(display, *window);
+    REQUIRE(menu_position.has_value());
+    REQUIRE(menu_shape.has_value());
+    const auto lock_background = [&] {
+      XImage *image = XGetImage(display, *window, menu_shape->x + 55, menu_shape->y + 58, 1, 1,
+                                AllPlanes, ZPixmap);
+      REQUIRE(image != nullptr);
+      const auto pixel = XGetPixel(image, 0, 0);
+      XDestroyImage(image);
+      return pixel & 0xffffffU;
+    };
+    const auto focused_background = lock_background();
+    CHECK(focused_background != 0);
+    REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                                 menu_position->x + menu_shape->x + menu_shape->width / 2,
+                                 menu_position->y + menu_shape->y + 58, CurrentTime) != 0);
+    XSync(display, False);
+    std::this_thread::sleep_for(std::chrono::milliseconds{150});
+    CHECK(lock_background() == 0);
     capture("power-menu");
-    key(XK_Down);
+    key(XK_Right);
     key(XK_Return); // Restart confirmation.
     std::this_thread::sleep_for(std::chrono::milliseconds{300});
     capture("power-menu-confirmation");
@@ -1501,7 +1521,11 @@ TEST_CASE("Lua power menu toggles and confirms safely with real keyboard and poi
     action("toggle"); // Shortcut closes confirmation too.
     REQUIRE(wait_until([&] { return mode_is(gisland::IslandMode::compact); }));
     open();
-    key(XK_Down);
+    key(XK_l);
+    key(XK_l);
+    key(XK_h);
+    key(XK_Right);
+    key(XK_Left);
     key(XK_Return);
     key(XK_Tab);
     key(XK_Return);

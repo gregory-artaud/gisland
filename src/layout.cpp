@@ -1701,7 +1701,6 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
     *vertical_padding = std::max(*vertical_padding, (extra_height + 1) / 2);
     *minimum_height = std::max(*minimum_height, *compact_height);
     *maximum_height = std::max(*maximum_height, *compact_height);
-    *radius = std::max(*radius, *compact_height / 2);
   }
 
   int leading_inset = *horizontal_padding;

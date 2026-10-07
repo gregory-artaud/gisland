@@ -827,7 +827,7 @@ line_height = 1)");
   CHECK(icon.color == gisland::Rgba{128, 64, 255, 255});
 }
 
-TEST_CASE("ring progress creates a 48 pixel intrinsic compact capsule") {
+TEST_CASE("ring progress keeps the compact theme radius at its intrinsic height") {
   const auto theme =
       make_theme_with("padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = "
                       "100\nmin_height = 20\nmax_height = 50",
@@ -839,7 +839,7 @@ TEST_CASE("ring progress creates a 48 pixel intrinsic compact capsule") {
 
   REQUIRE(result.has_value());
   CHECK(result->view.bounds.height == 48);
-  CHECK(result->view.radius == 24);
+  CHECK(result->view.radius == 16);
   REQUIRE(result->content.size() == 1);
   const auto &ring = command_at<gisland::RingProgressDrawCommand>(*result, 0);
   CHECK(ring.bounds == gisland::Rect{4, 8, 32, 32});

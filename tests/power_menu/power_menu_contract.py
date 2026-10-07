@@ -103,6 +103,13 @@ class PowerMenuContract(unittest.TestCase):
         self.fail(f"expected commands {expected}; got " +
                   (self.log.read_text() if self.log.exists() else "none"))
 
+    def test_menu_distributes_remaining_width_between_actions(self):
+        children = self.menu["views"]["expanded"]["children"]
+        self.assertEqual([child["type"] for child in children],
+                         ["button", "spacer", "button", "spacer", "button"])
+        self.assertTrue(children[1]["flexible"])
+        self.assertTrue(children[3]["flexible"])
+
     def test_lock_is_immediate_and_confirm_runs_only_the_selected_command_once(self):
         result, _ = self.action("lock")
         self.assertTrue(result["accepted"])

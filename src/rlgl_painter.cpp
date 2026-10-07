@@ -430,7 +430,7 @@ std::expected<void, RlglPaintError> RlglPainter::draw_content(const LayoutPlan &
   }
   for (const auto &content : plan.content) {
     auto drawn = std::visit(
-        [this, origin](const auto &command) -> std::expected<void, RlglPaintError> {
+        [this, origin, &plan](const auto &command) -> std::expected<void, RlglPaintError> {
           using Command = std::decay_t<decltype(command)>;
           if (command.clip.width <= 0 || command.clip.height <= 0) {
             return {};
@@ -531,7 +531,7 @@ std::expected<void, RlglPaintError> RlglPainter::draw_content(const LayoutPlan &
             end_separate_blend();
             return {};
           } else if constexpr (std::is_same_v<Command, ButtonDecorationDrawCommand>) {
-            return draw_rounded(*bounds, static_cast<float>(bounds->height) / 2.0F, command.color);
+            return draw_rounded(*bounds, static_cast<float>(plan.view.radius), command.color);
           } else {
             return std::unexpected(RlglPaintError::unsupported_command);
           }

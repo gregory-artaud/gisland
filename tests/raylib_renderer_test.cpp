@@ -745,3 +745,21 @@ TEST_CASE_METHOD(HiddenWindow, "painter rejects coordinates that overflow after 
   REQUIRE_FALSE(content.has_value());
   CHECK(content.error().code == gisland::RendererErrorCode::invalid_geometry);
 }
+
+TEST_CASE_METHOD(HiddenWindow, "button hover uses the island radius rather than a capsule") {
+  auto fonts = gisland::RaylibFontBook::load(make_theme(), asset_root());
+  REQUIRE(fonts.has_value());
+  const gisland::RaylibPainter painter{*fonts};
+  gisland::LayoutPlan plan{{},
+                           {gisland::ButtonDecorationDrawCommand{
+                               {8, 8, 40, 20}, {8, 8, 40, 20}, {255, 255, 255, 255}, true}},
+                           {}};
+  plan.view.radius = 3;
+  Image rendered = render_image([&] {
+    ClearBackground(BLANK);
+    REQUIRE(painter.draw_content(plan).has_value());
+  });
+  CHECK(GetImageColor(rendered, 11, 9).a > 200);
+  CHECK(GetImageColor(rendered, 8, 8).a < 200);
+  UnloadImage(rendered);
+}

@@ -32,9 +32,11 @@ local function publish()
       } },
     } }
   else
-    expanded = ui.row { alignment = "center", gap = "large", children = {
+    expanded = ui.row { alignment = "center", gap = "small", children = {
       button("lock", "Verrouiller", "lock", true),
+      ui.spacer { flexible = true },
       button("restart", "Redémarrer", "restart", false),
+      ui.spacer { flexible = true },
       button("shutdown", "Éteindre", "power", false),
     } }
   end
