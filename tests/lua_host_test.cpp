@@ -653,7 +653,7 @@ TEST_CASE("lua_host_lifecycle selects the highest supported protocol overlap",
 
   for (const auto &[minimum, maximum, selected] :
        std::array{std::array{0, 9, 9}, std::array{8, 8, 8}, std::array{9, 9, 9},
-                  std::array{10, 10, 10}, std::array{8, 12, 10}}) {
+                  std::array{10, 10, 10}, std::array{11, 11, 11}, std::array{8, 12, 11}}) {
     INFO(minimum << ".." << maximum);
     auto host = gisland::LuaHost::load(entry.string());
     REQUIRE(host.has_value());
@@ -705,11 +705,11 @@ TEST_CASE("lua_host_lifecycle rejects invalid records", "[lua_host_lifecycle]") 
     CHECK(result.error().code == gisland::LuaHostErrorCode::protocol_error);
     CHECK(result.error().message == "core must offer protocol 1.8");
   }
-  SECTION("minimum above protocol 1.10 has no overlap") {
+  SECTION("minimum above protocol 1.11 has no overlap") {
     auto host = gisland::LuaHost::load(entry.string());
     REQUIRE(host.has_value());
     Records records;
-    auto record = init_record(nlohmann::json::object(), 11, 12);
+    auto record = init_record(nlohmann::json::object(), 12, 13);
     const auto result = (*host)->handle(record, collect_into(records), {});
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == gisland::LuaHostErrorCode::protocol_error);

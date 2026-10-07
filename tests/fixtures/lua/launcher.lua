@@ -40,7 +40,7 @@ end
 
 return gisland.module {
   init = function(_, metadata)
-    assert(metadata.protocol_minor == 10)
+    assert(metadata.protocol_minor >= 10)
     publish()
   end,
   actions = {

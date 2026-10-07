@@ -597,14 +597,26 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
     if (!presentation->is_object()) {
       return std::unexpected(path_error("publish/presentation", "expected an object"));
     }
-    if (auto result = known_fields(*presentation,
-                                   {"reveal", "duration_ms", "compact_style", "expanded_style"},
-                                   "publish/presentation");
+    if (auto result = known_fields(
+            *presentation,
+            {"reveal", "duration_ms", "compact_style", "expanded_style", "escape_action_id"},
+            "publish/presentation");
         !result) {
       return result;
     }
     for (const auto field : {"reveal", "compact_style", "expanded_style"}) {
       if (auto result = optional_string(*presentation, field, "publish/presentation"); !result) {
+        return result;
+      }
+    }
+    if (presentation->contains("escape_action_id")) {
+      if (!views->contains("expanded")) {
+        return std::unexpected(
+            path_error("publish/presentation/escape_action_id", "requires an expanded view"));
+      }
+      if (auto result = required_string(*presentation, "escape_action_id", "publish/presentation",
+                                        maximum_identifier_bytes, true);
+          !result) {
         return result;
       }
     }

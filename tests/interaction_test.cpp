@@ -183,3 +183,15 @@ TEST_CASE("keyboard activation requires a release before another activation") {
   CHECK_FALSE(gate.update(false, false, std::chrono::milliseconds{1}));
   CHECK(gate.update(true, true, std::chrono::milliseconds{0}));
 }
+
+TEST_CASE("button-only keyboard navigation activates the newly selected result") {
+  const auto menu = plan({
+      target({0, 0, 100, 20}, {0, 0, 100, 20}, "lock"),
+      target({100, 0, 100, 20}, {100, 0, 100, 20}, "restart"),
+  });
+  gisland::KeyboardNavigationController navigation;
+  navigation.reconcile(menu);
+  CHECK_FALSE(navigation.move_result(menu, 1));
+  REQUIRE(navigation.activation_target(menu) != nullptr);
+  CHECK(navigation.activation_target(menu)->action_id == "restart");
+}

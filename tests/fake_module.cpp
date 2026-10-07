@@ -538,6 +538,26 @@ void read_init() {
     });
     return silent();
   }
+  if (mode == "escape-action" || mode == "escape-without-capability" || mode == "escape-on-1.10" ||
+      mode == "escape-capability-on-1.10") {
+    read_init();
+    auto capabilities = nlohmann::json::array({"independent-views"});
+    if (mode == "escape-action" || mode == "escape-capability-on-1.10") {
+      capabilities.push_back("escape-action");
+    }
+    write_json({{"type", "ready"},
+                {"protocol_major", 1},
+                {"protocol_minor",
+                 mode == "escape-action" || mode == "escape-without-capability" ? 11 : 10},
+                {"capabilities", capabilities}});
+    write_json(
+        {{"type", "publish"},
+         {"context_id", "confirmation"},
+         {"priority", 100},
+         {"views", {{"expanded", {{"type", "text"}, {"value", "Confirm?"}, {"role", "body"}}}}},
+         {"presentation", {{"escape_action_id", "cancel"}}}});
+    return silent();
+  }
   if (mode == "activation-only" || mode == "activation-only-on-1.9") {
     read_init();
     write_json({{"type", "ready"},

@@ -39,6 +39,7 @@ struct PresentationIntent {
   std::optional<std::chrono::milliseconds> duration;
   std::optional<std::string> compact_style;
   std::optional<std::string> expanded_style;
+  std::optional<std::string> escape_action_id{};
 };
 
 struct PublishedContext {

@@ -413,6 +413,9 @@ bool KeyboardNavigationController::move_result(const LayoutPlan &layout, int dir
     ++index;
   }
   selected_action_id_ = results[index]->action_id;
+  if (!input_id_) {
+    focused_action_id_ = selected_action_id_;
+  }
   return false;
 }
 

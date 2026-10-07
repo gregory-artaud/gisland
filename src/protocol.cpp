@@ -1067,10 +1067,11 @@ parse_view_transitions(const Json &object) {
     if (!presentation_iterator->is_object()) {
       return std::unexpected(error_at("/presentation", "expected an object"));
     }
-    auto known_presentation = reject_unknown_fields(
-        *presentation_iterator,
-        std::set<std::string_view>{"reveal", "duration_ms", "compact_style", "expanded_style"},
-        "/presentation");
+    auto known_presentation =
+        reject_unknown_fields(*presentation_iterator,
+                              std::set<std::string_view>{"reveal", "duration_ms", "compact_style",
+                                                         "expanded_style", "escape_action_id"},
+                              "/presentation");
     if (!known_presentation) {
       return std::unexpected(known_presentation.error());
     }
@@ -1125,11 +1126,23 @@ parse_view_transitions(const Json &object) {
       }
       expanded_style = std::move(*style);
     }
-    if (!reveal && !compact_style && !expanded_style) {
+    std::optional<std::string> escape_action_id;
+    if (presentation_iterator->contains("escape_action_id")) {
+      auto action = required_string(*presentation_iterator, "escape_action_id", "/presentation");
+      if (!action) {
+        return std::unexpected(action.error());
+      }
+      if (!expanded || action->empty() || action->size() > 128) {
+        return std::unexpected(error_at("/presentation/escape_action_id",
+                                        "requires an expanded view and 1 to 128 string bytes"));
+      }
+      escape_action_id = std::move(*action);
+    }
+    if (!reveal && !compact_style && !expanded_style && !escape_action_id) {
       return std::unexpected(error_at("/presentation", "presentation must not be empty"));
     }
-    presentation =
-        PresentationIntent{reveal, duration, std::move(compact_style), std::move(expanded_style)};
+    presentation = PresentationIntent{reveal, duration, std::move(compact_style),
+                                      std::move(expanded_style), std::move(escape_action_id)};
   }
 
   std::set<std::string> resource_ids;

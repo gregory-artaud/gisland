@@ -355,6 +355,32 @@ TEST_CASE("supervisor gates interactive launcher features on protocol 1.10 capab
   }
 }
 
+TEST_CASE("supervisor gates Escape actions on protocol 1.11 capability negotiation") {
+  for (const auto &[mode, accepted, path] : std::vector<std::tuple<std::string, bool, std::string>>{
+           {"escape-action", true, ""},
+           {"escape-without-capability", false, "/presentation/escape_action_id"},
+           {"escape-on-1.10", false, "/presentation/escape_action_id"},
+           {"escape-capability-on-1.10", false, "/capabilities"}}) {
+    CAPTURE(mode);
+    gisland::ModuleSupervisor supervisor;
+    EventLog events;
+    auto request = fake_request("escape", mode);
+    request.init.maximum = {.major = 1, .minor = 11};
+    request.init.capabilities = {"independent-views", "escape-action"};
+    REQUIRE(supervisor.start(std::move(request)).has_value());
+    collect_until(supervisor, events, [](const auto &observed) {
+      return has_message<gisland::PublishMessage>(observed, "escape") ||
+             count_events<gisland::ProtocolViolationEvent>(observed, "escape") > 0;
+    });
+    CHECK(has_message<gisland::PublishMessage>(events, "escape") == accepted);
+    if (!accepted) {
+      REQUIRE(last_violation(events, "escape") != nullptr);
+      CHECK(last_violation(events, "escape")->error.path == path);
+    }
+    stop_and_wait(supervisor, events, "escape");
+  }
+}
+
 TEST_CASE("supervisor gates activation-only publications on protocol 1.10") {
   for (const auto &[instance, mode, accepted] :
        {std::tuple{"explicit", "activation-only", true},

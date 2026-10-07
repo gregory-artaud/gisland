@@ -775,7 +775,10 @@ int Application::run() {
     }
     actions_ready = false;
     if (!preserve_expanded) {
-      mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+      // Preserve close's hover suppression when activation falls back to another context.
+      if (mode_controller.mode() != IslandMode::compact) {
+        mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+      }
       mode = IslandMode::compact;
       spring = SpringProgress{};
       content_crossfade = ContentCrossfade{};
@@ -1217,8 +1220,19 @@ int Application::run() {
       bool edited = false;
       const bool control = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
       if (IsKeyPressed(KEY_ESCAPE)) {
-        mode_controller.close();
-        end_keyboard_session();
+        const auto escape_selection = runtime.active(ViewSlot::expanded, now);
+        const auto *context = escape_selection.context;
+        bool handled = false;
+        if (context && rendered->expanded_key == context->key && context->presentation &&
+            context->presentation->escape_action_id) {
+          InteractionTarget escape{};
+          escape.action_id = *context->presentation->escape_action_id;
+          handled = send_action(&escape);
+        }
+        if (!handled) {
+          mode_controller.close();
+          end_keyboard_session();
+        }
       } else {
         const auto pressed_or_repeated = [](int key) {
           return IsKeyPressed(key) || IsKeyPressedRepeat(key);
