@@ -113,9 +113,9 @@ local function compact_view(snapshot)
         value = snapshot.level,
         state = snapshot.semantic_state,
       },
-      { type = "text", value = snapshot.percent_text, role = "compact-primary" },
+      { type = "text", value = snapshot.percent_text, role = "battery-primary" },
       { type = "spacer", flexible = true },
-      { type = "text", value = snapshot.estimate_compact, role = "compact-secondary" },
+      { type = "text", value = snapshot.estimate_compact, role = "battery-secondary" },
     },
   }
 end

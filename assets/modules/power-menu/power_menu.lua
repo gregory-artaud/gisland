@@ -11,9 +11,9 @@ local function button(action, label, icon, closes)
     action_id = action,
     accessible_label = label,
     close_on_activate = closes,
-    content = ui.column { alignment = "center", gap = "small", children = {
-      ui.icon { name = icon, accessible_label = label },
-      ui.text { value = label, role = "body" },
+    content = ui.column { alignment = "center", gap = "action-content", children = {
+      ui.icon { name = icon, accessible_label = label, role = "action-icon" },
+      ui.text { value = label, role = "action-label" },
     } },
   }
 end
@@ -32,18 +32,16 @@ local function publish()
       } },
     } }
   else
-    expanded = ui.row { alignment = "center", gap = "small", children = {
+    expanded = ui.row { alignment = "center", gap = "normal", children = {
       button("lock", "Verrouiller", "lock", true),
-      ui.spacer { flexible = true },
       button("restart", "Redémarrer", "restart", false),
-      ui.spacer { flexible = true },
       button("shutdown", "Éteindre", "power", false),
     } }
   end
   gisland.publish {
     context_id = "power-menu", priority = 100, activation_only = true,
     views = { expanded = expanded },
-    presentation = pending and { escape_action_id = "cancel" } or nil,
+    presentation = pending and { escape_action_id = "cancel" } or { expanded_style = "action-menu" },
   }
 end
 

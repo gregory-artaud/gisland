@@ -294,9 +294,11 @@ public:
              candidate.kind != gisland::InteractionKind::link;
     });
     REQUIRE(target != rendered_plan.interactions.end());
-    rendered_plan.content.emplace_back(gisland::ButtonDecorationDrawCommand{
-        target->bounds, target->clip,
-        gisland::resolve_theme_color(theme, theme.buttons().hover_overlay), true});
+    rendered_plan.content.insert(
+        rendered_plan.content.begin(),
+        gisland::ButtonDecorationDrawCommand{
+            target->bounds, target->clip,
+            gisland::resolve_theme_color(theme, theme.buttons().hover_overlay), true});
   }
   if (progress_elapsed) {
     gisland::ProgressAnimator animator;
@@ -602,4 +604,77 @@ TEST_CASE_METHOD(HiddenWindow, "visual regression: audio volume animation") {
                 *publication.presentation->compact_style, 0.135F);
   check_fixture("audio-volume-settled", *publication.compact, gisland::ViewMode::compact, {},
                 *publication.presentation->compact_style, 0.27F);
+}
+
+TEST_CASE_METHOD(HiddenWindow,
+                 "approved version A keeps concentric battery and equal action cells") {
+  const auto theme = load_theme();
+  auto fonts = gisland::RaylibFontBook::load(theme, asset_root());
+  REQUIRE(fonts.has_value());
+  const auto action = [](std::string name, std::string label, std::string glyph) {
+    return gisland::SceneNode{
+        gisland::Button{gisland::SceneNode{gisland::Column{
+                            {gisland::SceneNode{gisland::Icon{glyph, label, "action-icon"}},
+                             text(label, "action-label")},
+                            "center",
+                            "action-content"}},
+                        name, true, label}};
+  };
+  const gisland::SceneNode menu{gisland::Row{{action("lock", "Verrouiller", "lock"),
+                                              action("restart", "Redémarrer", "restart"),
+                                              action("shutdown", "Éteindre", "power")},
+                                             "center",
+                                             "normal"}};
+  auto power =
+      gisland::layout_scene(menu, theme, gisland::ViewMode::expanded, *fonts, "action-menu");
+  REQUIRE(power.has_value());
+  CHECK(power->view.bounds == gisland::Rect{0, 0, 360, 112});
+  CHECK(power->view.radius == 56);
+  REQUIRE(power->interactions.size() == 3);
+  for (std::size_t index = 0; index < 3; ++index) {
+    CHECK(power->interactions[index].bounds ==
+          gisland::Rect{12 + static_cast<int>(index) * 116, 12, 104, 88});
+  }
+  const auto &hover = power->interactions[1];
+  const auto decoration = std::ranges::find_if(power->content, [&](const auto &item) {
+    const auto *button = std::get_if<gisland::ButtonDecorationDrawCommand>(&item);
+    return button && button->bounds == hover.bounds;
+  });
+  REQUIRE(decoration != power->content.end());
+  power->content.insert(std::next(decoration),
+                        gisland::ButtonDecorationDrawCommand{
+                            hover.bounds, hover.clip,
+                            gisland::resolve_theme_color(theme, theme.buttons().hover_overlay),
+                            true});
+  const gisland::SceneNode battery_scene{gisland::Row{
+      {gisland::SceneNode{gisland::Progress{0.74, "", "success", gisland::ProgressShape::ring}},
+       text("74 %", "battery-primary"), gisland::SceneNode{gisland::Spacer{true, {}}},
+       text("3 h 35", "battery-secondary")},
+      "center",
+      "small"}};
+  const auto battery =
+      gisland::layout_scene(battery_scene, theme, gisland::ViewMode::compact, *fonts);
+  REQUIRE(battery.has_value());
+  CHECK(battery->view.bounds == gisland::Rect{0, 0, 230, 48});
+  CHECK(battery->view.radius == 24);
+  const auto &ring = std::get<gisland::RingProgressDrawCommand>(battery->content.front());
+  CHECK(ring.bounds == gisland::Rect{8, 8, 32, 32});
+  const gisland::RaylibPainter painter{*fonts};
+  std::filesystem::create_directories(artifact_root());
+  for (const auto &[name, plan] : std::array{
+           std::pair<const char *, const gisland::LayoutPlan *>{"version-A-power-native", &*power},
+           std::pair{"version-A-battery-native", &*battery}}) {
+    auto target = LoadRenderTexture(plan->view.bounds.width, plan->view.bounds.height);
+    REQUIRE(IsRenderTextureValid(target));
+    BeginTextureMode(target);
+    ClearBackground(BLANK);
+    REQUIRE(painter.draw_surface(*plan).has_value());
+    REQUIRE(painter.draw_content(*plan).has_value());
+    EndTextureMode();
+    Image image = LoadImageFromTexture(target.texture);
+    ImageFlipVertical(&image);
+    REQUIRE(ExportImage(image, (artifact_root() / (std::string{name} + ".png")).c_str()));
+    UnloadImage(image);
+    UnloadRenderTexture(target);
+  }
 }

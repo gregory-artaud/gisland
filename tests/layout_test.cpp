@@ -48,6 +48,7 @@ fit = "cover"
 shape = "circle"
 
 [gaps]
+menu = 12
 normal = 4
 small = 2
 
@@ -827,7 +828,7 @@ line_height = 1)");
   CHECK(icon.color == gisland::Rgba{128, 64, 255, 255});
 }
 
-TEST_CASE("ring progress keeps the compact theme radius at its intrinsic height") {
+TEST_CASE("ring progress aligns the island curve with its leading circle") {
   const auto theme =
       make_theme_with("padding = 4\nradius = 8\nborder = 1\nmin_width = 40\nmax_width = "
                       "100\nmin_height = 20\nmax_height = 50",
@@ -839,10 +840,10 @@ TEST_CASE("ring progress keeps the compact theme radius at its intrinsic height"
 
   REQUIRE(result.has_value());
   CHECK(result->view.bounds.height == 48);
-  CHECK(result->view.radius == 16);
+  CHECK(result->view.radius == 24);
   REQUIRE(result->content.size() == 1);
   const auto &ring = command_at<gisland::RingProgressDrawCommand>(*result, 0);
-  CHECK(ring.bounds == gisland::Rect{4, 8, 32, 32});
+  CHECK(ring.bounds == gisland::Rect{8, 8, 32, 32});
   CHECK(ring.value == 0.72);
   CHECK(ring.thickness == 4);
   CHECK(ring.fill_color == gisland::Rgba{32, 192, 96, 255});
@@ -1119,4 +1120,40 @@ TEST_CASE("calendar uses stable text columns and keeps only header actions as bu
   }
   CHECK(cells[16]->text == "10");
   CHECK(cells[16]->color == gisland::Rgba{128, 64, 255, 255});
+}
+
+TEST_CASE("action menu reproduces the approved equal button geometry") {
+  const auto theme = make_theme_with("[shadow]", R"(
+[view.expanded.styles.action-menu]
+padding = 12
+radius = 56
+border = 0
+min_width = 360
+max_width = 360
+min_height = 112
+max_height = 112
+[shadow])");
+  const gisland::SceneNode scene{gisland::Row{
+      {gisland::SceneNode{
+           gisland::Button{gisland::SceneNode{gisland::Text{"Lock", "body"}}, "lock"}},
+       gisland::SceneNode{
+           gisland::Button{gisland::SceneNode{gisland::Text{"Restart", "body"}}, "restart"}},
+       gisland::SceneNode{
+           gisland::Button{gisland::SceneNode{gisland::Text{"Off", "body"}}, "shutdown"}}},
+      "center",
+      "menu"}};
+  const auto result = gisland::layout_scene(scene, theme, gisland::ViewMode::expanded,
+                                            TestGlyphMetrics{}, "action-menu");
+  REQUIRE(result.has_value());
+  CHECK(result->view.bounds == gisland::Rect{0, 0, 360, 112});
+  CHECK(result->view.radius == 56);
+  REQUIRE(result->interactions.size() == 3);
+  for (const auto &target : result->interactions) {
+    CHECK(target.bounds.height == 88);
+    CHECK(target.bounds.width == 104);
+    CHECK(target.bounds.y == 12);
+  }
+  CHECK(result->interactions.front().bounds.x == 12);
+  const auto &last = result->interactions.back().bounds;
+  CHECK(last.x + last.width == 348);
 }

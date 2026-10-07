@@ -399,3 +399,13 @@ focuses Annuler first; Escape returns to the main menu, then closes it. A second
 closes either view. Validated actions close the island and launch the configured argv asynchronously
 without shell interpretation; command failures are logged. Outside click and focus loss reset the
 pending confirmation. `gislandctl activate-open power-menu` also opens the module directly.
+
+The power menu's main view selects `presentation.expanded_style = "action-menu"`.
+The default theme reproduces the approved concentric layout: a 360 × 112 island,
+12 px inset and gaps, and three equal 104 × 88 action cells. The theme roles
+`action-label` and `action-icon`, with the `action-content` gap, control their
+content. The `action-menu` style allocates equal-width cells to its root button row and
+uses the available row height. Compact views with a leading ring center that
+ring on the rounded left cap, giving the battery a constant 8 px inset at its
+48 px height and 32 px ring diameter. Battery text uses `battery-primary` and
+`battery-secondary`.

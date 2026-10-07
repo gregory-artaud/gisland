@@ -117,6 +117,7 @@ shape = "rounded"
 radius = 10
 
 [gaps]
+action-content = 10
 xsmall = 4
 small = 8
 normal = 12
@@ -131,7 +132,7 @@ large = 18
 [buttons]
 background = "surface"
 disabled_background = "surface"
-hover_overlay = "#FFFFFF14"
+hover_overlay = "#242424FF"
 
 [inputs]
 height = 52
@@ -193,7 +194,7 @@ max_height = 560
 
 [progress]
 ring_diameter = 32
-ring_thickness = 4
+ring_thickness = 5
 linear_thickness = 5
 compact_height = 48
 track = "muted"
@@ -296,3 +297,41 @@ codepoint = 0xF2F1
 [icons.power]
 font = "icons"
 codepoint = 0xF011
+
+[view.expanded.styles.action-menu]
+padding = 12
+radius = 56
+border = 0
+min_width = 360
+max_width = 360
+min_height = 112
+max_height = 112
+
+[typography.action-label]
+# raylib uses font bounding height; 17 px matches the approved 14 px CSS text.
+font = "regular"
+color = "foreground"
+size = 17
+weight = 400
+line_height = 1
+
+[typography.action-icon]
+font = "icons"
+color = "foreground"
+size = 18
+weight = 400
+line_height = 1
+
+[typography.battery-primary]
+font = "semibold"
+color = "foreground"
+size = 17
+weight = 600
+line_height = 1
+
+[typography.battery-secondary]
+font = "regular"
+color = "muted"
+size = 13
+weight = 400
+line_height = 1
