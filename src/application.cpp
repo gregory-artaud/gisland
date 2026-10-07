@@ -757,6 +757,7 @@ int Application::run() {
   bool actions_ready = false;
   bool compact_refresh_deferred = false;
   bool keyboard_session = false;
+  bool keyboard_highlight_visible = true;
   std::optional<ContextKey> keyboard_context;
   std::optional<ContextKey> keyboard_activation_to_release;
   std::optional<std::string> keyboard_input_id;
@@ -961,7 +962,10 @@ int Application::run() {
     }
     actions_ready = false;
     if (!preserve_expanded) {
-      mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+      // Preserve close's hover suppression when activation falls back to another context.
+      if (mode_controller.mode() != IslandMode::compact) {
+        mode_controller = OverlayModeController{bootstrap_.config.interaction.hover_exit};
+      }
       mode = IslandMode::compact;
       spring = SpringProgress{};
       content_crossfade = ContentCrossfade{};
@@ -1514,6 +1518,7 @@ int Application::run() {
       if (focus_acquired) {
         keyboard_session = true;
         keyboard_activation_to_release.reset();
+        keyboard_highlight_visible = true;
         keyboard_context = rendered->expanded_key;
         keyboard_navigation.reconcile(*rendered->expanded);
         if (auto *input = first_text_input(*rendered->expanded); input != nullptr) {
@@ -1525,14 +1530,29 @@ int Application::run() {
       end_keyboard_session();
     }
 
+    const auto pointer_delta = GetMouseDelta();
+    if (pointer_delta.x != 0.0F || pointer_delta.y != 0.0F) {
+      keyboard_highlight_visible = false;
+    }
     if (keyboard_session && rendered && rendered->expanded) {
       auto &expanded_plan = *rendered->expanded;
       bool edited = false;
       const bool control = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
       if (IsKeyPressed(KEY_ESCAPE)) {
-        mode_controller.close();
-        presentation.close();
-        end_keyboard_session();
+        const auto escape_selection = runtime.active(ViewSlot::expanded, now);
+        const auto *context = escape_selection.context;
+        bool handled = false;
+        if (context && rendered->expanded_key == context->key && context->presentation &&
+            context->presentation->escape_action_id) {
+          InteractionTarget escape{};
+          escape.action_id = *context->presentation->escape_action_id;
+          handled = send_action(&escape);
+        }
+        if (!handled) {
+          mode_controller.close();
+          presentation.close();
+          end_keyboard_session();
+        }
       } else {
         const auto pressed_or_repeated = [](int key) {
           return IsKeyPressed(key) || IsKeyPressedRepeat(key);
@@ -1583,8 +1603,12 @@ int Application::run() {
         }
         for (const int direction : {-1, 1}) {
           const int key = direction < 0 ? KEY_UP : KEY_DOWN;
-          if (pressed_or_repeated(key) &&
+          const int horizontal = direction < 0 ? KEY_LEFT : KEY_RIGHT;
+          const int vim = direction < 0 ? KEY_H : KEY_L;
+          if ((pressed_or_repeated(key) ||
+               (!text_editor && (pressed_or_repeated(horizontal) || pressed_or_repeated(vim)))) &&
               keyboard_navigation.move_result(expanded_plan, direction)) {
+            keyboard_highlight_visible = true;
             const auto *input = keyboard_navigation.input_target(expanded_plan);
             if (input != nullptr && input->navigation_action_id) {
               InteractionTarget navigation = *input;
@@ -1598,6 +1622,7 @@ int Application::run() {
         if (IsKeyPressed(KEY_TAB)) {
           const bool reverse = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
           keyboard_navigation.move_focus(expanded_plan, reverse);
+          keyboard_highlight_visible = true;
         }
         if (activate_from_keyboard) {
           const auto *target = keyboard_navigation.activation_target(expanded_plan);
@@ -1631,9 +1656,10 @@ int Application::run() {
     if (actions_ready && rendered && rendered->expanded && IsCursorOnScreen()) {
       const int pointer_x = static_cast<int>(std::lround(pointer.x - placement.x));
       const int pointer_y = static_cast<int>(std::lround(pointer.y - placement.y));
-      button_hover = controls.pointer_hover(
-          *rendered->expanded, pointer_x, pointer_y,
-          resolve_theme_color(bootstrap_.theme, bootstrap_.theme.buttons().hover_overlay));
+      if (!keyboard_session || !keyboard_highlight_visible)
+        button_hover = controls.pointer_hover(
+            *rendered->expanded, pointer_x, pointer_y,
+            resolve_theme_color(bootstrap_.theme, bootstrap_.theme.buttons().hover_overlay));
       if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         const auto *target = controls.pointer_target(*rendered->expanded, pointer_x, pointer_y);
         if (target == nullptr || target->kind != InteractionKind::text_input) {
@@ -1641,7 +1667,7 @@ int Application::run() {
         }
       }
     }
-    if (keyboard_session && rendered && rendered->expanded) {
+    if (keyboard_session && keyboard_highlight_visible && rendered && rendered->expanded) {
       keyboard_highlight = keyboard_navigation.selection_highlight(
           *rendered->expanded,
           resolve_theme_color(bootstrap_.theme, bootstrap_.theme.buttons().hover_overlay));
@@ -1699,14 +1725,26 @@ int Application::run() {
     }
     if (rendered && rendered->expanded && rendered->expanded_content && rendered->expanded_images &&
         rendered->expanded_rich_text &&
-        (keyboard_session || expanded_progress_was_active ||
+        (keyboard_session || actions_ready || expanded_progress_was_active ||
          (!indicator_animation.reduced_motion && has_indicator_breathe(*rendered->expanded)))) {
       const RaylibPainter slot_painter{*fonts, *rendered->expanded_images,
                                        *rendered->expanded_rich_text};
       BeginTextureMode(*rendered->expanded_content);
       ClearBackground(BLANK);
-      const auto redrawn = slot_painter.draw_content(expanded_progress.apply(*rendered->expanded),
-                                                     {}, indicator_animation);
+      auto highlighted_plan = expanded_progress.apply(*rendered->expanded);
+      const auto &highlight = keyboard_highlight ? keyboard_highlight : button_hover;
+      if (highlight) {
+        const auto decoration =
+            std::ranges::find_if(highlighted_plan.content, [&](const auto &item) {
+              const auto *button = std::get_if<ButtonDecorationDrawCommand>(&item);
+              return button && button->bounds == highlight->bounds;
+            });
+        highlighted_plan.content.insert(decoration == highlighted_plan.content.end()
+                                            ? highlighted_plan.content.begin()
+                                            : std::next(decoration),
+                                        *highlight);
+      }
+      const auto redrawn = slot_painter.draw_content(highlighted_plan, {}, indicator_animation);
       EndTextureMode();
       if (!redrawn) {
         std::cerr << redrawn.error().message << '\n';
@@ -1787,24 +1825,6 @@ int Application::run() {
                      with_opacity(content_crossfade.compact(), incoming_opacity * reveal_opacity),
                      current, placement, blur_shader, texture_size_location, blur_radius_location,
                      context_content_alignment, transition_visual.incoming_offset_x, capture_alpha);
-        if (button_hover) {
-          const LayoutPlan hover_plan{{}, {*button_hover}, {}};
-          if (auto drawn = painter.draw_content(
-                  hover_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
-                                           static_cast<int>(std::lround(placement.y))});
-              !drawn) {
-            std::cerr << drawn.error().message << '\n';
-          }
-        }
-        if (keyboard_highlight) {
-          const LayoutPlan highlight_plan{{}, {*keyboard_highlight}, {}};
-          if (auto drawn = painter.draw_content(
-                  highlight_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
-                                               static_cast<int>(std::lround(placement.y))});
-              !drawn) {
-            std::cerr << drawn.error().message << '\n';
-          }
-        }
         if (rendered->expanded_content) {
           draw_content(
               *rendered->expanded_content,

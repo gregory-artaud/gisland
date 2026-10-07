@@ -891,7 +891,7 @@ RaylibPainter::draw_content(const LayoutPlan &plan, RenderOrigin origin,
 
   for (const auto &content : plan.content) {
     auto drawn = std::visit(
-        [this, origin,
+        [this, origin, &plan,
          indicator_animation](const auto &command) -> std::expected<void, RendererError> {
           if (command.clip.width <= 0 || command.clip.height <= 0) {
             return {};
@@ -1083,7 +1083,11 @@ RaylibPainter::draw_content(const LayoutPlan &plan, RenderOrigin origin,
             EndBlendMode();
           } else {
             const Scissor scissor{*rendered_clip};
-            DrawRectangleRounded(rectangle(*rendered_bounds), 1.0F, 16, color(command.color));
+            const float diameter =
+                static_cast<float>(std::min(rendered_bounds->width, rendered_bounds->height));
+            const float roundness =
+                std::clamp(2.0F * static_cast<float>(plan.view.radius) / diameter, 0.0F, 1.0F);
+            DrawRectangleRounded(rectangle(*rendered_bounds), roundness, 16, color(command.color));
           }
           return {};
         },

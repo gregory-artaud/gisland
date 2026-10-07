@@ -52,7 +52,7 @@ TEST_CASE("portable font book matches gallery measurements and rejects unsupport
   const auto theme = load_theme();
   const auto fonts = gisland::RlglFontBook::load(theme, GISLAND_TEST_ASSET_ROOT);
   REQUIRE(fonts.has_value());
-  CHECK(fonts->loaded_font_count() == 9U);
+  CHECK(fonts->loaded_font_count() == 12U);
 
   const auto &title = theme.typography().at("title");
   const auto &body = theme.typography().at("body");

@@ -537,12 +537,12 @@ private:
     const int minimum_minor = minimum.at("minor").get<int>();
     const int maximum_minor = maximum.at("minor").get<int>();
     if (minimum.at("major").get<int>() != 1 || maximum.at("major").get<int>() != 1 ||
-        minimum_minor < 0 || minimum_minor > maximum_minor || minimum_minor > 10 ||
+        minimum_minor < 0 || minimum_minor > maximum_minor || minimum_minor > 11 ||
         maximum_minor < 8) {
       return std::unexpected(
           error(LuaHostErrorCode::protocol_error, "core must offer protocol 1.8"));
     }
-    selected_protocol_minor_ = maximum_minor >= 10 ? 10 : (maximum_minor >= 9 ? 9 : 8);
+    selected_protocol_minor_ = std::min(maximum_minor, 11);
     for (const auto field : {"instance_id", "locale", "timezone"}) {
       if (!required_string(record, field)) {
         return std::unexpected(
@@ -581,6 +581,9 @@ private:
     }
     if (selected_protocol_minor_ >= 10 && offered.contains("expanded-view-styles")) {
       negotiated_capabilities_.emplace_back("expanded-view-styles");
+    }
+    if (selected_protocol_minor_ >= 11 && offered.contains("escape-action")) {
+      negotiated_capabilities_.emplace_back("escape-action");
     }
     const auto configuration = record.find("configuration");
     if (configuration == record.end() || !configuration->is_object()) {

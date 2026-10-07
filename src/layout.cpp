@@ -51,6 +51,13 @@ struct MeasuredNode {
   std::vector<MeasuredNode> children;
 };
 
+[[nodiscard]] bool uniform_button_row(const MeasuredNode &node) {
+  return std::holds_alternative<Row>(node.scene->value) && !node.children.empty() &&
+         std::ranges::all_of(node.children, [](const auto &child) {
+           return std::holds_alternative<Button>(child.scene->value);
+         });
+}
+
 [[nodiscard]] bool contains_ring_progress(const SceneNode &scene) {
   return std::visit(
       [](const auto &node) {
@@ -239,9 +246,10 @@ struct MeasuredNode {
 class LayoutBuilder {
 public:
   LayoutBuilder(const Theme &theme, const GlyphMetrics &metrics,
-                const RichTextMetrics *rich_metrics, ViewMode mode, bool root_leading_cap)
+                const RichTextMetrics *rich_metrics, ViewMode mode, bool root_leading_cap,
+                bool uniform_actions)
       : theme_(theme), metrics_(metrics), rich_metrics_(rich_metrics), mode_(mode),
-        root_leading_cap_(root_leading_cap) {}
+        root_leading_cap_(root_leading_cap), uniform_actions_(uniform_actions) {}
 
   [[nodiscard]] std::expected<MeasuredNode, LayoutError> measure(const SceneNode &scene,
                                                                  std::string path) const {
@@ -900,6 +908,21 @@ private:
                                                "container gaps exceed the assigned width")
                                        : gap_total.error());
     }
+    if (uniform_actions_ && node.path.empty() && uniform_button_row(node)) {
+      const int count = static_cast<int>(node.children.size());
+      const int width = (available_width - *gap_total) / count;
+      const int remainder = (available_width - *gap_total) % count;
+      std::vector<int> equal;
+      for (int index = 0; index < count; ++index) {
+        const int assigned = width + (index < remainder ? 1 : 0);
+        if (assigned < node.children[static_cast<std::size_t>(index)].minimum_width) {
+          return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                       "equal buttons cannot fit their minimum widths"));
+        }
+        equal.push_back(assigned);
+      }
+      return equal;
+    }
     std::vector<int> sizes;
     std::vector<std::size_t> flexible;
     sizes.reserve(node.children.size());
@@ -1425,6 +1448,13 @@ private:
       }
     }
 
+    if (uniform_actions_ && node.path.empty() && uniform_button_row(node)) {
+      auto equal = horizontal_sizes(node, available_main);
+      if (!equal)
+        return std::unexpected(equal.error());
+      sizes = std::move(*equal);
+    }
+
     int cursor = axis == Axis::horizontal ? assigned.x : assigned.y;
     auto child_clip = intersect(clip, assigned, node.path);
     if (!child_clip) {
@@ -1435,7 +1465,7 @@ private:
       int child_cross = cross_size(child, axis, false);
       const bool expands_cross =
           axis == Axis::horizontal ? child.expands_height : child.expands_width;
-      if (expands_cross) {
+      if (expands_cross || (uniform_actions_ && node.path.empty() && uniform_button_row(node))) {
         child_cross = available_cross;
       } else {
         child_cross = std::min(child_cross, available_cross);
@@ -1497,7 +1527,7 @@ private:
                   std::vector<ContentDrawCommand> &commands,
                   std::vector<InteractionTarget> &interactions) const {
     const int width = std::min(node.width, assigned.width);
-    const int height = std::min(node.height, assigned.height);
+    const int height = uniform_actions_ ? assigned.height : std::min(node.height, assigned.height);
     if (width < node.minimum_width || height < node.minimum_height) {
       return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
                                    "button cannot fit the assigned bounds"));
@@ -1592,6 +1622,7 @@ private:
   const RichTextMetrics *rich_metrics_;
   ViewMode mode_;
   bool root_leading_cap_;
+  bool uniform_actions_;
 };
 
 [[nodiscard]] std::expected<const ViewGeometry *, LayoutError>
@@ -1661,8 +1692,9 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
   }
 
   const ImageRole *leading_cap = root_leading_cap_role(scene, theme);
-  const LayoutBuilder builder{theme, glyph_metrics, rich_text_metrics, mode,
-                              leading_cap != nullptr};
+  const LayoutBuilder builder{
+      theme, glyph_metrics,          rich_text_metrics,
+      mode,  leading_cap != nullptr, mode == ViewMode::expanded && compact_style == "action-menu"};
   auto measured = builder.measure(scene, "");
   if (!measured) {
     return std::unexpected(measured.error());
@@ -1701,7 +1733,7 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
     *vertical_padding = std::max(*vertical_padding, (extra_height + 1) / 2);
     *minimum_height = std::max(*minimum_height, *compact_height);
     *maximum_height = std::max(*maximum_height, *compact_height);
-    *radius = std::max(*radius, *compact_height / 2);
+    *radius = *compact_height / 2;
   }
 
   int leading_inset = *horizontal_padding;
@@ -1724,6 +1756,20 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
     leading_inset = (*minimum_height - *image_width) / 2;
   }
 
+  // A leading ring and the compact cap share a center and a constant inset.
+  const SceneNode *leading = &scene;
+  if (const auto *row = std::get_if<Row>(&scene.value); row && !row->children.empty()) {
+    leading = row->children.front().get();
+  }
+  if (mode == ViewMode::compact && compact_style.empty()) {
+    if (const auto *progress = std::get_if<Progress>(&leading->value);
+        progress && progress->shape == ProgressShape::ring) {
+      const auto diameter = rounded_pixel(theme.progress().ring_diameter, "progress.ring_diameter");
+      if (!diameter)
+        return std::unexpected(diameter.error());
+      leading_inset = std::max(0, *radius - *diameter / 2);
+    }
+  }
   auto horizontal_insets = checked_add(leading_inset, *horizontal_padding, "");
   auto doubled_vertical_padding = checked_multiply(2, *vertical_padding, "");
   if (!horizontal_insets) {

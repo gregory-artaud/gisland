@@ -1,0 +1,4 @@
+[defaults]
+lock_command = ["i3lock"]
+restart_command = ["reboot"]
+shutdown_command = ["poweroff"]

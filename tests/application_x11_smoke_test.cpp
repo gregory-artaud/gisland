@@ -14,6 +14,7 @@
 #include <bit>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -1624,18 +1625,19 @@ TEST_CASE("activate-open owns keyboard focus for a live Lua launcher session") {
   XSync(display, False);
 
   TemporaryConfig config{false};
-  write_text(config.config_path(), std::string{"monitor = \"primary\"\n"
-                                               "theme = \"default\"\n"
-                                               "[defaults]\n"
-                                               "compact = \"launcher\"\n"
-                                               "expanded = \"launcher\"\n"
-                                               "[[modules]]\n"
-                                               "id = \"launcher\"\n"
-                                               "command = [\""} +
-                                       GISLAND_LUA_HOST_PATH + "\", \"" +
-                                       GISLAND_LAUNCHER_LUA_PATH +
-                                       "\"]\nprotocol_min = \"1.10\"\nprotocol_max = \"1.10\"\n"
-                                       "restart = \"never\"\n");
+  write_text(config.config_path(),
+             std::string{"monitor = \"primary\"\n"
+                         "theme = \"default\"\n"
+                         "[defaults]\n"
+                         "compact = \"clock\"\n"
+                         "expanded = \"clock\"\n"
+                         "[[modules]]\n"
+                         "id = \"clock\"\nmodule = \"clock-calendar\"\n[[modules]]\n"
+                         "id = \"launcher\"\n"
+                         "command = [\""} +
+                 GISLAND_LUA_HOST_PATH + "\", \"" + GISLAND_LAUNCHER_LUA_PATH +
+                 "\"]\nprotocol_min = \"1.10\"\nprotocol_max = \"1.10\"\n"
+                 "restart = \"never\"\n");
   ChildProcess child{config.home(), config.application_log()};
   const std::string socket = (config.home() / "gisland.sock").string();
   std::optional<Window> window;
@@ -1880,4 +1882,177 @@ TEST_CASE("hidden launcher keeps its activation through focus-loss consultation"
   CHECK(focus_preserved);
   XDestroyWindow(display, previous);
   XCloseDisplay(display);
+}
+
+TEST_CASE("Lua power menu toggles and confirms safely with real keyboard and pointer input") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  for (const auto &[reduced_motion, hidden_mode] :
+       {std::pair{false, false}, std::pair{true, false}, std::pair{false, true},
+        std::pair{true, true}}) {
+    CAPTURE(reduced_motion, hidden_mode);
+    Display *display = XOpenDisplay(nullptr);
+    REQUIRE(display != nullptr);
+    TemporaryConfig config{false};
+    const auto lock = config.home() / "locked";
+    const auto restart = config.home() / "restarted";
+    const auto shutdown = config.home() / "shutdown";
+    write_text(config.config_path(),
+               std::string{"monitor = \"primary\"\ntheme = \"default\"\n"
+                           "[defaults]\ncompact = \"clock\"\nexpanded = \"clock\"\n"
+                           "[interaction]\nreduced_motion = "} +
+                   (reduced_motion ? "true" : "false") +
+                   "\nhidden_mode = " + (hidden_mode ? "true" : "false") +
+                   "\n[[modules]]\nid = \"clock\"\nmodule = \"clock-calendar\"\n"
+                   "[[modules]]\nid = \"power-menu\"\nmodule = \"power-menu\"\n"
+                   "[modules.options]\nlock_command = [\"/usr/bin/touch\", \"" +
+                   lock.string() + "\"]\nrestart_command = [\"/usr/bin/touch\", \"" +
+                   restart.string() + "\"]\nshutdown_command = [\"/usr/bin/touch\", \"" +
+                   shutdown.string() + "\"]\n");
+    ChildProcess child{config.home(), config.application_log()};
+    const auto socket = (config.home() / "gisland.sock").string();
+    std::optional<Window> window;
+    REQUIRE(wait_until([&] {
+      XSync(display, False);
+      window = find_gisland_window(display);
+      return window && module_running(config, "power-menu") && module_running(config, "clock");
+    }));
+    const auto mode_is = [&](gisland::IslandMode mode) {
+      const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+      return status && std::get<gisland::ControlStatus>(status->value()).mode == mode;
+    };
+    const auto action = [&](std::string id) {
+      const auto response = gisland::send_control_command(
+          socket, gisland::ActionControl{"power-menu", std::move(id), std::nullopt});
+      REQUIRE(response.has_value());
+    };
+    const auto key = [&](KeySym symbol) {
+      const auto code = XKeysymToKeycode(display, symbol);
+      REQUIRE(code != 0);
+      REQUIRE(XTestFakeKeyEvent(display, code, True, CurrentTime) != 0);
+      XSync(display, False);
+      std::this_thread::sleep_for(std::chrono::milliseconds{30});
+      REQUIRE(XTestFakeKeyEvent(display, code, False, CurrentTime) != 0);
+      XSync(display, False);
+      std::this_thread::sleep_for(std::chrono::milliseconds{250});
+    };
+    const auto open = [&] {
+      action("toggle");
+      REQUIRE(wait_until([&] {
+        XSync(display, False);
+        Window focus = None;
+        int revert = 0;
+        XGetInputFocus(display, &focus, &revert);
+        return mode_is(gisland::IslandMode::expanded) && focus == *window;
+      }));
+      std::this_thread::sleep_for(std::chrono::milliseconds{800});
+    };
+    const auto capture = [&](std::string_view name) {
+      if (reduced_motion)
+        return;
+      XWindowAttributes attributes{};
+      REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+      XImage *image = XGetImage(display, *window, 0, 0, static_cast<unsigned>(attributes.width),
+                                static_cast<unsigned>(attributes.height), AllPlanes, ZPixmap);
+      REQUIRE(image != nullptr);
+      const auto directory =
+          std::filesystem::path{GISLAND_TEST_ASSET_ROOT}.parent_path() / "visual-artifacts";
+      std::filesystem::create_directories(directory);
+      std::ofstream output{directory / (std::string{name} + ".ppm"), std::ios::binary};
+      output << "P6\n" << attributes.width << ' ' << attributes.height << "\n255\n";
+      for (int y = 0; y < attributes.height; ++y) {
+        for (int x = 0; x < attributes.width; ++x) {
+          const auto pixel = XGetPixel(image, x, y);
+          const std::array<char, 3> rgb{static_cast<char>((pixel >> 16U) & 255U),
+                                        static_cast<char>((pixel >> 8U) & 255U),
+                                        static_cast<char>(pixel & 255U)};
+          output.write(rgb.data(), 3);
+        }
+      }
+      XDestroyImage(image);
+    };
+    // The activation-only package does not replace the clock at rest.
+    const auto resting = gisland::send_control_command(socket, gisland::StatusControl{});
+    REQUIRE(resting.has_value());
+    REQUIRE(std::get<gisland::ControlStatus>(resting->value()).compact.has_value());
+    CHECK(std::get<gisland::ControlStatus>(resting->value()).compact->instance_id == "clock");
+    CHECK(std::get<gisland::ControlStatus>(resting->value()).hidden_mode == hidden_mode);
+    CHECK(std::get<gisland::ControlStatus>(resting->value()).visible == !hidden_mode);
+    open();
+    const auto menu_position = root_position(display, *window);
+    const auto menu_shape = input_shape_bounds(display, *window);
+    REQUIRE(menu_position.has_value());
+    REQUIRE(menu_shape.has_value());
+    const auto lock_background = [&] {
+      XImage *image = XGetImage(display, *window, menu_shape->x + 55, menu_shape->y + 58, 1, 1,
+                                AllPlanes, ZPixmap);
+      REQUIRE(image != nullptr);
+      const auto pixel = XGetPixel(image, 0, 0);
+      XDestroyImage(image);
+      return pixel & 0xffffffU;
+    };
+    const auto focused_background = lock_background();
+    CHECK(focused_background != 0);
+    REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                                 menu_position->x + menu_shape->x + menu_shape->width / 2,
+                                 menu_position->y + menu_shape->y + 58, CurrentTime) != 0);
+    XSync(display, False);
+    std::this_thread::sleep_for(std::chrono::milliseconds{150});
+    CHECK(lock_background() == 0);
+    capture("power-menu");
+    key(XK_Right);
+    key(XK_Return); // Restart confirmation.
+    std::this_thread::sleep_for(std::chrono::milliseconds{300});
+    capture("power-menu-confirmation");
+    key(XK_Return); // Annuler is the first focus target.
+    CHECK_FALSE(std::filesystem::exists(restart));
+    CHECK(mode_is(gisland::IslandMode::expanded));
+    action("shutdown");
+    std::this_thread::sleep_for(std::chrono::milliseconds{800});
+    key(XK_Escape); // Back to menu, still expanded.
+    CHECK(mode_is(gisland::IslandMode::expanded));
+    CHECK_FALSE(std::filesystem::exists(shutdown));
+    key(XK_Escape);
+    REQUIRE(wait_until([&] { return mode_is(gisland::IslandMode::compact); }));
+    open();
+    action("restart");
+    action("toggle"); // Shortcut closes confirmation too.
+    REQUIRE(wait_until([&] { return mode_is(gisland::IslandMode::compact); }));
+    open();
+    key(XK_l);
+    key(XK_l);
+    key(XK_h);
+    key(XK_Right);
+    key(XK_Left);
+    key(XK_Return);
+    key(XK_Tab);
+    key(XK_Return);
+    REQUIRE(wait_until(
+        [&] { return std::filesystem::exists(restart) && mode_is(gisland::IslandMode::compact); }));
+    CHECK_FALSE(std::filesystem::exists(shutdown));
+    open();
+    const auto position = root_position(display, *window);
+    const auto shape = input_shape_bounds(display, *window);
+    REQUIRE(position.has_value());
+    REQUIRE(shape.has_value());
+    REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), position->x + shape->x + 65,
+                                 position->y + shape->y + shape->height / 2, CurrentTime) != 0);
+    XSync(display, False);
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    REQUIRE(XTestFakeButtonEvent(display, 1, True, CurrentTime) != 0);
+    XSync(display, False);
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    REQUIRE(XTestFakeButtonEvent(display, 1, False, CurrentTime) != 0);
+    XSync(display, False);
+    const bool locked = wait_until(
+        [&] { return std::filesystem::exists(lock) && mode_is(gisland::IslandMode::compact); });
+    INFO("lock marker=" << std::filesystem::exists(lock)
+                        << " compact=" << mode_is(gisland::IslandMode::compact));
+    INFO("shape=" << shape->x << ',' << shape->y << ' ' << shape->width << 'x' << shape->height);
+    capture("power-menu-after-click");
+    REQUIRE(locked);
+    CHECK(read_text(config.application_log()).find("layout:") == std::string::npos);
+    XCloseDisplay(display);
+  }
 }

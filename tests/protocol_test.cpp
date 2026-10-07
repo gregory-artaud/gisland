@@ -592,3 +592,22 @@ TEST_CASE("protocol errors identify the failing JSON path") {
     CHECK(result.error().path.empty());
   }
 }
+
+TEST_CASE("expanded confirmations can route Escape to a semantic action") {
+  const auto parsed = gisland::parse_module_message(R"({
+    "type":"publish","context_id":"confirmation","priority":100,
+    "views":{"expanded":{"type":"text","value":"Confirm?","role":"title"}},
+    "presentation":{"escape_action_id":"cancel"}
+  })");
+  REQUIRE(parsed.has_value());
+  CHECK(std::get<gisland::PublishMessage>(*parsed).presentation->escape_action_id == "cancel");
+  for (const auto &action : {std::string{}, std::string(129, 'x')}) {
+    auto record = nlohmann::json::parse(
+        R"({"type":"publish","context_id":"confirm","priority":100,"views":{"expanded":{"type":"text","value":"Confirm?","role":"body"}},"presentation":{"escape_action_id":"cancel"}})");
+    record["presentation"]["escape_action_id"] = action;
+    CHECK_FALSE(gisland::parse_module_message(record.dump()).has_value());
+    record["presentation"]["escape_action_id"] = "cancel";
+    record["views"] = {{"compact", {{"type", "text"}, {"value", "x"}, {"role", "body"}}}};
+    CHECK_FALSE(gisland::parse_module_message(record.dump()).has_value());
+  }
+}

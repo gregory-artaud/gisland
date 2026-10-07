@@ -1154,6 +1154,16 @@ private:
           return;
         }
       }
+      if (publish->presentation && publish->presentation->escape_action_id) {
+        if (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 11} ||
+            !instance.negotiated_capabilities.contains("escape-action")) {
+          record_violation(instance,
+                           ProtocolError{"/presentation/escape_action_id",
+                                         "Escape actions require protocol 1.11 and escape-action"},
+                           now);
+          return;
+        }
+      }
       const auto path = indicator_path(*publish);
       if (path &&
           (!instance.negotiated_version || *instance.negotiated_version < ProtocolVersion{1, 6})) {
@@ -1301,6 +1311,11 @@ private:
         record_violation(
             instance,
             ProtocolError{"/capabilities", capability + " requires protocol version 1.10"}, now);
+        return false;
+      }
+      if (capability == "escape-action" && selected < ProtocolVersion{1, 11}) {
+        record_violation(
+            instance, ProtocolError{"/capabilities", "escape-action requires protocol 1.11"}, now);
         return false;
       }
     }

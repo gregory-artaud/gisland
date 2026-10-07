@@ -18,6 +18,9 @@ if(NOT install_result EQUAL 0)
 endif()
 
 set(required_files
+    "${root}/${DATADIR}/gisland/distributed/modules/power-menu/module.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/power-menu/config.toml"
+    "${root}/${DATADIR}/gisland/distributed/modules/power-menu/power_menu.lua"
     "${root}/${BINDIR}/gisland"
     "${root}/${BINDIR}/gislandctl"
     "${root}/${BINDIR}/gisland-lua-host"

@@ -1,0 +1,20 @@
+id = "power-menu"
+name = "Power menu"
+description = "Lock, restart and shutdown from an explicitly opened island"
+command = ["gisland-lua-host"]
+entry = "power_menu.lua"
+config = "config.toml"
+
+[protocol]
+major = 1
+minimum_minor = 11
+maximum_minor = 11
+
+[options_schema.lock_command]
+type = "array"
+
+[options_schema.restart_command]
+type = "array"
+
+[options_schema.shutdown_command]
+type = "array"

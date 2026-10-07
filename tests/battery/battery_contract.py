@@ -304,12 +304,12 @@ def compact_view(value):
                 "value": value["level"],
                 "state": value["semantic_state"],
             },
-            {"type": "text", "value": value["percent_text"], "role": "compact-primary"},
+            {"type": "text", "value": value["percent_text"], "role": "battery-primary"},
             {"type": "spacer", "flexible": True},
             {
                 "type": "text",
                 "value": value["estimate_compact"],
-                "role": "compact-secondary",
+                "role": "battery-secondary",
             },
         ],
     }

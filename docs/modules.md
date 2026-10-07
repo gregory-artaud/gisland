@@ -256,7 +256,7 @@ or a protocol `log` record. Keep processing stdin until `shutdown` or EOF.
 The core starts the handshake with `init`:
 
 ```json
-{"type":"init","protocol":{"minimum":{"major":1,"minor":1},"maximum":{"major":1,"minor":10}},"instance_id":"weather-main","capabilities":["data-snapshots","context-images","rich-content","independent-views","ring-progress","status-indicator","compact-view-styles","icon-roles","progress-transitions","indicator-effects","content-transitions","text-input","expanded-view-styles"],"configuration":{"units":"metric"},"locale":"en_US.UTF-8","timezone":"Europe/Paris"}
+{"type":"init","protocol":{"minimum":{"major":1,"minor":1},"maximum":{"major":1,"minor":11}},"instance_id":"weather-main","capabilities":["data-snapshots","context-images","rich-content","independent-views","ring-progress","status-indicator","compact-view-styles","icon-roles","progress-transitions","indicator-effects","content-transitions","text-input","expanded-view-styles","escape-action"],"configuration":{"units":"metric"},"locale":"en_US.UTF-8","timezone":"Europe/Paris"}
 ```
 
 Choose one version inside both the offered and manifest ranges, and echo only capabilities you will
@@ -281,6 +281,7 @@ Do not send other records before `ready`. Feature introduction by protocol minor
 | 1.8 | correlated `action_result`, required for confirmed `gislandctl action` calls |
 | 1.9 | `indicator-effects`; `content-transitions` on `publish` and `data` records |
 | 1.10 | `text-input`, `close_on_activate`, `expanded-view-styles`, and activation-only contexts |
+| 1.11 | `escape-action` and `presentation.escape_action_id` |
 
 The core may then send:
 
@@ -343,6 +344,10 @@ the draft and caret when the same context republishes the same `input_id`, then 
 action was delivered successfully. An explicit `gislandctl activate-open <instance>` session owns
 keyboard focus; hover-only expansion remains non-focusable. Escape closes the session, while
 Up/Down select results, Enter activates, and Tab/Shift+Tab traverse targets.
+With protocol 1.11 and negotiated `escape-action`, an expanded publication can set
+`presentation.escape_action_id` to a non-empty semantic action ID (up to 128 bytes). Escape then
+delivers that action to its module while keeping the session open. Omitting the field restores
+normal Escape-to-close behavior. This lets confirmation views return to their parent view.
 
 An optional `navigation_action_id` virtualizes bounded result lists. When Up or Down reaches the
 visible boundary, the core sends that action with `-1` or `1`. The module republishes the preceding
@@ -366,3 +371,41 @@ file. Required Lua files are not watched transitively. Use `gislandctl reload` a
 files. Manifest, options, lifecycle, environment, and entry changes replace the process; a view-only
 change keeps the process and reuses its last valid data. Invalid candidates are rejected
 transactionally where possible, leaving the running configuration and last valid view intact.
+
+## Shipped Lua power menu
+
+The `power-menu` package is activation-only: it contributes no passive compact or expanded view.
+Enable an instance and bind its toggle action in i3:
+
+```toml
+[[modules]]
+id = "power-menu"
+module = "power-menu"
+enabled = true
+restart = "on-failure"
+
+[modules.options]
+lock_command = ["i3lock"]
+restart_command = ["reboot"]
+shutdown_command = ["poweroff"]
+```
+
+```i3
+bindsym $mod+p exec --no-startup-id ~/.local/bin/gislandctl action power-menu toggle
+```
+
+The three buttons lock immediately or ask confirmation before restart/shutdown. Confirmation
+focuses Annuler first; Escape returns to the main menu, then closes it. A second shortcut press
+closes either view. Validated actions close the island and launch the configured argv asynchronously
+without shell interpretation; command failures are logged. Outside click and focus loss reset the
+pending confirmation. `gislandctl activate-open power-menu` also opens the module directly.
+
+The power menu's main view selects `presentation.expanded_style = "action-menu"`.
+The default theme reproduces the approved concentric layout: a 360 × 112 island,
+12 px inset and gaps, and three equal 104 × 88 action cells. The theme roles
+`action-label` and `action-icon`, with the `action-content` gap, control their
+content. The `action-menu` style allocates equal-width cells to its root button row and
+uses the available row height. Compact views with a leading ring center that
+ring on the rounded left cap, giving the battery a constant 8 px inset at its
+48 px height and 32 px ring diameter. Battery text uses `battery-primary` and
+`battery-secondary`.

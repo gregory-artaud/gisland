@@ -445,3 +445,22 @@ TEST_CASE("lua scene API rejects concrete styling but preserves semantic roles",
   CHECK(result.error().message.find("ui.text/font_size") != std::string::npos);
   CHECK(records.empty());
 }
+
+TEST_CASE("Lua negotiates protocol 1.11 and publishes an Escape action", "[lua_scene]") {
+  const auto [result, records] =
+      run_script(R"lua(
+return gisland.module { init = function()
+  gisland.publish {
+    context_id = "confirmation", priority = 100,
+    views = { expanded = gisland.ui.text { value = "Confirm?", role = "title" } },
+    presentation = { escape_action_id = "cancel" }
+  }
+end }
+)lua",
+                 Json::array({"independent-views", "escape-action"}), 11);
+  REQUIRE(result.has_value());
+  REQUIRE(records.size() == 2);
+  CHECK(records[0]["protocol_minor"] == 11);
+  CHECK(records[0]["capabilities"] == Json::array({"independent-views", "escape-action"}));
+  CHECK(records[1]["presentation"]["escape_action_id"] == "cancel");
+}
