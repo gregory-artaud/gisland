@@ -477,10 +477,12 @@ void RuntimeCoordinator::reject(const ContextKey &key, MonotonicTime now) {
   ++revision_;
 }
 
-std::vector<VisibilityUpdate> RuntimeCoordinator::visibility_updates(MonotonicTime now,
-                                                                     IslandMode mode) {
+std::vector<VisibilityUpdate>
+RuntimeCoordinator::visibility_updates(MonotonicTime now, IslandMode mode, bool presented) {
   const PublishedContext *selected =
-      arbiter_.active(mode == IslandMode::expanded ? ViewSlot::expanded : ViewSlot::compact, now);
+      presented ? arbiter_.active(
+                      mode == IslandMode::expanded ? ViewSlot::expanded : ViewSlot::compact, now)
+                : nullptr;
   std::vector<VisibilityUpdate> updates;
   for (const auto &instance_id : enabled_instances_) {
     if (!ready_instances_.contains(instance_id)) {

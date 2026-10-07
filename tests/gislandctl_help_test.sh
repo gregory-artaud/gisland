@@ -16,6 +16,8 @@ for expected in \
   'Usage: gislandctl <command> [options]' \
   'open' \
   'close' \
+  'collapse' \
+  'hidden-mode on|off|toggle' \
   'toggle' \
   'status [--json]' \
   'modules' \

@@ -1027,7 +1027,8 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
     return std::unexpected(error_at(source_name, "interaction", "expected a table", node));
   }
   for (const auto &[key, value] : *table) {
-    if (key != "animation_speed" && key != "hover_exit_ms" && key != "reduced_motion") {
+    if (key != "animation_speed" && key != "hover_exit_ms" && key != "reduced_motion" &&
+        key != "hidden_mode") {
       return std::unexpected(error_at(source_name, "interaction." + std::string{key.str()},
                                       "unknown interaction property", &value));
     }
@@ -1066,6 +1067,15 @@ parse_interaction(const toml::table &root, std::string_view source_name) {
           error_at(source_name, "interaction.reduced_motion", "expected a boolean", reduced_node));
     }
     interaction.reduced_motion = *reduced;
+  }
+
+  if (const auto *hidden_node = table->get("hidden_mode"); hidden_node != nullptr) {
+    const auto hidden = hidden_node->value_exact<bool>();
+    if (!hidden.has_value()) {
+      return std::unexpected(
+          error_at(source_name, "interaction.hidden_mode", "expected a boolean", hidden_node));
+    }
+    interaction.hidden_mode = *hidden;
   }
 
   return interaction;

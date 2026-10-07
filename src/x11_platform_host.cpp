@@ -97,6 +97,8 @@ private:
   RoundedWindowShape shape_;
   Window previous_focus_{None};
   int previous_revert_{RevertToPointerRoot};
+  Window last_non_overlay_focus_{None};
+  int last_non_overlay_revert_{RevertToPointerRoot};
   bool keyboard_focused_{};
 };
 
@@ -239,8 +241,13 @@ X11PlatformHost::update_input_region(const InputRegion &region) const {
                                  PlatformErrorSeverity::recoverable,
                                  "XShape input regions are unavailable"));
   }
-  if (!checked_request(display_,
-                       [&] { shape_.apply(&window_, region.geometry, region.placement); })) {
+  if (!checked_request(display_, [&] {
+        if (region.mask_rows) {
+          shape_.apply(&window_, region.placement, *region.mask_rows);
+        } else {
+          shape_.apply(&window_, region.geometry, region.placement);
+        }
+      })) {
     return std::unexpected(error(PlatformOperation::update_input_region,
                                  PlatformErrorSeverity::recoverable,
                                  "could not update the X11 input region"));
@@ -283,8 +290,8 @@ std::expected<void, PlatformError> X11PlatformHost::begin_keyboard_focus() {
                                  PlatformErrorSeverity::recoverable,
                                  "could not focus the X11 overlay window"));
   }
-  previous_focus_ = focused == window_ ? None : focused;
-  previous_revert_ = revert;
+  previous_focus_ = focused == window_ ? last_non_overlay_focus_ : focused;
+  previous_revert_ = focused == window_ ? last_non_overlay_revert_ : revert;
   keyboard_focused_ = true;
   return {};
 }
@@ -337,6 +344,19 @@ std::expected<std::vector<PlatformEvent>, PlatformError> X11PlatformHost::poll_e
       if (focused != window_) {
         events.push_back(PlatformEvent{PlatformEventKind::keyboard_focus_lost});
       }
+    }
+  }
+  if (!keyboard_focused_) {
+    Window focused = None;
+    int revert = RevertToPointerRoot;
+    if (!checked_request(display_, [&] { XGetInputFocus(display_, &focused, &revert); })) {
+      return std::unexpected(error(PlatformOperation::poll_events,
+                                   PlatformErrorSeverity::recoverable,
+                                   "could not query the current X11 keyboard focus"));
+    }
+    if (focused != window_) {
+      last_non_overlay_focus_ = focused;
+      last_non_overlay_revert_ = revert;
     }
   }
   return events;

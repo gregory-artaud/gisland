@@ -26,8 +26,8 @@ elseif action == "set_mute_true" then
   result = command.set_sink_mute(true)
 elseif action == "set_mute_zero" then
   result = command.set_sink_mute(0)
-elseif action == "close" then
-  result = command.close()
+elseif action == "collapse" then
+  result = command.collapse()
 elseif action == "invalid" then
   local injection = "5%; touch " .. os.getenv("GISLAND_AUDIO_INJECTION_MARKER")
   local checks = {
@@ -135,7 +135,7 @@ class LuaCommandTest(unittest.TestCase):
         self.assertTrue(self.result("set_volume")["ok"])
         self.assertTrue(self.result("set_mute_true")["ok"])
         self.assertTrue(self.result("set_mute_zero")["ok"])
-        self.assertTrue(self.result("close")["ok"])
+        self.assertTrue(self.result("collapse")["ok"])
         self.assertEqual(
             [(entry["program"], entry["argv"]) for entry in self.command_log()],
             [
@@ -144,7 +144,7 @@ class LuaCommandTest(unittest.TestCase):
                 ("pactl", ["set-sink-volume", "@DEFAULT_SINK@", "73%"]),
                 ("pactl", ["set-sink-mute", "@DEFAULT_SINK@", "1"]),
                 ("pactl", ["set-sink-mute", "@DEFAULT_SINK@", "0"]),
-                ("gislandctl", ["close"]),
+                ("gislandctl", ["collapse"]),
             ],
         )
         pactl_entries = [
@@ -225,7 +225,7 @@ class LuaCommandTest(unittest.TestCase):
     def test_gislandctl_timeout_is_bounded_and_reported(self):
         started = time.monotonic()
         result = self.result(
-            "close", {"GISLAND_AUDIO_FAKE_GISLANDCTL_SLEEP": "1"}
+            "collapse", {"GISLAND_AUDIO_FAKE_GISLANDCTL_SLEEP": "1"}
         )
         elapsed = time.monotonic() - started
         self.assertFalse(result["ok"])
@@ -237,7 +237,7 @@ class LuaCommandTest(unittest.TestCase):
     def test_gislandctl_timeout_kills_a_process_that_ignores_sigterm(self):
         started = time.monotonic()
         result = self.result(
-            "close", {"GISLAND_AUDIO_FAKE_GISLANDCTL_IGNORE_SIGTERM": "1"}
+            "collapse", {"GISLAND_AUDIO_FAKE_GISLANDCTL_IGNORE_SIGTERM": "1"}
         )
         elapsed = time.monotonic() - started
         self.assertFalse(result["ok"])
@@ -246,30 +246,30 @@ class LuaCommandTest(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0.4)
         self.assertLess(elapsed, 1.5)
 
-    def test_close_finds_home_local_gislandctl_when_path_excludes_it(self):
+    def test_collapse_finds_home_local_gislandctl_when_path_excludes_it(self):
         home = self.root / "home'; touch injected; #"
         local_bin = home / ".local" / "bin"
         local_bin.mkdir(parents=True)
         (local_bin / "gislandctl").symlink_to(FIXTURES / "fake-gislandctl")
         (self.bin_path / "gislandctl").unlink()
 
-        result = self.result("close", {"HOME": str(home)})
+        result = self.result("collapse", {"HOME": str(home)})
 
         self.assertTrue(result["ok"])
         self.assertEqual(
             [(entry["program"], entry["argv"]) for entry in self.command_log()],
-            [("gislandctl", ["close"])],
+            [("gislandctl", ["collapse"])],
         )
         self.assertFalse(self.injection_marker.exists())
 
-    def test_close_prefers_executable_host_sibling_when_path_excludes_it(self):
+    def test_collapse_prefers_executable_host_sibling_when_path_excludes_it(self):
         host_bin = self.root / "host'; touch injected; #" / "bin"
         host_bin.mkdir(parents=True)
         (host_bin / "gislandctl").symlink_to(FIXTURES / "fake-gislandctl")
         (self.bin_path / "gislandctl").unlink()
 
         result = self.result(
-            "close",
+            "collapse",
             {
                 "GISLAND_LUA_HOST_BINDIR": str(host_bin),
                 "PATH": f"{self.bin_path}:/usr/bin:/bin",
@@ -279,7 +279,7 @@ class LuaCommandTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(
             [(entry["program"], entry["argv"]) for entry in self.command_log()],
-            [("gislandctl", ["close"])],
+            [("gislandctl", ["collapse"])],
         )
         self.assertFalse(self.injection_marker.exists())
 
@@ -290,12 +290,12 @@ class LuaCommandTest(unittest.TestCase):
         candidate.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
         candidate.chmod(0o644)
 
-        result = self.result("close")
+        result = self.result("collapse")
 
         self.assertTrue(result["ok"])
         self.assertEqual(
             [(entry["program"], entry["argv"]) for entry in self.command_log()],
-            [("gislandctl", ["close"])],
+            [("gislandctl", ["collapse"])],
         )
 
 

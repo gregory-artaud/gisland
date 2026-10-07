@@ -58,10 +58,12 @@ using namespace std::chrono_literals;
 ControlDispatcher::ControlDispatcher(RuntimeCoordinator &runtime, OverlayModeController &mode,
                                      RestartRequest request_restart, std::string socket_path,
                                      ReloadRequest request_reload, ActionRequest request_action,
-                                     std::uint64_t first_invocation_id)
-    : runtime_(runtime), mode_(mode), request_restart_(std::move(request_restart)),
-      request_reload_(std::move(request_reload)), request_action_(std::move(request_action)),
-      socket_path_(std::move(socket_path)), next_invocation_id_(first_invocation_id) {}
+                                     std::uint64_t first_invocation_id,
+                                     PresentationController *presentation)
+    : runtime_(runtime), mode_(mode), presentation_(presentation),
+      request_restart_(std::move(request_restart)), request_reload_(std::move(request_reload)),
+      request_action_(std::move(request_action)), socket_path_(std::move(socket_path)),
+      next_invocation_id_(first_invocation_id) {}
 
 ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, MonotonicTime now) {
   return std::visit(
@@ -73,9 +75,15 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
             return control_error(ControlErrorCode::unavailable_context,
                                  "the active context has no expanded view");
           }
+          if (presentation_ != nullptr) {
+            presentation_->consult(now);
+          }
         } else if constexpr (std::is_same_v<Command, CloseControl>) {
           mode_.close();
           runtime_.clear_activation();
+          if (presentation_ != nullptr) {
+            presentation_->close();
+          }
         } else if constexpr (std::is_same_v<Command, ToggleControl>) {
           const auto selected = runtime_.active(ViewSlot::expanded, now);
           const bool was_expanded = mode_.mode() == IslandMode::expanded;
@@ -85,7 +93,29 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
           }
           if (was_expanded) {
             runtime_.clear_activation();
+            if (presentation_ != nullptr) {
+              presentation_->close();
+            }
+          } else if (presentation_ != nullptr) {
+            presentation_->consult(now);
           }
+        } else if constexpr (std::is_same_v<Command, HiddenModeControl>) {
+          if (presentation_ == nullptr) {
+            return control_error(ControlErrorCode::internal_error,
+                                 "hidden-mode presentation is unavailable");
+          }
+          bool next = presentation_->hidden_mode();
+          if (typed_command.action == HiddenModeAction::on) {
+            next = true;
+          } else if (typed_command.action == HiddenModeAction::off) {
+            next = false;
+          } else {
+            next = !next;
+          }
+          presentation_->set_hidden_mode(next, now, mode_.explicitly_open());
+        } else if constexpr (std::is_same_v<Command, CollapseControl>) {
+          mode_.close();
+          runtime_.clear_activation();
         } else if constexpr (std::is_same_v<Command, StatusControl>) {
           return status(now);
         } else if constexpr (std::is_same_v<Command, ModulesControl>) {
@@ -109,6 +139,9 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
                                  activated.error().message);
           }
           mode_.close();
+          if (presentation_ != nullptr) {
+            presentation_->consult(now);
+          }
         } else if constexpr (std::is_same_v<Command, ActivateOpenControl>) {
           const auto activated = runtime_.activate(typed_command.instance_id, std::nullopt, now);
           if (!activated) {
@@ -118,8 +151,12 @@ ControlResponse ControlDispatcher::dispatch(const ControlCommand &command, Monot
           const auto selected = runtime_.active(ViewSlot::expanded, now);
           if (!mode_.open(selected.context != nullptr &&
                           selected.context->key.instance_id == typed_command.instance_id)) {
+            runtime_.clear_activation(*activated);
             return control_error(ControlErrorCode::unavailable_context,
                                  "the activated context has no expanded view");
+          }
+          if (presentation_ != nullptr) {
+            presentation_->consult(now);
           }
         } else if constexpr (std::is_same_v<Command, DismissControl>) {
           const auto dismissed = runtime_.dismiss_active(
@@ -292,7 +329,9 @@ ControlResponse ControlDispatcher::status(MonotonicTime now) {
                                selection.context->key.context_id, selection.context->priority};
   };
   return ControlResponse{ControlStatus{mode_.mode(), status(selected.compact),
-                                       status(selected.expanded), modules(now), socket_path_}};
+                                       status(selected.expanded), modules(now), socket_path_,
+                                       presentation_ != nullptr && presentation_->hidden_mode(),
+                                       presentation_ == nullptr || presentation_->visible()}};
 }
 
 std::vector<ModuleControlStatus> ControlDispatcher::modules(MonotonicTime now) {

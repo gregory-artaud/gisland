@@ -503,11 +503,11 @@ class AudioContract(unittest.TestCase):
         closes = [
             entry for entry in self.command_log() if entry["program"] == "gislandctl"
         ]
-        self.assertEqual(closes[-1]["argv"], ["close"])
+        self.assertEqual(closes[-1]["argv"], ["collapse"])
 
-    def test_lua_defers_close_until_publish_and_action_result_are_emitted(self):
-        started_marker = self.root / "close-started"
-        release_marker = self.root / "close-release"
+    def test_lua_defers_collapse_until_publish_and_action_result_are_emitted(self):
+        started_marker = self.root / "collapse-started"
+        release_marker = self.root / "collapse-release"
         self.start(
             {"volume_reads": [[20], [25]], "mute_reads": [False, False]},
             extra_environment={
@@ -532,7 +532,7 @@ class AudioContract(unittest.TestCase):
         deadline = time.monotonic() + 1.0
         while not started_marker.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
-        self.assertTrue(started_marker.exists(), "deferred close did not start")
+        self.assertTrue(started_marker.exists(), "deferred collapse did not start")
         release_marker.touch()
         action_thread.join(timeout=1.0)
 

@@ -48,7 +48,187 @@ float apply_easing(float progress, Easing easing) {
   return std::clamp(progress, 0.0F, 1.0F);
 }
 
+float smoothstep(float value) {
+  const float clamped = std::clamp(value, 0.0F, 1.0F);
+  return clamped * clamped * (3.0F - (2.0F * clamped));
+}
+
+IslandPoint mix(IslandPoint from, IslandPoint to, float progress) {
+  return {mix(from.x, to.x, progress), mix(from.y, to.y, progress)};
+}
+
+void append_line(std::vector<IslandPoint> &points, IslandPoint from, IslandPoint to) {
+  constexpr int samples = 4;
+  for (int index = 1; index <= samples; ++index) {
+    points.push_back(mix(from, to, static_cast<float>(index) / samples));
+  }
+}
+
+void append_quadratic(std::vector<IslandPoint> &points, IslandPoint from, IslandPoint control,
+                      IslandPoint to) {
+  constexpr int samples = 8;
+  for (int index = 1; index <= samples; ++index) {
+    const float progress = static_cast<float>(index) / samples;
+    const float inverse = 1.0F - progress;
+    points.push_back({(inverse * inverse * from.x) + (2.0F * inverse * progress * control.x) +
+                          (progress * progress * to.x),
+                      (inverse * inverse * from.y) + (2.0F * inverse * progress * control.y) +
+                          (progress * progress * to.y)});
+  }
+}
+
+void append_cubic(std::vector<IslandPoint> &points, IslandPoint from, IslandPoint control1,
+                  IslandPoint control2, IslandPoint to) {
+  constexpr int samples = 12;
+  for (int index = 1; index <= samples; ++index) {
+    const float progress = static_cast<float>(index) / samples;
+    const float inverse = 1.0F - progress;
+    const float inverse2 = inverse * inverse;
+    const float progress2 = progress * progress;
+    points.push_back({(inverse2 * inverse * from.x) + (3.0F * inverse2 * progress * control1.x) +
+                          (3.0F * inverse * progress2 * control2.x) + (progress2 * progress * to.x),
+                      (inverse2 * inverse * from.y) + (3.0F * inverse2 * progress * control1.y) +
+                          (3.0F * inverse * progress2 * control2.y) +
+                          (progress2 * progress * to.y)});
+  }
+}
+
+std::vector<IslandMaskRow> scanline_rows(const std::vector<IslandPoint> &contour, float center_x) {
+  if (contour.empty()) {
+    return {};
+  }
+  const auto [minimum_y, maximum_y] = std::ranges::minmax(contour, {}, &IslandPoint::y);
+  const int first_y = std::max(0, static_cast<int>(std::floor(minimum_y.y)));
+  const int last_y = static_cast<int>(std::ceil(maximum_y.y));
+  std::vector<IslandMaskRow> rows;
+  rows.reserve(static_cast<std::size_t>(std::max(0, last_y - first_y)));
+  for (int y = first_y; y < last_y; ++y) {
+    const float sample_y = static_cast<float>(y) + 0.5F;
+    std::vector<float> intersections;
+    intersections.reserve(contour.size());
+    for (std::size_t index = 0; index < contour.size(); ++index) {
+      const IslandPoint a = contour[index];
+      const IslandPoint b = contour[(index + 1U) % contour.size()];
+      if ((a.y <= sample_y && b.y > sample_y) || (b.y <= sample_y && a.y > sample_y)) {
+        const float fraction = (sample_y - a.y) / (b.y - a.y);
+        intersections.push_back(center_x + mix(a.x, b.x, fraction));
+      }
+    }
+    if (intersections.size() < 2U) {
+      continue;
+    }
+    const auto [left, right] = std::ranges::minmax(intersections);
+    const int x = static_cast<int>(std::floor(left));
+    const int end = static_cast<int>(std::ceil(right));
+    if (end > x) {
+      rows.push_back({.x = x, .y = y, .width = end - x, .height = 1});
+    }
+  }
+  return rows;
+}
+
 } // namespace
+
+void PresentationController::set_hidden_mode(bool hidden_mode, MonotonicTime now,
+                                             bool active_interaction) {
+  if (hidden_mode_ == hidden_mode) {
+    return;
+  }
+  hidden_mode_ = hidden_mode;
+  if (hidden_mode_ && (active_interaction || held_)) {
+    consult(now);
+    if (active_interaction) {
+      set_interaction_hold(true, now);
+    }
+  }
+}
+
+void PresentationController::consult(MonotonicTime now) {
+  consultation_ = true;
+  consultation_deadline_ = held_ ? std::nullopt : std::optional{now + std::chrono::seconds{3}};
+}
+
+void PresentationController::reveal(ContextKey key, std::uint64_t revision,
+                                    std::optional<MonotonicTime> expires_at) {
+  reveal_source_ = RevealSource{std::move(key), revision, expires_at};
+}
+
+void PresentationController::reconcile(const std::optional<ContextKey> &key,
+                                       std::uint64_t revision) {
+  if (reveal_source_ &&
+      (!key || reveal_source_->key != *key || reveal_source_->revision != revision)) {
+    reveal_source_.reset();
+  }
+}
+
+void PresentationController::reconcile(const std::optional<ContextKey> &compact_key,
+                                       std::uint64_t compact_revision,
+                                       const std::optional<ContextKey> &expanded_key,
+                                       std::uint64_t expanded_revision) {
+  if (!reveal_source_) {
+    return;
+  }
+  const bool selected_compact = compact_key && reveal_source_->key == *compact_key &&
+                                reveal_source_->revision == compact_revision;
+  const bool selected_expanded = expanded_key && reveal_source_->key == *expanded_key &&
+                                 reveal_source_->revision == expanded_revision;
+  if (!selected_compact && !selected_expanded) {
+    reveal_source_.reset();
+  }
+}
+
+void PresentationController::set_interaction_hold(bool held, MonotonicTime now) {
+  if (held_ == held) {
+    return;
+  }
+  held_ = held;
+  if (held_) {
+    if (hidden_mode_ && should_present()) {
+      consultation_ = true;
+    }
+    if (consultation_) {
+      consultation_deadline_.reset();
+    }
+  } else if (consultation_) {
+    consultation_deadline_ = now + std::chrono::seconds{3};
+  }
+}
+
+void PresentationController::update(MonotonicTime now, bool has_content) {
+  has_content_ = has_content;
+  if (!has_content_) {
+    held_ = false;
+    consultation_ = false;
+    consultation_deadline_.reset();
+    reveal_source_.reset();
+    return;
+  }
+  if (consultation_deadline_ && now >= *consultation_deadline_) {
+    consultation_ = false;
+    consultation_deadline_.reset();
+  }
+  if (reveal_source_ && reveal_source_->expires_at && now >= *reveal_source_->expires_at) {
+    reveal_source_.reset();
+  }
+}
+
+void PresentationController::close() {
+  held_ = false;
+  consultation_ = false;
+  consultation_deadline_.reset();
+  reveal_source_.reset();
+}
+
+void PresentationController::set_visible(bool visible) noexcept { visible_ = visible; }
+
+bool PresentationController::hidden_mode() const noexcept { return hidden_mode_; }
+
+bool PresentationController::should_present() const noexcept {
+  return has_content_ &&
+         (!hidden_mode_ || consultation_ || (reveal_source_.has_value() && has_content_));
+}
+
+bool PresentationController::visible() const noexcept { return visible_; }
 
 IslandGeometry geometry_for(IslandMode mode) {
   if (mode == IslandMode::expanded) {
@@ -113,6 +293,12 @@ IslandGeometry interpolate(const IslandGeometry &from, const IslandGeometry &to,
 }
 
 void SpringProgress::set_target(float target) { target_ = std::clamp(target, 0.0F, 1.0F); }
+
+void SpringProgress::snap(float value) {
+  value_ = std::clamp(value, 0.0F, 1.0F);
+  target_ = value_;
+  velocity_ = 0.0F;
+}
 
 void SpringProgress::update(float delta_seconds) {
   constexpr float stiffness = 220.0F;
@@ -508,6 +694,67 @@ std::vector<IslandMaskRow> rounded_mask_rows(const IslandGeometry &geometry) {
   }
 
   return rows;
+}
+
+IslandRevealSilhouette reveal_silhouette(const IslandGeometry &destination, float progress,
+                                         float top_margin) {
+  if (!std::isfinite(progress) || progress <= 0.0F || destination.width <= 0.0F ||
+      destination.height <= 0.0F) {
+    return {};
+  }
+
+  const float p = std::clamp(progress, 0.0F, 1.1F);
+  const float shape = std::min(1.0F, p);
+  const float bounce = std::max(1.0F, p);
+  const float width = destination.width * std::pow(shape, 1.6F) * bounce;
+  const float height = destination.height * std::pow(shape, 0.9F) * bounce;
+  const float top = std::max(0.0F, top_margin) * shape;
+  const float radius = std::min({destination.radius, width / 2.0F, height / 2.0F});
+  const float left = -width / 2.0F;
+  const float right = width / 2.0F;
+  const float bottom = top + height;
+  const float detach = smoothstep((shape - 0.48F) / 0.30F);
+  const float tip = top * detach;
+  const float neck = std::min(14.0F, width * 0.14F) * (1.0F - detach);
+  const float shoulder = std::max(0.0F, width / 2.0F - radius);
+
+  std::vector<IslandPoint> contour;
+  contour.reserve(88U);
+  contour.push_back({-neck, tip});
+  append_cubic(contour, contour.back(), {-neck, top}, {-shoulder * 0.35F, top}, {-shoulder, top});
+  append_quadratic(contour, contour.back(), {left, top}, {left, top + radius});
+  append_line(contour, contour.back(), {left, bottom - radius});
+  append_quadratic(contour, contour.back(), {left, bottom}, {left + radius, bottom});
+  append_line(contour, contour.back(), {right - radius, bottom});
+  append_quadratic(contour, contour.back(), {right, bottom}, {right, bottom - radius});
+  append_line(contour, contour.back(), {right, top + radius});
+  append_quadratic(contour, contour.back(), {right, top}, {shoulder, top});
+  append_cubic(contour, contour.back(), {shoulder * 0.35F, top}, {neck, top}, {neck, tip});
+  append_line(contour, contour.back(), contour.front());
+  auto rows = scanline_rows(contour, destination.width / 2.0F);
+
+  return {.contour = std::move(contour),
+          .rows = std::move(rows),
+          .bounds = {.width = width, .height = top + height, .radius = radius},
+          .top = top,
+          .content_opacity = reveal_content_opacity(p, false)};
+}
+
+float reveal_content_opacity(float progress, bool departing) {
+  return departing ? 0.0F : smoothstep((progress - 0.78F) / 0.22F);
+}
+
+IslandCanvasSize reserve_reveal_margin(IslandCanvasSize canvas, float margin) {
+  const float reserved = std::max(0.0F, margin);
+  const float surface_width = canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
+  const float surface_height = canvas.surface_height > 0.0F ? canvas.surface_height : canvas.height;
+  const float overshoot_x = std::ceil(surface_width * 0.02F);
+  const float overshoot_y = std::ceil(surface_height * 0.04F);
+  canvas.width += overshoot_x * 2.0F;
+  canvas.surface_x += overshoot_x;
+  canvas.height += reserved + overshoot_y;
+  canvas.surface_y += reserved;
+  return canvas;
 }
 
 } // namespace gisland

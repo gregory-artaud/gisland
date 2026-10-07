@@ -33,7 +33,8 @@ public:
   ControlDispatcher(RuntimeCoordinator &runtime, OverlayModeController &mode,
                     RestartRequest request_restart, std::string socket_path,
                     ReloadRequest request_reload = {}, ActionRequest request_action = {},
-                    std::uint64_t first_invocation_id = 1);
+                    std::uint64_t first_invocation_id = 1,
+                    PresentationController *presentation = nullptr);
 
   [[nodiscard]] ControlResponse dispatch(const ControlCommand &command, MonotonicTime now);
   [[nodiscard]] ControlDispatchResult dispatch_deferred(const ControlCommand &command,
@@ -70,6 +71,7 @@ private:
 
   RuntimeCoordinator &runtime_;
   OverlayModeController &mode_;
+  PresentationController *presentation_{};
   RestartRequest request_restart_;
   ReloadRequest request_reload_;
   ActionRequest request_action_;

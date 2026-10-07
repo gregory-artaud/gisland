@@ -74,11 +74,15 @@ TEST_CASE("control client formats stable JSON status results") {
       .expanded = gisland::ActiveContextStatus{"calendar", "configured", 0},
       .modules = {{"clock", gisland::ControlModuleState::running, true}},
       .socket = "/run/user/1000/gisland.sock",
+      .hidden_mode = true,
+      .visible = false,
   }};
   const auto output = nlohmann::json::parse(gisland::format_control_output(response, true));
-  CHECK(output.at("format_version") == 2);
+  CHECK(output.at("format_version") == 3);
   CHECK(output.at("mode") == "expanded");
   CHECK(output.at("modules").at(0).at("id") == "clock");
+  CHECK(output.at("hidden_mode") == true);
+  CHECK(output.at("visible") == false);
 }
 
 TEST_CASE("control client gives only action responses an extended read deadline") {

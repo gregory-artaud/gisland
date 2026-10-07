@@ -283,7 +283,7 @@ TEST_CASE("lua host transport bounds input and output records") {
   REQUIRE(transport.has_value());
 
   SECTION("input") {
-    const std::string chunk(64 * 1024, 'x');
+    const std::string chunk(4096, 'x');
     for (std::size_t written = 0; written <= gisland::LuaTransport::max_record_bytes;
          written += chunk.size()) {
       write_all(input.write_fd(), chunk);

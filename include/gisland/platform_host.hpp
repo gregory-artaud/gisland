@@ -5,6 +5,7 @@
 
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,6 +38,7 @@ struct PlatformEvent {
 struct InputRegion {
   IslandGeometry geometry;
   IslandPlacement placement;
+  std::optional<std::vector<IslandMaskRow>> mask_rows = std::nullopt;
 };
 
 class PlatformHost {

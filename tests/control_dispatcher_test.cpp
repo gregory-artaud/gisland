@@ -165,6 +165,79 @@ TEST_CASE("successful activation closes an open overlay") {
   CHECK(mode.mode() == gisland::IslandMode::compact);
 }
 
+TEST_CASE("dispatcher consultation follows only successful requests and refreshes on activation") {
+  const gisland::MonotonicTime now{};
+  gisland::RuntimeCoordinator runtime{config()};
+  gisland::OverlayModeController mode;
+  gisland::PresentationController presentation{true};
+  presentation.update(now, true);
+  publish(runtime, "clock", "configured", 0, true, now);
+  gisland::ControlDispatcher dispatcher{
+      runtime,
+      mode,
+      [](std::string, std::uint64_t) -> std::expected<void, gisland::SupervisorCommandError> {
+        return {};
+      },
+      "/tmp/gisland.sock",
+      {},
+      {},
+      1,
+      &presentation};
+
+  const auto rejected = dispatcher.dispatch(gisland::ActivateControl{"missing", {}}, now);
+  CHECK(std::holds_alternative<gisland::ControlError>(rejected.value()));
+  CHECK_FALSE(presentation.should_present());
+
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::ActivateControl{"clock", {}}, now).value()));
+  CHECK(presentation.should_present());
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::ActivateControl{"clock", {}}, now + 2s).value()));
+  presentation.update(now + 4999ms, true);
+  CHECK(presentation.should_present());
+  presentation.update(now + 5s, true);
+  CHECK_FALSE(presentation.should_present());
+}
+
+TEST_CASE("hidden-mode status and collapse separate policy from selection and consultation") {
+  const gisland::MonotonicTime now{};
+  gisland::RuntimeCoordinator runtime{config()};
+  gisland::OverlayModeController mode;
+  gisland::PresentationController presentation{};
+  presentation.update(now, true);
+  publish(runtime, "clock", "configured", 0, true, now);
+  gisland::ControlDispatcher dispatcher{
+      runtime,
+      mode,
+      [](std::string, std::uint64_t) -> std::expected<void, gisland::SupervisorCommandError> {
+        return {};
+      },
+      "/tmp/gisland.sock",
+      {},
+      {},
+      1,
+      &presentation};
+
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::HiddenModeControl{gisland::HiddenModeAction::on}, now).value()));
+  auto status =
+      std::get<gisland::ControlStatus>(dispatcher.dispatch(gisland::StatusControl{}, now).value());
+  CHECK(status.hidden_mode);
+  CHECK_FALSE(status.visible);
+  CHECK(status.mode == gisland::IslandMode::compact);
+  CHECK_FALSE(presentation.should_present());
+
+  presentation.reveal({"clock", "configured"}, 1, now + 4s);
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::CollapseControl{}, now).value()));
+  CHECK(presentation.should_present());
+  CHECK(mode.mode() == gisland::IslandMode::compact);
+
+  REQUIRE(std::holds_alternative<gisland::EmptyControlResult>(
+      dispatcher.dispatch(gisland::CloseControl{}, now).value()));
+  CHECK_FALSE(presentation.should_present());
+}
+
 TEST_CASE("activate-open atomically selects and opens the expanded owner") {
   const gisland::MonotonicTime now{};
   gisland::RuntimeCoordinator runtime{config()};

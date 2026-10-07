@@ -724,6 +724,178 @@ TEST_CASE("live explicit sessions select layout-only transitions for same-contex
   CHECK_FALSE(gisland::use_layout_only_transition(true, true, history, launcher, std::nullopt));
 }
 
+TEST_CASE("hidden presentation uses a real monotonic consultation lease") {
+  const gisland::MonotonicTime now{};
+  gisland::PresentationController controller{true};
+
+  controller.update(now, true);
+  CHECK(controller.hidden_mode());
+  CHECK_FALSE(controller.should_present());
+
+  controller.consult(now);
+  CHECK(controller.should_present());
+  controller.consult(now + 2s);
+  controller.update(now + 4999ms, true);
+  CHECK(controller.should_present());
+  controller.update(now + 5s, true);
+  CHECK_FALSE(controller.should_present());
+
+  controller.consult(now + 6s);
+  controller.set_interaction_hold(true, now + 7s);
+  controller.update(now + 20s, true);
+  CHECK(controller.should_present());
+  controller.set_interaction_hold(false, now + 20s);
+  controller.update(now + 2999ms + 20s, true);
+  CHECK(controller.should_present());
+  controller.update(now + 3s + 20s, true);
+  CHECK_FALSE(controller.should_present());
+}
+
+TEST_CASE("automatic reveal follows its accepted source and never reveals fallback content") {
+  const gisland::MonotonicTime now{};
+  const gisland::ContextKey source{"notifications", "alert"};
+  gisland::PresentationController controller{true};
+  controller.update(now, true);
+
+  controller.reveal(source, 4, now + 8s);
+  CHECK(controller.should_present());
+  controller.reconcile(source, 4);
+  controller.update(now + 7999ms, true);
+  CHECK(controller.should_present());
+  controller.update(now + 8s, true);
+  CHECK_FALSE(controller.should_present());
+
+  controller.reveal(source, 5, std::nullopt);
+  controller.reconcile(source, 5);
+  CHECK(controller.should_present());
+  controller.reconcile(gisland::ContextKey{"clock", "configured"}, 1);
+  CHECK_FALSE(controller.should_present());
+}
+
+TEST_CASE("consultation and automatic presentation survive a hidden-mode policy change") {
+  const gisland::MonotonicTime now{};
+  gisland::PresentationController controller{};
+  controller.consult(now);
+  controller.update(now, true);
+  controller.set_hidden_mode(true, now + 1s);
+  controller.update(now + 2999ms, true);
+  CHECK(controller.should_present());
+  controller.update(now + 3s, true);
+  CHECK_FALSE(controller.should_present());
+
+  const gisland::ContextKey alert{"notifications", "alert"};
+  controller.reveal(alert, 2, now + 8s);
+  controller.set_hidden_mode(false, now + 4s);
+  controller.set_hidden_mode(true, now + 5s);
+  CHECK(controller.should_present());
+}
+
+TEST_CASE("interaction holds survive source expiry and restart a consultation on exit") {
+  const gisland::MonotonicTime now{};
+  gisland::PresentationController controller{true};
+  controller.update(now, true);
+  const gisland::ContextKey alert{"notifications", "alert"};
+  controller.reveal(alert, 2, now + 2s);
+  controller.set_interaction_hold(true, now);
+
+  controller.update(now + 2s, true);
+  CHECK(controller.should_present());
+  controller.reconcile(gisland::ContextKey{"clock", "configured"}, 1);
+  CHECK(controller.should_present());
+  controller.set_interaction_hold(false, now + 2s);
+  controller.update(now + 4999ms, true);
+  CHECK(controller.should_present());
+  controller.update(now + 5s, true);
+  CHECK_FALSE(controller.should_present());
+}
+
+TEST_CASE("presentation requests can precede the first content reconciliation") {
+  const gisland::MonotonicTime now{};
+  const gisland::ContextKey alert{"notifications", "alert"};
+  gisland::PresentationController controller{true};
+  controller.consult(now);
+  controller.reveal(alert, 3, now + 4s);
+  controller.update(now, true);
+  controller.reconcile(alert, 3);
+
+  CHECK(controller.should_present());
+  controller.update(now + 4s, true);
+  CHECK_FALSE(controller.should_present());
+}
+
+TEST_CASE("enabling hidden mode preserves an existing hover hold") {
+  const gisland::MonotonicTime now{};
+  gisland::PresentationController controller{};
+  controller.update(now, true);
+  controller.set_visible(true);
+  controller.set_interaction_hold(true, now);
+  controller.set_hidden_mode(true, now + 1s, false);
+  controller.update(now + 10s, true);
+  CHECK(controller.hidden_mode());
+  CHECK(controller.should_present());
+
+  controller.set_interaction_hold(false, now + 10s);
+  controller.update(now + 12999ms, true);
+  CHECK(controller.should_present());
+  controller.update(now + 13s, true);
+  CHECK_FALSE(controller.should_present());
+}
+
+TEST_CASE("hidden-mode policy switches preserve an active interaction and map state") {
+  const gisland::MonotonicTime now{};
+  gisland::PresentationController controller{};
+  controller.update(now, true);
+  CHECK(controller.should_present());
+
+  controller.set_hidden_mode(true, now, true);
+  CHECK(controller.hidden_mode());
+  CHECK(controller.should_present());
+  controller.set_interaction_hold(false, now + 1s);
+  controller.update(now + 3999ms, true);
+  CHECK(controller.should_present());
+  controller.update(now + 4s, true);
+  CHECK_FALSE(controller.should_present());
+
+  controller.set_visible(true);
+  controller.set_hidden_mode(false, now + 4s, false);
+  CHECK_FALSE(controller.hidden_mode());
+  CHECK(controller.should_present());
+  CHECK(controller.visible());
+}
+
+TEST_CASE("capillary reveal silhouette is empty at rest and matches the themed endpoint") {
+  const gisland::IslandGeometry destination{300.0F, 60.0F, 24.0F};
+  const auto hidden = gisland::reveal_silhouette(destination, 0.0F, 8.0F);
+  CHECK(hidden.contour.empty());
+  CHECK(hidden.rows.empty());
+
+  const auto endpoint = gisland::reveal_silhouette(destination, 1.0F, 8.0F);
+  REQUIRE(endpoint.contour.size() >= 64);
+  CHECK(endpoint.rows.size() == 60);
+  CHECK(endpoint.bounds.width == Approx(300.0F));
+  CHECK(endpoint.bounds.height == Approx(68.0F));
+  CHECK(endpoint.top == Approx(8.0F));
+  CHECK(endpoint.content_opacity == Approx(1.0F));
+}
+
+TEST_CASE("capillary reveal remains attached early and loses its neck by the merge point") {
+  const gisland::IslandGeometry destination{300.0F, 60.0F, 24.0F};
+  const auto early = gisland::reveal_silhouette(destination, 0.35F, 8.0F);
+  REQUIRE_FALSE(early.contour.empty());
+  CHECK(early.contour.front().y == Approx(0.0F));
+  CHECK(early.contour.front().y < early.top);
+  CHECK(early.rows.front().width < 40);
+
+  const auto merged = gisland::reveal_silhouette(destination, 0.78F, 8.0F);
+  REQUIRE_FALSE(merged.contour.empty());
+  CHECK(merged.contour.front().y == Approx(merged.top));
+  CHECK(merged.contour.front().x == Approx(0.0F));
+  CHECK(merged.content_opacity == Approx(0.0F));
+
+  const auto departing = gisland::reveal_content_opacity(0.95F, true);
+  CHECK(departing == Approx(0.0F));
+}
+
 TEST_CASE("layout-only transitions keep new content opaque without an outgoing layer") {
   gisland::ContextTransition transition;
   const gisland::IslandGeometry source{360.0F, 160.0F, 24.0F};

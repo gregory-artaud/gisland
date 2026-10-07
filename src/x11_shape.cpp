@@ -21,12 +21,16 @@ bool RoundedWindowShape::available() const { return available_; }
 
 void RoundedWindowShape::apply(const void *native_window_handle, const IslandGeometry &geometry,
                                const IslandPlacement &placement) const {
+  apply(native_window_handle, placement, rounded_mask_rows(geometry));
+}
+
+void RoundedWindowShape::apply(const void *native_window_handle, const IslandPlacement &placement,
+                               const std::vector<IslandMaskRow> &mask_rows) const {
   if (!available_ || native_window_handle == nullptr) {
     return;
   }
 
   const Window window = *static_cast<const XID *>(native_window_handle);
-  const auto mask_rows = rounded_mask_rows(geometry);
   std::vector<XRectangle> rectangles;
   rectangles.reserve(mask_rows.size());
   for (const auto &row : mask_rows) {

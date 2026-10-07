@@ -63,6 +63,25 @@ void main() {
 }
 )glsl";
 
+constexpr const char *reveal_mask_shader = R"glsl(
+#version 330
+
+in vec2 fragTexCoord;
+in vec4 fragColor;
+
+uniform sampler2D texture0;
+uniform sampler2D maskTexture;
+uniform vec4 colDiffuse;
+
+out vec4 finalColor;
+
+void main() {
+  vec4 content = texture(texture0, fragTexCoord) * fragColor * colDiffuse;
+  float coverage = texture(maskTexture, fragTexCoord).a;
+  finalColor = content * coverage;
+}
+)glsl";
+
 class Window final {
 public:
   Window(const ApplicationConfig &config, const IslandCanvasSize &canvas) {
@@ -114,7 +133,8 @@ enum class ContentAlignment { centered, top_centered };
 void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
                   const IslandGeometry &geometry, const IslandPlacement &placement,
                   Shader blur_shader, int texture_size_location, int blur_radius_location,
-                  ContentAlignment alignment = ContentAlignment::centered, float offset_x = 0.0F) {
+                  ContentAlignment alignment = ContentAlignment::centered, float offset_x = 0.0F,
+                  bool capture_alpha = false) {
   if (visual.opacity <= 0.001F) {
     return;
   }
@@ -135,7 +155,8 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
       height,
   };
 
-  rlSetBlendFactorsSeparate(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_ZERO, RL_ONE, RL_FUNC_ADD,
+  rlSetBlendFactorsSeparate(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, capture_alpha ? RL_ONE : RL_ZERO,
+                            capture_alpha ? RL_ONE_MINUS_SRC_ALPHA : RL_ONE, RL_FUNC_ADD,
                             RL_FUNC_ADD);
   BeginBlendMode(BLEND_CUSTOM_SEPARATE);
   BeginShaderMode(blur_shader);
@@ -143,6 +164,57 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
                  ColorAlpha(WHITE, std::clamp(visual.opacity, 0.0F, 1.0F)));
   EndShaderMode();
   EndBlendMode();
+}
+
+struct RevealCompositeResources {
+  RenderTexture2D content{};
+  RenderTexture2D mask{};
+  Shader shader{};
+  int mask_texture_location{-1};
+  int width{};
+  int height{};
+};
+
+[[nodiscard]] std::expected<RevealCompositeResources, std::string>
+create_reveal_composite(int width, int height) {
+  RevealCompositeResources resources;
+  resources.width = width;
+  resources.height = height;
+  resources.content = LoadRenderTexture(width, height);
+  if (!IsRenderTextureValid(resources.content)) {
+    return std::unexpected("could not create hidden-mode content render target");
+  }
+  resources.mask = LoadRenderTexture(width, height);
+  if (!IsRenderTextureValid(resources.mask)) {
+    UnloadRenderTexture(resources.content);
+    return std::unexpected("could not create hidden-mode mask render target");
+  }
+  resources.shader = LoadShaderFromMemory(nullptr, reveal_mask_shader);
+  if (!IsShaderValid(resources.shader)) {
+    UnloadRenderTexture(resources.mask);
+    UnloadRenderTexture(resources.content);
+    return std::unexpected("could not create hidden-mode mask shader");
+  }
+  resources.mask_texture_location = GetShaderLocation(resources.shader, "maskTexture");
+  if (resources.mask_texture_location < 0) {
+    UnloadShader(resources.shader);
+    UnloadRenderTexture(resources.mask);
+    UnloadRenderTexture(resources.content);
+    return std::unexpected("hidden-mode mask shader omitted its mask texture");
+  }
+  return resources;
+}
+
+void unload_reveal_composite(RevealCompositeResources &resources) {
+  if (IsRenderTextureValid(resources.content)) {
+    UnloadRenderTexture(resources.content);
+  }
+  if (IsRenderTextureValid(resources.mask)) {
+    UnloadRenderTexture(resources.mask);
+  }
+  if (IsShaderValid(resources.shader)) {
+    UnloadShader(resources.shader);
+  }
 }
 
 [[nodiscard]] float mix(float from, float to, float progress) {
@@ -189,6 +261,67 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
                         static_cast<float>(view.bounds.height), static_cast<float>(view.radius)};
 }
 
+[[nodiscard]] Color raylib_color(Rgba value) {
+  return Color{value.red, value.green, value.blue, value.alpha};
+}
+
+void draw_capillary_layer(const IslandRevealSilhouette &silhouette, float center_x, float origin_y,
+                          float center_y, float scale_x, float scale_y, float offset_x,
+                          float offset_y, Rgba fill) {
+  if (silhouette.contour.size() < 3U || fill.alpha == 0) {
+    return;
+  }
+  std::vector<Vector2> vertices;
+  vertices.reserve(silhouette.contour.size() + 1U);
+  vertices.push_back({center_x + offset_x, origin_y + center_y + offset_y});
+  for (const auto &point : silhouette.contour) {
+    vertices.push_back({center_x + (point.x * scale_x) + offset_x,
+                        origin_y + center_y + ((point.y - center_y) * scale_y) + offset_y});
+  }
+  DrawTriangleFan(vertices.data(), static_cast<int>(vertices.size()), raylib_color(fill));
+}
+
+void draw_capillary_surface(const IslandRevealSilhouette &silhouette, const RoundedView &view,
+                            IslandPlacement body_placement, float anchor_width, float origin_y) {
+  const float center_x = body_placement.x + (anchor_width / 2.0F);
+  const float center_y = silhouette.top + ((silhouette.bounds.height - silhouette.top) / 2.0F);
+  if (view.shadow.color.alpha > 0) {
+    const int layers = std::max(1, view.shadow.blur + 1);
+    for (int blur = view.shadow.blur; blur >= 0; --blur) {
+      const float expansion = static_cast<float>(view.shadow.spread + blur);
+      const float scale_x = 1.0F + (2.0F * expansion / std::max(1.0F, silhouette.bounds.width));
+      const float scale_y = 1.0F + (2.0F * expansion / std::max(1.0F, silhouette.bounds.height));
+      Rgba shadow = view.shadow.color;
+      shadow.alpha =
+          static_cast<std::uint8_t>(std::max(1, static_cast<int>(shadow.alpha) / layers));
+      draw_capillary_layer(silhouette, center_x, origin_y, center_y, scale_x, scale_y,
+                           static_cast<float>(view.shadow.offset_x),
+                           static_cast<float>(view.shadow.offset_y), shadow);
+    }
+  }
+  draw_capillary_layer(silhouette, center_x, origin_y, center_y, 1.0F, 1.0F, 0.0F, 0.0F,
+                       view.surface);
+  if (view.border > 0 && silhouette.contour.size() > 1U) {
+    const auto &contour = silhouette.contour;
+    const Color border = raylib_color(view.border_color);
+    for (std::size_t index = 0; index + 1U < contour.size(); ++index) {
+      const auto &from = contour[index];
+      const auto &to = contour[index + 1U];
+      DrawLineEx({center_x + from.x, origin_y + from.y}, {center_x + to.x, origin_y + to.y},
+                 static_cast<float>(view.border), border);
+    }
+  }
+}
+
+[[nodiscard]] bool point_in_rows(Vector2 point, const std::vector<IslandMaskRow> &rows,
+                                 IslandPlacement body_placement, float origin_y) {
+  const int x = static_cast<int>(std::floor(point.x - body_placement.x));
+  const int y = static_cast<int>(std::floor(point.y - origin_y));
+  return std::ranges::any_of(rows, [x, y](const IslandMaskRow &row) {
+    return row.y == y && x >= row.x && x < row.x + row.width;
+  });
+}
+
 [[nodiscard]] CanvasGeometry canvas_geometry(const IslandCanvasSize &canvas) {
   const float surface_width = canvas.surface_width > 0.0F ? canvas.surface_width : canvas.width;
   return CanvasGeometry{
@@ -198,6 +331,12 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
       static_cast<int>(std::lround(canvas.surface_y)),
       std::max(1, static_cast<int>(std::lround(surface_width))),
   };
+}
+
+[[nodiscard]] IslandCanvasSize canvas_for_presentation(const Theme &theme, bool hidden_mode,
+                                                       int top_margin) {
+  const auto canvas = fixed_canvas_for(theme);
+  return hidden_mode ? reserve_reveal_margin(canvas, static_cast<float>(top_margin)) : canvas;
 }
 
 struct RenderedContext {
@@ -227,6 +366,14 @@ struct RenderedSlot {
 struct RenderContextError {
   ViewSlot slot;
   std::string message;
+};
+
+struct AcceptedPresentation {
+  ContextKey key;
+  std::uint64_t revision;
+  std::optional<MonotonicTime> expires_at;
+  bool expanded{};
+  std::optional<std::chrono::milliseconds> duration;
 };
 
 [[nodiscard]] RoundedView visible_surface(const RenderedContext &context, float mode_progress) {
@@ -540,7 +687,9 @@ int Application::run() {
   const IslandGeometry initial_geometry{static_cast<float>(compact_theme.min_width),
                                         static_cast<float>(compact_theme.min_height),
                                         static_cast<float>(compact_theme.radius)};
-  IslandCanvasSize canvas = fixed_canvas_for(bootstrap_.theme);
+  bool canvas_reserves_reveal_margin = bootstrap_.config.interaction.hidden_mode;
+  IslandCanvasSize canvas =
+      canvas_for_presentation(bootstrap_.theme, canvas_reserves_reveal_margin, config_.top_margin);
   Window window{config_, canvas};
   if (!Window::is_ready()) {
     std::cerr << "Failed to initialize the raylib window\n";
@@ -585,9 +734,11 @@ int Application::run() {
   const int texture_size_location = GetShaderLocation(blur_shader, "textureSize");
   const int blur_radius_location = GetShaderLocation(blur_shader, "blurRadius");
   OverlayModeController mode_controller{bootstrap_.config.interaction.hover_exit};
+  PresentationController presentation{bootstrap_.config.interaction.hidden_mode};
   InteractionController controls;
   IslandMode mode = mode_controller.mode();
   SpringProgress spring;
+  SpringProgress reveal_spring;
   ProgressAnimator compact_progress;
   ProgressAnimator expanded_progress;
   ContentCrossfade content_crossfade;
@@ -607,6 +758,7 @@ int Application::run() {
   bool compact_refresh_deferred = false;
   bool keyboard_session = false;
   std::optional<ContextKey> keyboard_context;
+  std::optional<ContextKey> keyboard_activation_to_release;
   std::optional<std::string> keyboard_input_id;
   std::optional<TextInputEditor> text_editor;
   KeyboardNavigationController keyboard_navigation;
@@ -633,6 +785,13 @@ int Application::run() {
 
   int native_width = std::max(1, static_cast<int>(std::lround(canvas.width)));
   int native_height = std::max(1, static_cast<int>(std::lround(canvas.height)));
+  std::optional<RevealCompositeResources> reveal_composite;
+  auto initial_reveal_composite = create_reveal_composite(native_width, native_height);
+  if (initial_reveal_composite) {
+    reveal_composite.emplace(std::move(*initial_reveal_composite));
+  } else {
+    std::cerr << initial_reveal_composite.error() << '\n';
+  }
   std::optional<AbsolutePlacement> native_position;
   const auto apply_native_canvas = [&] {
     const CanvasGeometry geometry = canvas_geometry(canvas);
@@ -653,6 +812,33 @@ int Application::run() {
       SetWindowPosition(positioned->x, positioned->y);
       native_position = *positioned;
     }
+  };
+  const auto sync_presentation_canvas = [&] {
+    const bool should_reserve_reveal_margin = presentation.hidden_mode();
+    if (canvas_reserves_reveal_margin == should_reserve_reveal_margin) {
+      return;
+    }
+    canvas =
+        canvas_for_presentation(bootstrap_.theme, should_reserve_reveal_margin, config_.top_margin);
+    canvas_reserves_reveal_margin = should_reserve_reveal_margin;
+    const auto geometry = canvas_geometry(canvas);
+    if (geometry.width != native_width || geometry.height != native_height) {
+      auto created = create_reveal_composite(geometry.width, geometry.height);
+      if (created) {
+        if (reveal_composite) {
+          unload_reveal_composite(*reveal_composite);
+        }
+        reveal_composite.emplace(std::move(*created));
+      } else {
+        std::cerr << created.error() << '\n';
+        if (reveal_composite) {
+          unload_reveal_composite(*reveal_composite);
+          reveal_composite.reset();
+        }
+      }
+    }
+    apply_native_canvas();
+    placement = place_at_top_center(current, canvas);
   };
   refresh_output();
   apply_native_canvas();
@@ -827,6 +1013,7 @@ int Application::run() {
   ControlDispatcher *active_dispatcher = nullptr;
 
   const auto reload_application = [&](MonotonicTime now) -> std::expected<void, std::string> {
+    const bool previous_hidden_config = bootstrap_.config.interaction.hidden_mode;
     auto candidate_bootstrap = load_reload_candidate(bootstrap_);
     if (!candidate_bootstrap) {
       return std::unexpected(candidate_bootstrap.error().path.string() + ": " +
@@ -895,12 +1082,32 @@ int Application::run() {
       }
       candidate_rendered.emplace(std::move(*candidate));
     }
-    const auto candidate_canvas = fixed_canvas_for(candidate_bootstrap->theme);
+    const bool candidate_hidden_mode =
+        candidate_bootstrap->config.interaction.hidden_mode != previous_hidden_config
+            ? candidate_bootstrap->config.interaction.hidden_mode
+            : presentation.hidden_mode();
+    const auto candidate_canvas = canvas_for_presentation(
+        candidate_bootstrap->theme, candidate_hidden_mode, config_.top_margin);
+    const auto candidate_native = canvas_geometry(candidate_canvas);
+    std::optional<RevealCompositeResources> candidate_reveal_composite;
+    if (candidate_native.width != native_width || candidate_native.height != native_height) {
+      auto created = create_reveal_composite(candidate_native.width, candidate_native.height);
+      if (!created) {
+        if (candidate_rendered) {
+          unload(*candidate_rendered);
+        }
+        return std::unexpected(created.error());
+      }
+      candidate_reveal_composite.emplace(std::move(*created));
+    }
     if (auto positioned =
             place_canvas(candidate_output, canvas_geometry(candidate_canvas), config_.top_margin);
         !positioned) {
       if (candidate_rendered) {
         unload(*candidate_rendered);
+      }
+      if (candidate_reveal_composite) {
+        unload_reveal_composite(*candidate_reveal_composite);
       }
       return std::unexpected(positioned.error().message);
     }
@@ -908,6 +1115,9 @@ int Application::run() {
     if (auto queued = supervisor.reconfigure(std::move(plan->supervisor)); !queued) {
       if (candidate_rendered) {
         unload(*candidate_rendered);
+      }
+      if (candidate_reveal_composite) {
+        unload_reveal_composite(*candidate_reveal_composite);
       }
       return std::unexpected("module reconfiguration could not be queued");
     }
@@ -918,12 +1128,23 @@ int Application::run() {
     }
 
     runtime.commit_reload(std::move(*prepared_runtime));
+    if (candidate_reveal_composite) {
+      if (reveal_composite) {
+        unload_reveal_composite(*reveal_composite);
+      }
+      reveal_composite = std::move(candidate_reveal_composite);
+    }
     *fonts = std::move(*candidate_fonts);
     *rich_text = std::move(*candidate_rich_text);
     bootstrap_ = std::move(*candidate_bootstrap);
     output = std::move(candidate_output);
     canvas = candidate_canvas;
+    canvas_reserves_reveal_margin = candidate_hidden_mode;
     mode_controller.set_exit_tolerance(bootstrap_.config.interaction.hover_exit);
+    if (previous_hidden_config != bootstrap_.config.interaction.hidden_mode) {
+      presentation.set_hidden_mode(bootstrap_.config.interaction.hidden_mode, now,
+                                   mode_controller.explicitly_open());
+    }
     if (mode_controller.mode() == IslandMode::expanded &&
         (!candidate_rendered || !candidate_rendered->expanded)) {
       mode_controller.close();
@@ -979,7 +1200,9 @@ int Application::run() {
       },
       [&supervisor](std::string instance_id, std::uint64_t generation, ActionMessage message) {
         return supervisor.send_action(std::move(instance_id), generation, std::move(message));
-      }};
+      },
+      1,
+      &presentation};
   active_dispatcher = &dispatcher;
 
   while (!WindowShouldClose()) {
@@ -1006,6 +1229,7 @@ int Application::run() {
         std::cerr << "automatic reload rejected: " << reloaded.error() << '\n';
       }
     }
+    std::optional<AcceptedPresentation> accepted_presentation;
     for (const auto &event : supervisor.drain_events()) {
       log_supervisor_event(event);
       std::visit(
@@ -1026,9 +1250,48 @@ int Application::run() {
             }
           },
           event);
-      if (auto consumed = runtime.consume(event); !consumed) {
+      auto consumed = runtime.consume(event);
+      if (!consumed) {
         std::cerr << '[' << consumed.error().instance_id << "] " << consumed.error().message
                   << '\n';
+      } else if (const auto *module_event = std::get_if<ModuleMessageEvent>(&event)) {
+        if (const auto *published = std::get_if<PublishMessage>(&module_event->message)) {
+          const auto active = runtime.selections(module_event->at);
+          const ContextKey key{module_event->instance_id, published->context_id};
+          const auto matches = [&key](const RuntimeSelection &selection) {
+            return selection.context != nullptr && selection.context->key == key &&
+                   selection.context->revision == selection.revision;
+          };
+          const bool selected_compact = matches(active.compact);
+          const bool selected_expanded = matches(active.expanded);
+          if (selected_compact || selected_expanded) {
+            const PublishedContext *context =
+                selected_compact ? active.compact.context : active.expanded.context;
+            const bool explicit_expanded = selected_expanded && !context->fallback_only &&
+                                           context->presentation &&
+                                           context->presentation->reveal == Reveal::expanded;
+            const bool automatic_compact = selected_compact && !context->fallback_only &&
+                                           context->compact && context->expires_at;
+            if (explicit_expanded || automatic_compact) {
+              auto expires_at = context->expires_at;
+              const auto duration = explicit_expanded && context->presentation
+                                        ? context->presentation->duration
+                                        : std::nullopt;
+              if (duration) {
+                const auto presentation_deadline = module_event->at + *duration;
+                expires_at = expires_at ? std::min(*expires_at, presentation_deadline)
+                                        : std::optional{presentation_deadline};
+              }
+              accepted_presentation = AcceptedPresentation{
+                  .key = context->key,
+                  .revision = context->revision,
+                  .expires_at = expires_at,
+                  .expanded = explicit_expanded,
+                  .duration = duration,
+              };
+            }
+          }
+        }
       }
     }
     dispatcher.expire(now);
@@ -1037,11 +1300,22 @@ int Application::run() {
     }
 
     const Vector2 pointer = GetMousePosition();
-    const bool hovered = IsCursorOnScreen() &&
-                         CheckCollisionPointRec(pointer, Rectangle{placement.x, placement.y,
-                                                                   current.width, current.height});
-    runtime.set_activation_held(hovered && mode_controller.mode() == IslandMode::expanded &&
-                                rendered && rendered->expanded.has_value());
+    const auto hover_silhouette = presentation.hidden_mode()
+                                      ? reveal_silhouette(current, reveal_spring.value(),
+                                                          static_cast<float>(config_.top_margin))
+                                      : IslandRevealSilhouette{};
+    const float hover_origin_y =
+        placement.y - (presentation.hidden_mode() ? static_cast<float>(config_.top_margin) : 0.0F);
+    const bool hovered =
+        visible && IsCursorOnScreen() &&
+        (presentation.hidden_mode()
+             ? point_in_rows(pointer, hover_silhouette.rows, placement, hover_origin_y)
+             : CheckCollisionPointRec(
+                   pointer, Rectangle{placement.x, placement.y, current.width, current.height}));
+    presentation.set_interaction_hold(hovered || keyboard_session, now);
+    runtime.set_activation_held((hovered || keyboard_session) &&
+                                mode_controller.mode() == IslandMode::expanded && rendered &&
+                                rendered->expanded.has_value());
     static_cast<void>(runtime.active(now));
     ipc->advance(
         now,
@@ -1049,6 +1323,7 @@ int Application::run() {
           return dispatcher.dispatch_deferred(command, now);
         },
         [&dispatcher](PendingControlToken token) { static_cast<void>(dispatcher.cancel(token)); });
+    sync_presentation_canvas();
     auto selection = runtime.selections(now);
     const bool expanded_changed =
         selection.expanded.context != nullptr
@@ -1063,7 +1338,13 @@ int Application::run() {
         selection.expanded.context == nullptr
             ? std::nullopt
             : std::optional<ContextKey>{selection.expanded.context->key};
+    presentation.update(now, rendered.has_value());
+    presentation.reconcile(compact_key, selection.compact.revision, expanded_key,
+                           selection.expanded.revision);
+    const bool retaining_hidden_departure =
+        presentation.hidden_mode() && visible && !presentation.should_present();
     const bool changed =
+        !retaining_hidden_departure &&
         (selection.compact.context != nullptr || selection.expanded.context != nullptr) &&
         (!rendered || rendered->compact_key != compact_key ||
          rendered->compact_revision != selection.compact.revision || expanded_changed ||
@@ -1106,6 +1387,16 @@ int Application::run() {
             mode_controller.set_reveal(false);
           }
         }
+        if (accepted_presentation &&
+            ((selection.compact.context != nullptr &&
+              selection.compact.context->key == accepted_presentation->key &&
+              selection.compact.revision == accepted_presentation->revision) ||
+             (selection.expanded.context != nullptr &&
+              selection.expanded.context->key == accepted_presentation->key &&
+              selection.expanded.revision == accepted_presentation->revision))) {
+          presentation.reveal(accepted_presentation->key, accepted_presentation->revision,
+                              accepted_presentation->expires_at);
+        }
       }
     } else if (selection.compact.context == nullptr && selection.expanded.context == nullptr &&
                rendered) {
@@ -1145,12 +1436,15 @@ int Application::run() {
       }
       if (target->close_on_activate) {
         mode_controller.close();
+        runtime.clear_activation();
+        presentation.close();
       }
       return true;
     };
 
     bool topology_changed = false;
     bool keyboard_focus_lost = false;
+    bool hidden_arrival_pending = false;
     if (host) {
       auto events = host->poll_events();
       if (!events) {
@@ -1169,7 +1463,7 @@ int Application::run() {
       refresh_output();
       apply_native_canvas();
     }
-    const auto end_keyboard_session = [&] {
+    const auto end_keyboard_session = [&](bool release_activation = true) {
       const auto closing_context = keyboard_context;
       if (host) {
         if (auto restored = host->end_keyboard_focus(); !restored) {
@@ -1183,15 +1477,33 @@ int Application::run() {
       keyboard_navigation = KeyboardNavigationController{};
       text_action_pending = false;
       if (closing_context) {
-        runtime.clear_activation(*closing_context);
+        if (release_activation) {
+          runtime.clear_activation(*closing_context);
+        } else {
+          keyboard_activation_to_release = closing_context;
+        }
       }
     };
     if (keyboard_focus_lost && keyboard_session) {
       mode_controller.close();
-      end_keyboard_session();
+      if (presentation.hidden_mode()) {
+        mode_controller.set_reveal(rendered && rendered->expanded.has_value(),
+                                   std::chrono::milliseconds{3000});
+        presentation.set_interaction_hold(hovered, now);
+      }
+      end_keyboard_session(!presentation.hidden_mode());
     }
     if (mode_controller.explicitly_open() && !keyboard_session && rendered && rendered->expanded &&
         rendered->expanded_key) {
+      if (presentation.hidden_mode() && !visible) {
+        BeginDrawing();
+        ClearBackground(BLANK);
+        EndDrawing();
+        Window::show();
+        visible = true;
+        presentation.set_visible(true);
+        hidden_arrival_pending = true;
+      }
       bool focus_acquired = true;
       if (host) {
         if (auto focused = host->begin_keyboard_focus(); !focused) {
@@ -1201,6 +1513,7 @@ int Application::run() {
       }
       if (focus_acquired) {
         keyboard_session = true;
+        keyboard_activation_to_release.reset();
         keyboard_context = rendered->expanded_key;
         keyboard_navigation.reconcile(*rendered->expanded);
         if (auto *input = first_text_input(*rendered->expanded); input != nullptr) {
@@ -1218,6 +1531,7 @@ int Application::run() {
       const bool control = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
       if (IsKeyPressed(KEY_ESCAPE)) {
         mode_controller.close();
+        presentation.close();
         end_keyboard_session();
       } else {
         const auto pressed_or_repeated = [](int key) {
@@ -1335,20 +1649,34 @@ int Application::run() {
 
     mode_controller.update(hovered, rendered && rendered->expanded.has_value(), delta_seconds);
     const IslandMode next_mode = mode_controller.mode();
+    presentation.set_interaction_hold(hovered || keyboard_session, now);
+    const bool should_present = presentation.should_present();
     if (next_mode != mode) {
+      const bool departing_hidden = presentation.hidden_mode() && !should_present && visible;
       mode = next_mode;
-      spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);
-      content_crossfade.set_mode(mode, bootstrap_.theme.animation().compact_to_expanded_ms);
-    }
-    for (const auto &update : runtime.visibility_updates(now, mode)) {
-      if (auto sent = supervisor.send(update.instance_id, VisibilityMessage{update.visibility});
-          !sent) {
-        std::cerr << '[' << update.instance_id << "] visibility update failed\n";
+      if (!departing_hidden) {
+        spring.set_target(mode == IslandMode::expanded ? 1.0F : 0.0F);
+        content_crossfade.set_mode(mode, bootstrap_.theme.animation().compact_to_expanded_ms);
       }
+    }
+    if ((should_present && !visible && presentation.hidden_mode()) || hidden_arrival_pending) {
+      spring.snap(mode == IslandMode::expanded ? 1.0F : 0.0F);
+      content_crossfade.set_mode(mode, std::chrono::milliseconds{0});
     }
 
     const float animation_delta =
         delta_seconds * static_cast<float>(bootstrap_.config.interaction.animation_speed);
+    if (!presentation.hidden_mode() || bootstrap_.config.interaction.reduced_motion) {
+      reveal_spring.snap(should_present ? 1.0F : 0.0F);
+    } else {
+      reveal_spring.set_target(should_present ? 1.0F : 0.0F);
+      reveal_spring.update(animation_delta);
+    }
+    if (should_present && !visible) {
+      Window::show();
+      visible = true;
+      presentation.set_visible(true);
+    }
     indicator_elapsed_seconds += static_cast<double>(std::max(animation_delta, 0.0F));
     const IndicatorAnimationState indicator_animation{indicator_elapsed_seconds,
                                                       bootstrap_.config.interaction.reduced_motion};
@@ -1401,7 +1729,8 @@ int Application::run() {
     const bool expanded_settled = !context_transition.active() && mode == IslandMode::expanded &&
                                   spring.value() == 1.0F && expanded_visual.opacity == 1.0F &&
                                   expanded_visual.blur == 0.0F && expanded_visual.scale == 1.0F;
-    actions_ready = expanded_settled && rendered && rendered->expanded.has_value();
+    actions_ready = expanded_settled && rendered && rendered->expanded.has_value() && visible &&
+                    (!presentation.hidden_mode() || reveal_spring.value() >= 0.78F);
     if (rendered) {
       const auto transition_visual = context_transition.visual();
       RoundedView surface = visible_surface(*rendered, spring.value());
@@ -1414,79 +1743,154 @@ int Application::run() {
       placement = place_at_top_center(current, canvas);
       surface.bounds.x = static_cast<int>(std::lround(placement.x));
       surface.bounds.y = static_cast<int>(std::lround(placement.y));
+      const float reveal_progress = reveal_spring.value();
+      const auto silhouette =
+          presentation.hidden_mode()
+              ? reveal_silhouette(current, reveal_progress, static_cast<float>(config_.top_margin))
+              : IslandRevealSilhouette{};
+      const bool capillary_frame =
+          presentation.hidden_mode() && std::fabs(reveal_progress - 1.0F) >= 0.0005F;
+      const float reveal_origin_y = placement.y - static_cast<float>(config_.top_margin);
       if (host) {
-        if (auto shaped = host->update_input_region(InputRegion{current, placement}); !shaped) {
+        const IslandPlacement mask_placement{placement.x,
+                                             capillary_frame ? reveal_origin_y : placement.y};
+        const InputRegion region{current, mask_placement,
+                                 capillary_frame ? std::optional{silhouette.rows} : std::nullopt};
+        if (auto shaped = host->update_input_region(region); !shaped) {
           std::cerr << shaped.error().message << '\n';
         }
       }
       BeginDrawing();
       ClearBackground(BLANK);
-      if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}, {}}); !drawn) {
-        std::cerr << drawn.error().message << '\n';
-      }
-      if (outgoing_content) {
-        BeginScissorMode(static_cast<int>(std::lround(placement.x)),
-                         static_cast<int>(std::lround(placement.y)),
-                         std::max(1, static_cast<int>(std::lround(current.width))),
-                         std::max(1, static_cast<int>(std::lround(current.height))));
-        draw_content(
-            *outgoing_content,
-            ContentVisual{context_outgoing_opacity(context_transition_kind, transition_visual),
-                          0.0F, 1.0F},
-            current, placement, blur_shader, texture_size_location, blur_radius_location,
-            context_content_alignment, transition_visual.outgoing_offset_x);
-        EndScissorMode();
+      if (capillary_frame) {
+        draw_capillary_surface(silhouette, surface, placement, current.width, reveal_origin_y);
+      } else {
+        if (auto drawn = painter.draw_surface(LayoutPlan{surface, {}, {}}); !drawn) {
+          std::cerr << drawn.error().message << '\n';
+        }
       }
       const float incoming_opacity =
           context_transition.active()
               ? context_incoming_opacity(context_transition_kind, transition_visual)
               : 1.0F;
-      BeginScissorMode(static_cast<int>(std::lround(placement.x)),
-                       static_cast<int>(std::lround(placement.y)),
-                       std::max(1, static_cast<int>(std::lround(current.width))),
-                       std::max(1, static_cast<int>(std::lround(current.height))));
-      draw_content(rendered->compact_content,
-                   with_opacity(content_crossfade.compact(), incoming_opacity), current, placement,
-                   blur_shader, texture_size_location, blur_radius_location,
-                   context_content_alignment, transition_visual.incoming_offset_x);
-      if (button_hover) {
-        const LayoutPlan hover_plan{{}, {*button_hover}, {}};
-        if (auto drawn = painter.draw_content(
-                hover_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
-                                         static_cast<int>(std::lround(placement.y))});
-            !drawn) {
-          std::cerr << drawn.error().message << '\n';
+      const auto draw_content_layers = [&](float reveal_opacity, bool capture_alpha = false) {
+        if (outgoing_content) {
+          draw_content(
+              *outgoing_content,
+              ContentVisual{context_outgoing_opacity(context_transition_kind, transition_visual) *
+                                reveal_opacity,
+                            0.0F, 1.0F},
+              current, placement, blur_shader, texture_size_location, blur_radius_location,
+              context_content_alignment, transition_visual.outgoing_offset_x, capture_alpha);
         }
-      }
-      if (keyboard_highlight) {
-        const LayoutPlan highlight_plan{{}, {*keyboard_highlight}, {}};
-        if (auto drawn = painter.draw_content(
-                highlight_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
-                                             static_cast<int>(std::lround(placement.y))});
-            !drawn) {
-          std::cerr << drawn.error().message << '\n';
+        draw_content(rendered->compact_content,
+                     with_opacity(content_crossfade.compact(), incoming_opacity * reveal_opacity),
+                     current, placement, blur_shader, texture_size_location, blur_radius_location,
+                     context_content_alignment, transition_visual.incoming_offset_x, capture_alpha);
+        if (button_hover) {
+          const LayoutPlan hover_plan{{}, {*button_hover}, {}};
+          if (auto drawn = painter.draw_content(
+                  hover_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
+                                           static_cast<int>(std::lround(placement.y))});
+              !drawn) {
+            std::cerr << drawn.error().message << '\n';
+          }
         }
+        if (keyboard_highlight) {
+          const LayoutPlan highlight_plan{{}, {*keyboard_highlight}, {}};
+          if (auto drawn = painter.draw_content(
+                  highlight_plan, RenderOrigin{static_cast<int>(std::lround(placement.x)),
+                                               static_cast<int>(std::lround(placement.y))});
+              !drawn) {
+            std::cerr << drawn.error().message << '\n';
+          }
+        }
+        if (rendered->expanded_content) {
+          draw_content(
+              *rendered->expanded_content,
+              with_opacity(content_crossfade.expanded(), incoming_opacity * reveal_opacity),
+              current, placement, blur_shader, texture_size_location, blur_radius_location,
+              context_content_alignment, transition_visual.incoming_offset_x, capture_alpha);
+        }
+      };
+      if (capillary_frame) {
+        const float opacity = reveal_content_opacity(reveal_progress, !should_present);
+        if (opacity > 0.0F && reveal_composite && IsRenderTextureValid(reveal_composite->content) &&
+            IsRenderTextureValid(reveal_composite->mask)) {
+          BeginTextureMode(reveal_composite->mask);
+          ClearBackground(BLANK);
+          const int mask_x = static_cast<int>(std::lround(placement.x));
+          const int mask_y = static_cast<int>(std::lround(reveal_origin_y));
+          for (const auto &row : silhouette.rows) {
+            DrawRectangle(mask_x + row.x, mask_y + row.y, row.width, 1, WHITE);
+          }
+          EndTextureMode();
+
+          BeginTextureMode(reveal_composite->content);
+          ClearBackground(BLANK);
+          draw_content_layers(opacity, true);
+          EndTextureMode();
+
+          rlSetBlendFactorsSeparate(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA,
+                                    RL_FUNC_ADD, RL_FUNC_ADD);
+          BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+          BeginShaderMode(reveal_composite->shader);
+          SetShaderValueTexture(reveal_composite->shader, reveal_composite->mask_texture_location,
+                                reveal_composite->mask.texture);
+          const Rectangle source{0.0F, 0.0F, static_cast<float>(reveal_composite->width),
+                                 -static_cast<float>(reveal_composite->height)};
+          const Rectangle destination{0.0F, 0.0F, static_cast<float>(reveal_composite->width),
+                                      static_cast<float>(reveal_composite->height)};
+          DrawTexturePro(reveal_composite->content.texture, source, destination, Vector2{}, 0.0F,
+                         WHITE);
+          EndShaderMode();
+          EndBlendMode();
+        } else if (opacity > 0.0F) {
+          for (const auto &row : silhouette.rows) {
+            BeginScissorMode(static_cast<int>(std::lround(placement.x)) + row.x,
+                             static_cast<int>(std::lround(reveal_origin_y)) + row.y, row.width, 1);
+            draw_content_layers(opacity);
+            EndScissorMode();
+          }
+        }
+      } else {
+        BeginScissorMode(static_cast<int>(std::lround(placement.x)),
+                         static_cast<int>(std::lround(placement.y)),
+                         std::max(1, static_cast<int>(std::lround(current.width))),
+                         std::max(1, static_cast<int>(std::lround(current.height))));
+        draw_content_layers(1.0F);
+        EndScissorMode();
       }
-      if (rendered->expanded_content) {
-        draw_content(*rendered->expanded_content,
-                     with_opacity(content_crossfade.expanded(), incoming_opacity), current,
-                     placement, blur_shader, texture_size_location, blur_radius_location,
-                     context_content_alignment, transition_visual.incoming_offset_x);
-      }
-      EndScissorMode();
       EndDrawing();
-      const bool should_be_visible = mode == IslandMode::expanded || rendered->compact_key;
-      if (should_be_visible && !visible) {
-        Window::show();
-        visible = true;
-      } else if (!should_be_visible && visible) {
+      if (!should_present && visible &&
+          (!presentation.hidden_mode() || reveal_spring.value() == 0.0F)) {
         Window::hide();
         visible = false;
+        presentation.set_visible(false);
+        if (keyboard_activation_to_release) {
+          runtime.clear_activation(*keyboard_activation_to_release);
+          keyboard_activation_to_release.reset();
+        }
       }
     } else {
       BeginDrawing();
       ClearBackground(BLANK);
       EndDrawing();
+      if (visible) {
+        Window::hide();
+        visible = false;
+        presentation.set_visible(false);
+      }
+      if (!presentation.should_present() && keyboard_activation_to_release) {
+        runtime.clear_activation(*keyboard_activation_to_release);
+        keyboard_activation_to_release.reset();
+      }
+    }
+    for (const auto &update : runtime.visibility_updates(now, mode, visible)) {
+      if (auto sent = supervisor.send(update.instance_id, VisibilityMessage{update.visibility});
+          !sent) {
+        std::cerr << '[' << update.instance_id << "] visibility update failed\n";
+      }
     }
   }
 
@@ -1506,6 +1910,9 @@ int Application::run() {
   clear_outgoing();
   if (rendered) {
     unload(*rendered);
+  }
+  if (reveal_composite) {
+    unload_reveal_composite(*reveal_composite);
   }
   UnloadShader(blur_shader);
   return EXIT_SUCCESS;

@@ -24,6 +24,14 @@ struct CloseControl {
 struct ToggleControl {
   bool operator==(const ToggleControl &) const = default;
 };
+enum class HiddenModeAction { on, off, toggle };
+struct HiddenModeControl {
+  HiddenModeAction action;
+  bool operator==(const HiddenModeControl &) const = default;
+};
+struct CollapseControl {
+  bool operator==(const CollapseControl &) const = default;
+};
 struct StatusControl {
   bool operator==(const StatusControl &) const = default;
 };
@@ -58,9 +66,9 @@ struct ActionControl {
 };
 
 using ControlCommand =
-    std::variant<OpenControl, CloseControl, ToggleControl, StatusControl, ModulesControl,
-                 ReloadControl, RestartModuleControl, ActivateControl, ActivateOpenControl,
-                 DismissControl, ActionControl>;
+    std::variant<OpenControl, CloseControl, ToggleControl, HiddenModeControl, CollapseControl,
+                 StatusControl, ModulesControl, ReloadControl, RestartModuleControl,
+                 ActivateControl, ActivateOpenControl, DismissControl, ActionControl>;
 
 enum class ControlErrorCode {
   invalid_request,
@@ -108,6 +116,8 @@ struct ControlStatus {
   std::optional<ActiveContextStatus> expanded;
   std::vector<ModuleControlStatus> modules;
   std::string socket;
+  bool hidden_mode{false};
+  bool visible{true};
 };
 
 struct ModulesStatus {

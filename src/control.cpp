@@ -119,12 +119,14 @@ request_duration(const Json &request) {
                        {"context_id", context->context_id},
                        {"priority", context->priority}};
   };
-  return OrderedJson{{"format_version", 2},
+  return OrderedJson{{"format_version", 3},
                      {"mode", status.mode == IslandMode::expanded ? "expanded" : "compact"},
                      {"compact", context_json(status.compact)},
                      {"expanded", context_json(status.expanded)},
                      {"modules", modules_json(status.modules)},
-                     {"socket", status.socket}};
+                     {"socket", status.socket},
+                     {"hidden_mode", status.hidden_mode},
+                     {"visible", status.visible}};
 }
 
 [[nodiscard]] std::expected<std::optional<ActiveContextStatus>, std::string>
@@ -265,8 +267,8 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
   const auto command = command_field->get<std::string>();
 
   const std::set<std::string, std::less<>> basic_fields{"command", "version"};
-  if (command == "open" || command == "close" || command == "toggle" || command == "status" ||
-      command == "modules" || command == "reload") {
+  if (command == "open" || command == "close" || command == "toggle" || command == "collapse" ||
+      command == "status" || command == "modules" || command == "reload") {
     if (!has_exact_fields(*parsed, basic_fields)) {
       return fail(ControlErrorCode::invalid_request, "request has an unexpected property");
     }
@@ -279,6 +281,9 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
     if (command == "toggle") {
       return ControlCommand{ToggleControl{}};
     }
+    if (command == "collapse") {
+      return ControlCommand{CollapseControl{}};
+    }
     if (command == "status") {
       return ControlCommand{StatusControl{}};
     }
@@ -286,6 +291,24 @@ std::expected<ControlCommand, ControlError> parse_control_request(std::string_vi
       return ControlCommand{ReloadControl{}};
     }
     return ControlCommand{ModulesControl{}};
+  }
+
+  if (command == "hidden-mode") {
+    if (!has_exact_fields(*parsed, {"command", "mode", "version"}) ||
+        !parsed->at("mode").is_string()) {
+      return fail(ControlErrorCode::invalid_request, "hidden-mode requires on, off, or toggle");
+    }
+    const auto mode = parsed->at("mode").get<std::string>();
+    if (mode == "on") {
+      return ControlCommand{HiddenModeControl{HiddenModeAction::on}};
+    }
+    if (mode == "off") {
+      return ControlCommand{HiddenModeControl{HiddenModeAction::off}};
+    }
+    if (mode == "toggle") {
+      return ControlCommand{HiddenModeControl{HiddenModeAction::toggle}};
+    }
+    return fail(ControlErrorCode::invalid_request, "hidden-mode requires on, off, or toggle");
   }
 
   if (command != "module-restart" && command != "activate" && command != "activate-open" &&
@@ -379,6 +402,21 @@ std::string serialize_control_request(const ControlCommand &command) {
           result["command"] = "close";
         } else if constexpr (std::is_same_v<Type, ToggleControl>) {
           result["command"] = "toggle";
+        } else if constexpr (std::is_same_v<Type, HiddenModeControl>) {
+          result["command"] = "hidden-mode";
+          switch (typed.action) {
+          case HiddenModeAction::on:
+            result["mode"] = "on";
+            break;
+          case HiddenModeAction::off:
+            result["mode"] = "off";
+            break;
+          case HiddenModeAction::toggle:
+            result["mode"] = "toggle";
+            break;
+          }
+        } else if constexpr (std::is_same_v<Type, CollapseControl>) {
+          result["command"] = "collapse";
         } else if constexpr (std::is_same_v<Type, StatusControl>) {
           result["command"] = "status";
         } else if constexpr (std::is_same_v<Type, ModulesControl>) {
@@ -487,12 +525,21 @@ std::expected<ControlResponse, std::string> parse_control_response(std::string_v
   }
   const int format_version = result.at("format_version").get<int>();
   const bool legacy = format_version == 1;
+  const bool version_two = format_version == 2;
+  const bool version_three = format_version == 3;
   if ((legacy && !has_exact_fields(
                      result, {"active_context", "format_version", "mode", "modules", "socket"})) ||
-      (!legacy &&
-       (format_version != 2 || !has_exact_fields(result, {"compact", "expanded", "format_version",
-                                                          "mode", "modules", "socket"})))) {
+      (version_two && !has_exact_fields(result, {"compact", "expanded", "format_version", "mode",
+                                                 "modules", "socket"})) ||
+      (version_three &&
+       !has_exact_fields(result, {"compact", "expanded", "format_version", "hidden_mode", "mode",
+                                  "modules", "socket", "visible"})) ||
+      (!legacy && !version_two && !version_three)) {
     return std::unexpected("response has an invalid status result");
+  }
+  if (version_three &&
+      (!result.at("hidden_mode").is_boolean() || !result.at("visible").is_boolean())) {
+    return std::unexpected("response has invalid presentation status");
   }
   const auto mode_name = result.at("mode").get<std::string>();
   if (mode_name != "compact" && mode_name != "expanded") {
@@ -528,7 +575,9 @@ std::expected<ControlResponse, std::string> parse_control_response(std::string_v
   }
   return ControlResponse{ControlStatus{
       mode_name == "expanded" ? IslandMode::expanded : IslandMode::compact, std::move(compact),
-      std::move(expanded), std::move(*modules), result.at("socket").get<std::string>()}};
+      std::move(expanded), std::move(*modules), result.at("socket").get<std::string>(),
+      version_three && result.at("hidden_mode").get<bool>(),
+      !version_three || result.at("visible").get<bool>()}};
 }
 
 std::string serialize_control_result(const ControlResponse &response) {
@@ -557,6 +606,9 @@ parse_control_arguments(const std::vector<std::string> &arguments) {
     if (arguments[0] == "toggle") {
       return ControlInvocation{ToggleControl{}};
     }
+    if (arguments[0] == "collapse") {
+      return ControlInvocation{CollapseControl{}};
+    }
     if (arguments[0] == "status") {
       return ControlInvocation{StatusControl{}};
     }
@@ -565,6 +617,17 @@ parse_control_arguments(const std::vector<std::string> &arguments) {
     }
     if (arguments[0] == "reload") {
       return ControlInvocation{ReloadControl{}};
+    }
+  }
+  if (arguments.size() == 2 && arguments[0] == "hidden-mode") {
+    if (arguments[1] == "on") {
+      return ControlInvocation{HiddenModeControl{HiddenModeAction::on}};
+    }
+    if (arguments[1] == "off") {
+      return ControlInvocation{HiddenModeControl{HiddenModeAction::off}};
+    }
+    if (arguments[1] == "toggle") {
+      return ControlInvocation{HiddenModeControl{HiddenModeAction::toggle}};
     }
   }
   if (arguments.size() == 2 && arguments[0] == "status" && arguments[1] == "--json") {

@@ -174,6 +174,50 @@ is rejected.
 The manual smoke test passes when the window opens, remains responsive, and exits cleanly
 through the window manager close control.
 
+## Hidden mode
+
+To keep the island hidden at rest, enable the optional policy in your user configuration:
+
+```toml
+[interaction]
+hidden_mode = true
+```
+
+The default is `false`. Modules continue running and publishing while the overlay is hidden. No
+visible marker or hover trigger remains at the top of the screen. Calling a module reveals its
+requested view directly, with a continuous capillary shape from the selected output's top center
+and the normal spring bounce:
+
+```bash
+gislandctl activate clock
+gislandctl activate-open clock
+gislandctl action audio volume-up
+```
+
+A consultation disappears after three seconds without interaction. Hover or keyboard focus holds
+the island; leaving both starts a fresh three-second delay. Calling the same module again refreshes
+the delay. An expanded view retains keyboard interaction while focused. Escape or `gislandctl close`
+hides it directly. Automatic HUDs and notifications keep their module-defined finite lifetime, and
+persistent alerts remain until closed, replaced, or withdrawn. Animation speed affects motion,
+while consultation deadlines use real time. Reduced motion skips the reveal animation.
+
+Switch the policy for the current process with `gislandctl hidden-mode on`, `off`, or `toggle`.
+This command never writes configuration; the next startup uses the file value. An unrelated reload
+preserves the runtime choice, while changing `interaction.hidden_mode` in a successful reload applies
+the new configured value.
+
+Example i3 bindings call the clock module and switch the policy separately:
+
+```i3
+bindsym $mod+c exec --no-startup-id gislandctl activate clock
+bindsym $mod+Shift+c exec --no-startup-id gislandctl activate-open clock
+bindsym $mod+h exec --no-startup-id gislandctl hidden-mode toggle
+```
+
+`gislandctl toggle` continues to control the compact/expanded view. Modules that need to return to
+compact without hiding an active HUD use `gislandctl collapse`; the audio module uses this intent
+after publishing its compact HUD.
+
 ## Test
 
 ```bash
@@ -467,7 +511,7 @@ resident actions leave their notification visible.
 Notifications publish an expanded-only view and request a one-second reveal through the generic
 protocol presentation intent. Compact content remains owned by the configured compact fallback.
 Reveal expiration returns to compact mode unless the pointer is hovering or the overlay was opened
-explicitly.
+explicitly. In hidden mode, an unheld reveal instead departs directly into the hidden state.
 
 The reveal duration and bounded external history are module options:
 
@@ -518,6 +562,8 @@ memory only; history is non-interactive and storage failures remain logs-only.
 ./build/dev/gislandctl open
 ./build/dev/gislandctl close
 ./build/dev/gislandctl toggle
+./build/dev/gislandctl hidden-mode toggle
+./build/dev/gislandctl collapse
 ./build/dev/gislandctl status
 ./build/dev/gislandctl status --json
 ./build/dev/gislandctl modules
@@ -537,7 +583,9 @@ so it preserves null, booleans, numbers, strings, arrays, and objects. This uses
 separate control service. Confirmed external actions require a module negotiating protocol 1.8.
 
 Durations accept positive integer `ms`, `s`, `m`, or `h` units up to 24 hours. Scripts should use
-`status --json`; its result has `format_version: 2` with separate `compact` and `expanded` owners.
+`status --json`; its result has `format_version: 3` with separate `compact` and `expanded` owners,
+the current `hidden_mode` policy, and a `visible` boolean indicating whether the overlay is presented
+(including arrival and departure). The client also accepts the older status formats 1 and 2.
 
 `reload` explicitly rereads the configuration path selected at startup and resolves the selected
 theme from the same user and distributed roots. It is transactional through configuration, theme,

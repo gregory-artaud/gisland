@@ -14,6 +14,8 @@ constexpr std::string_view help_text = R"(Usage: gislandctl <command> [options]
 Commands:
   open                                      Open the island
   close                                     Close the island
+  collapse                                  Return to compact without hiding
+  hidden-mode on|off|toggle                  Set hidden-at-rest policy for this session
   toggle                                    Toggle the island
   status [--json]                           Show the current status
   modules                                   List modules

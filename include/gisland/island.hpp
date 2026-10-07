@@ -45,6 +45,56 @@ struct IslandMaskRow {
   int height;
 };
 
+struct IslandPoint {
+  float x;
+  float y;
+
+  bool operator==(const IslandPoint &) const = default;
+};
+
+struct IslandRevealSilhouette {
+  std::vector<IslandPoint> contour;
+  std::vector<IslandMaskRow> rows;
+  IslandGeometry bounds{};
+  float top{};
+  float content_opacity{};
+};
+
+class PresentationController {
+public:
+  explicit PresentationController(bool hidden_mode = false) : hidden_mode_(hidden_mode) {}
+
+  void set_hidden_mode(bool hidden_mode, MonotonicTime now, bool active_interaction = false);
+  void consult(MonotonicTime now);
+  void reveal(ContextKey key, std::uint64_t revision, std::optional<MonotonicTime> expires_at);
+  void reconcile(const std::optional<ContextKey> &key, std::uint64_t revision);
+  void reconcile(const std::optional<ContextKey> &compact_key, std::uint64_t compact_revision,
+                 const std::optional<ContextKey> &expanded_key, std::uint64_t expanded_revision);
+  void set_interaction_hold(bool held, MonotonicTime now);
+  void update(MonotonicTime now, bool has_content);
+  void close();
+  void set_visible(bool visible) noexcept;
+
+  [[nodiscard]] bool hidden_mode() const noexcept;
+  [[nodiscard]] bool should_present() const noexcept;
+  [[nodiscard]] bool visible() const noexcept;
+
+private:
+  struct RevealSource {
+    ContextKey key;
+    std::uint64_t revision;
+    std::optional<MonotonicTime> expires_at;
+  };
+
+  bool hidden_mode_{};
+  bool has_content_{};
+  bool visible_{};
+  bool held_{};
+  bool consultation_{};
+  std::optional<MonotonicTime> consultation_deadline_;
+  std::optional<RevealSource> reveal_source_;
+};
+
 class HoverController {
 public:
   explicit HoverController(std::chrono::milliseconds exit_tolerance = std::chrono::milliseconds{
@@ -90,6 +140,7 @@ private:
 class SpringProgress {
 public:
   void set_target(float target);
+  void snap(float value);
   void update(float delta_seconds);
   [[nodiscard]] float value() const;
 
@@ -208,5 +259,9 @@ private:
 [[nodiscard]] IslandGeometry interpolate(const IslandGeometry &from, const IslandGeometry &to,
                                          float progress);
 [[nodiscard]] std::vector<IslandMaskRow> rounded_mask_rows(const IslandGeometry &geometry);
+[[nodiscard]] IslandRevealSilhouette reveal_silhouette(const IslandGeometry &destination,
+                                                       float progress, float top_margin);
+[[nodiscard]] float reveal_content_opacity(float progress, bool departing);
+[[nodiscard]] IslandCanvasSize reserve_reveal_margin(IslandCanvasSize canvas, float margin);
 
 } // namespace gisland

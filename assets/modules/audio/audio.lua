@@ -75,8 +75,8 @@ local function set_muted(muted)
   require_result(command.set_sink_mute(muted), "pactl set-sink-mute", "2.0")
 end
 
-local function close_expanded()
-  local result = command.close()
+local function collapse_expanded()
+  local result = command.collapse()
   if result.ok then
     return
   end
@@ -89,7 +89,7 @@ local function close_expanded()
       detail = "exited with status " .. tostring(result.status)
     end
   end
-  gisland.log("error", "gisland-audio: gislandctl close failed: " .. detail)
+  gisland.log("error", "gisland-audio: gislandctl collapse failed: " .. detail)
 end
 
 local function replace(context_id, compact, style)
@@ -104,7 +104,7 @@ local function replace(context_id, compact, style)
     presentation = { compact_style = style },
   }
   active_context = context_id
-  gisland.defer(close_expanded)
+  gisland.defer(collapse_expanded)
 end
 
 local function publish_mute(state)

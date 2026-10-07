@@ -88,6 +88,7 @@ enabled = false
   CHECK(result->default_module == "clock");
   CHECK(result->interaction.animation_speed == 1.25);
   CHECK(result->interaction.hover_exit == std::chrono::milliseconds{120});
+  CHECK_FALSE(result->interaction.hidden_mode);
   REQUIRE(result->modules.size() == 2);
 
   const auto &clock = result->modules[0];
@@ -108,6 +109,23 @@ enabled = false
   CHECK(music.id == "music");
   CHECK_FALSE(music.enabled);
   CHECK(music.options.empty());
+}
+
+TEST_CASE("hidden mode is a strict optional interaction boolean") {
+  const auto enabled =
+      gisland::parse_config(config_with_interaction("hidden_mode = true\n"), "hidden-mode.toml");
+  REQUIRE(enabled.has_value());
+  CHECK(enabled->interaction.hidden_mode);
+
+  const auto disabled =
+      gisland::parse_config(config_with_interaction("hidden_mode = false\n"), "hidden-mode.toml");
+  REQUIRE(disabled.has_value());
+  CHECK_FALSE(disabled->interaction.hidden_mode);
+
+  const auto invalid =
+      gisland::parse_config(config_with_interaction("hidden_mode = \"yes\"\n"), "hidden-mode.toml");
+  REQUIRE_FALSE(invalid.has_value());
+  CHECK(invalid.error().path == "interaction.hidden_mode");
 }
 
 TEST_CASE("interaction timing parses explicit values and accepted boundaries") {

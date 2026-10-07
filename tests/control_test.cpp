@@ -15,6 +15,13 @@ TEST_CASE("control requests parse into exact typed commands") {
       {R"({"version":1,"command":"open"})", gisland::OpenControl{}},
       {R"({"version":1,"command":"close"})", gisland::CloseControl{}},
       {R"({"version":1,"command":"toggle"})", gisland::ToggleControl{}},
+      {R"({"version":1,"command":"hidden-mode","mode":"on"})",
+       gisland::HiddenModeControl{gisland::HiddenModeAction::on}},
+      {R"({"version":1,"command":"hidden-mode","mode":"off"})",
+       gisland::HiddenModeControl{gisland::HiddenModeAction::off}},
+      {R"({"version":1,"command":"hidden-mode","mode":"toggle"})",
+       gisland::HiddenModeControl{gisland::HiddenModeAction::toggle}},
+      {R"({"version":1,"command":"collapse"})", gisland::CollapseControl{}},
       {R"({"version":1,"command":"status"})", gisland::StatusControl{}},
       {R"({"version":1,"command":"modules"})", gisland::ModulesControl{}},
       {R"({"version":1,"command":"reload"})", gisland::ReloadControl{}},
@@ -103,7 +110,9 @@ TEST_CASE("control responses serialize stable success error and status shapes") 
       nlohmann::json::parse(gisland::serialize_control_response(gisland::ControlResponse{status}));
   CHECK(success.at("version") == 1);
   CHECK(success.at("ok") == true);
-  CHECK(success.at("result").at("format_version") == 2);
+  CHECK(success.at("result").at("format_version") == 3);
+  CHECK_FALSE(success.at("result").at("hidden_mode").get<bool>());
+  CHECK(success.at("result").at("visible").get<bool>());
   CHECK(success.at("result").at("mode") == "expanded");
   CHECK(success.at("result").at("compact").at("instance_id") == "clock");
   CHECK(success.at("result").at("expanded").at("instance_id") == "calendar");
@@ -168,6 +177,30 @@ TEST_CASE("control response parser accepts legacy status format one") {
   REQUIRE(status.compact.has_value());
   CHECK(status.compact->instance_id == "clock");
   CHECK_FALSE(status.expanded.has_value());
+  CHECK_FALSE(status.hidden_mode);
+  CHECK(status.visible);
+}
+
+TEST_CASE("control response parser keeps v2 exact and accepts status format three") {
+  const auto version_two = gisland::parse_control_response(
+      R"({"version":1,"ok":true,"result":{"format_version":2,"mode":"compact","compact":null,"expanded":null,"modules":[],"socket":"/tmp/gisland.sock"}})");
+  REQUIRE(version_two.has_value());
+  const auto &legacy = std::get<gisland::ControlStatus>(version_two->value());
+  CHECK_FALSE(legacy.hidden_mode);
+  CHECK(legacy.visible);
+
+  const auto version_three = gisland::parse_control_response(
+      R"({"version":1,"ok":true,"result":{"format_version":3,"mode":"expanded","compact":null,"expanded":null,"modules":[],"socket":"/tmp/gisland.sock","hidden_mode":true,"visible":true}})");
+  REQUIRE(version_three.has_value());
+  const auto &status = std::get<gisland::ControlStatus>(version_three->value());
+  CHECK(status.mode == gisland::IslandMode::expanded);
+  CHECK(status.hidden_mode);
+  CHECK(status.visible);
+
+  CHECK_FALSE(
+      gisland::parse_control_response(
+          R"({"version":1,"ok":true,"result":{"format_version":2,"mode":"compact","compact":null,"expanded":null,"modules":[],"socket":"/tmp/gisland.sock","hidden_mode":true,"visible":true}})")
+          .has_value());
 }
 
 TEST_CASE("gislandctl grammar parses commands and bounded durations") {
@@ -193,6 +226,19 @@ TEST_CASE("gislandctl grammar parses commands and bounded durations") {
   REQUIRE(activate_open.has_value());
   CHECK(std::get<gisland::ActivateOpenControl>(activate_open->command).instance_id ==
         "notifications");
+
+  for (const auto &[argument, expected] :
+       std::vector<std::pair<std::string, gisland::HiddenModeAction>>{
+           {"on", gisland::HiddenModeAction::on},
+           {"off", gisland::HiddenModeAction::off},
+           {"toggle", gisland::HiddenModeAction::toggle}}) {
+    const auto parsed = gisland::parse_control_arguments({"hidden-mode", argument});
+    REQUIRE(parsed.has_value());
+    CHECK(std::get<gisland::HiddenModeControl>(parsed->command).action == expected);
+  }
+  const auto collapse = gisland::parse_control_arguments({"collapse"});
+  REQUIRE(collapse.has_value());
+  CHECK(std::holds_alternative<gisland::CollapseControl>(collapse->command));
 
   for (const auto &[value, duration] :
        std::vector<std::pair<std::string, std::chrono::milliseconds>>{

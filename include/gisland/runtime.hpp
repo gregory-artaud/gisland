@@ -109,8 +109,8 @@ public:
   void commit_reload(PreparedRuntimeReload prepared) noexcept;
   void accept(const ContextKey &key);
   void reject(const ContextKey &key, MonotonicTime now = {});
-  [[nodiscard]] std::vector<VisibilityUpdate> visibility_updates(MonotonicTime now,
-                                                                 IslandMode mode);
+  [[nodiscard]] std::vector<VisibilityUpdate> visibility_updates(MonotonicTime now, IslandMode mode,
+                                                                 bool presented = true);
 
 private:
   [[nodiscard]] std::expected<void, RuntimeError> consume_message(const ModuleMessageEvent &event);

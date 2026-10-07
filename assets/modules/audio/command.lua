@@ -119,9 +119,9 @@ function command.set_sink_mute(value)
   )
 end
 
-function command.close()
+function command.collapse()
   return execute(
-    "timeout --kill-after=0.2s 0.5s " .. gislandctl_command() .. " 'close' 2>&1"
+    "timeout --kill-after=0.2s 0.5s " .. gislandctl_command() .. " 'collapse' 2>&1"
   )
 end
 

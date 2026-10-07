@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -153,66 +154,99 @@ private:
 void write_text(const std::filesystem::path &path, std::string_view content);
 
 void configure_audio(TemporaryConfig &config, std::string_view state,
-                     bool gate_deferred_close = false) {
+                     bool gate_deferred_collapse = false, bool hidden_mode = false) {
   const auto bin = config.home() / "bin";
   const auto local_bin = config.home() / ".local/bin";
   std::filesystem::create_directories(bin);
   std::filesystem::create_directories(local_bin);
   std::filesystem::create_symlink(GISLAND_AUDIO_FAKE_PACTL_PATH, bin / "pactl");
-  std::filesystem::create_symlink(gate_deferred_close ? GISLAND_AUDIO_FAKE_GISLANDCTL_PATH
-                                                      : GISLANDCTL_BINARY_PATH,
+  std::filesystem::create_symlink(gate_deferred_collapse ? GISLAND_AUDIO_FAKE_GISLANDCTL_PATH
+                                                         : GISLANDCTL_BINARY_PATH,
                                   local_bin / "gislandctl");
   const auto lua_host = local_bin / "gisland-lua-host";
   std::filesystem::copy_file(GISLAND_LUA_HOST_PATH, lua_host);
   write_text(config.home() / "audio-state.json", state);
   const std::string path = bin.string() + ":/usr/bin:/bin";
-  write_text(config.config_path(),
-             std::string{"monitor = \"primary\"\n"
-                         "theme = \"default\"\n"
-                         "[defaults]\n"
-                         "compact = \"clock\"\n"
-                         "expanded = \"clock\"\n"
-                         "[[modules]]\n"
-                         "id = \"clock\"\n"
-                         "command = [\""} +
-                 GISLAND_FAKE_MODULE_PATH +
-                 "\", \"interactive-data\"]\n"
-                 "restart = \"never\"\n"
-                 "[modules.view.compact]\n"
-                 "type = \"text\"\n"
-                 "value = { bind = \"time\" }\n"
-                 "role = \"body\"\n"
-                 "[modules.view.expanded]\n"
-                 "type = \"text\"\n"
-                 "value = \"Calendar\"\n"
-                 "role = \"body\"\n"
-                 "[[modules]]\n"
-                 "id = \"audio\"\n"
-                 "command = [\"" +
-                 lua_host.string() + "\", \"" + GISLAND_AUDIO_LUA_PATH +
-                 "\"]\n"
-                 "protocol_min = \"1.8\"\n"
-                 "protocol_max = \"1.8\"\n"
-                 "restart = \"never\"\n"
-                 "[modules.environment]\n"
-                 "HOME = \"" +
-                 config.home().string() +
-                 "\"\n"
-                 "PATH = \"" +
-                 path +
-                 "\"\n"
-                 "GISLAND_AUDIO_FAKE_STATE = \"" +
-                 (config.home() / "audio-state.json").string() +
-                 "\"\n"
-                 "GISLAND_AUDIO_COMMAND_LOG = \"" +
-                 (config.home() / "audio-commands.jsonl").string() + "\"\n" +
-                 (gate_deferred_close ? "GISLAND_AUDIO_FAKE_GISLANDCTL_STARTED = \"" +
-                                            (config.home() / "close-started").string() +
-                                            "\"\nGISLAND_AUDIO_FAKE_GISLANDCTL_RELEASE = \"" +
-                                            (config.home() / "close-release").string() +
-                                            "\"\nGISLAND_AUDIO_REAL_GISLANDCTL = \"" +
-                                            GISLANDCTL_BINARY_PATH + "\"\n"
-                                      : std::string{}));
+  std::string configuration = "monitor = \"primary\"\n"
+                              "theme = \"default\"\n"
+                              "[interaction]\n";
+  if (hidden_mode) {
+    configuration += "hidden_mode = true\n";
+  }
+  configuration += "[defaults]\n"
+                   "compact = \"clock\"\n"
+                   "expanded = \"clock\"\n"
+                   "[[modules]]\n"
+                   "id = \"clock\"\n"
+                   "command = [\"";
+  configuration += GISLAND_FAKE_MODULE_PATH;
+  configuration += "\", \"interactive-data\"]\n"
+                   "restart = \"never\"\n"
+                   "[modules.view.compact]\n"
+                   "type = \"text\"\n"
+                   "value = { bind = \"time\" }\n"
+                   "role = \"body\"\n"
+                   "[modules.view.expanded]\n"
+                   "type = \"text\"\n"
+                   "value = \"Calendar\"\n"
+                   "role = \"body\"\n"
+                   "[[modules]]\n"
+                   "id = \"audio\"\n"
+                   "command = [\"";
+  configuration += lua_host.string() + "\", \"" + GISLAND_AUDIO_LUA_PATH +
+                   "\"]\n"
+                   "protocol_min = \"1.8\"\n"
+                   "protocol_max = \"1.8\"\n"
+                   "restart = \"never\"\n"
+                   "[modules.environment]\n"
+                   "HOME = \"" +
+                   config.home().string() +
+                   "\"\n"
+                   "PATH = \"" +
+                   path +
+                   "\"\n"
+                   "GISLAND_AUDIO_FAKE_STATE = \"" +
+                   (config.home() / "audio-state.json").string() +
+                   "\"\n"
+                   "GISLAND_AUDIO_COMMAND_LOG = \"" +
+                   (config.home() / "audio-commands.jsonl").string() + "\"\n";
+  if (gate_deferred_collapse) {
+    configuration += "GISLAND_AUDIO_FAKE_GISLANDCTL_STARTED = \"" +
+                     (config.home() / "collapse-started").string() +
+                     "\"\nGISLAND_AUDIO_FAKE_GISLANDCTL_RELEASE = \"" +
+                     (config.home() / "collapse-release").string() +
+                     "\"\nGISLAND_AUDIO_REAL_GISLANDCTL = \"" + GISLANDCTL_BINARY_PATH + "\"\n";
+  }
+  write_text(config.config_path(), configuration);
+}
+
+void configure_hidden_clock(TemporaryConfig &config, bool reduced_motion = false) {
+  std::ostringstream configuration;
+  configuration << "monitor = \"primary\"\n"
+                   "theme = \"default\"\n"
+                   "[interaction]\n"
+                   "hidden_mode = true\n";
+  if (reduced_motion) {
+    configuration << "reduced_motion = true\n";
+  }
+  configuration << "[defaults]\n"
+                   "compact = \"clock\"\n"
+                   "expanded = \"clock\"\n"
+                   "[[modules]]\n"
+                   "id = \"clock\"\n"
+                   "command = [\""
+                << GISLAND_FAKE_MODULE_PATH
+                << "\", \"interactive-data\"]\n"
+                   "restart = \"never\"\n"
+                   "[modules.view.compact]\n"
+                   "type = \"text\"\n"
+                   "value = { bind = \"time\" }\n"
+                   "role = \"body\"\n"
+                   "[modules.view.expanded]\n"
+                   "type = \"text\"\n"
+                   "value = { bind = \"time\" }\n"
+                   "role = \"body\"\n";
+  write_text(config.config_path(), configuration.str());
 }
 
 struct CommandResult {
@@ -390,6 +424,55 @@ struct WindowPosition {
   return ShapeBounds{minimum_x, minimum_y, maximum_x - minimum_x, maximum_y - minimum_y};
 }
 
+[[nodiscard]] bool save_window_snapshot(Display *display, Window window,
+                                        const std::filesystem::path &path) {
+  XWindowAttributes attributes{};
+  if (XGetWindowAttributes(display, window, &attributes) == 0 || attributes.width <= 0 ||
+      attributes.height <= 0) {
+    return false;
+  }
+  XImage *image = XGetImage(display, window, 0, 0, static_cast<unsigned int>(attributes.width),
+                            static_cast<unsigned int>(attributes.height), AllPlanes, ZPixmap);
+  if (image == nullptr) {
+    return false;
+  }
+  std::ofstream output{path, std::ios::binary};
+  if (!output) {
+    XDestroyImage(image);
+    return false;
+  }
+  output << "P6\n" << attributes.width << ' ' << attributes.height << "\n255\n";
+  const auto component = [](unsigned long pixel, unsigned long mask) {
+    if (mask == 0) {
+      return static_cast<unsigned char>(0);
+    }
+    const int shift = std::countr_zero(mask);
+    const unsigned long maximum = mask >> shift;
+    const unsigned long value = (pixel & mask) >> shift;
+    return static_cast<unsigned char>((value * 255UL) / maximum);
+  };
+  const unsigned long color_mask = image->red_mask | image->green_mask | image->blue_mask;
+  const unsigned long alpha_mask = image->depth >= 32 ? (~color_mask & 0xffffffffUL) : 0UL;
+  const auto over_light = [alpha_mask, &component](unsigned long pixel, unsigned long mask) {
+    constexpr unsigned long background = 224;
+    const unsigned long alpha = alpha_mask == 0 ? 255UL : component(pixel, alpha_mask);
+    const unsigned long foreground = component(pixel, mask);
+    return static_cast<unsigned char>((foreground * alpha + background * (255UL - alpha)) / 255UL);
+  };
+  for (int y = 0; y < attributes.height; ++y) {
+    for (int x = 0; x < attributes.width; ++x) {
+      const unsigned long pixel = XGetPixel(image, x, y);
+      const std::array<unsigned char, 3> rgb{over_light(pixel, image->red_mask),
+                                             over_light(pixel, image->green_mask),
+                                             over_light(pixel, image->blue_mask)};
+      output.write(reinterpret_cast<const char *>(rgb.data()),
+                   static_cast<std::streamsize>(rgb.size()));
+    }
+  }
+  XDestroyImage(image);
+  return output.good();
+}
+
 [[nodiscard]] bool send_notification() {
   const pid_t pid = fork();
   if (pid == 0) {
@@ -442,6 +525,241 @@ struct WindowPosition {
 
 } // namespace
 
+TEST_CASE("hidden mode maps only for a consultation and hides after its lease") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config{false};
+  configure_hidden_clock(config);
+  ChildProcess child{config.home(), config.application_log()};
+  std::optional<Window> window;
+  const bool window_created = wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  });
+  INFO(read_text(config.application_log()));
+  REQUIRE(window_created);
+
+  const std::string socket = (config.home() / "gisland.sock").string();
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && std::get<gisland::ControlStatus>(response->value()).compact.has_value();
+  }));
+  const auto hidden_status = gisland::send_control_command(socket, gisland::StatusControl{});
+  REQUIRE(hidden_status.has_value());
+  const auto &hidden = std::get<gisland::ControlStatus>(hidden_status->value());
+  CHECK(hidden.hidden_mode);
+  CHECK_FALSE(hidden.visible);
+  XWindowAttributes attributes{};
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  CHECK(attributes.map_state != IsViewable);
+
+  REQUIRE(gisland::send_control_command(socket,
+                                        gisland::ActivateControl{"clock", std::chrono::seconds{10}})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    const auto shape = input_shape_bounds(display, *window);
+    return shape && shape->height > 1;
+  }));
+  std::optional<ShapeBounds> early_shape;
+  bool early_reveal = false;
+  for (int attempt = 0; attempt < 500; ++attempt) {
+    XSync(display, False);
+    early_shape = input_shape_bounds(display, *window);
+    if (early_shape && early_shape->height >= 14 && early_shape->height <= 20) {
+      early_reveal = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  REQUIRE(early_reveal);
+  const auto early_position = root_position(display, *window);
+  REQUIRE(early_position.has_value());
+  CHECK(early_position->y + early_shape->y == 0);
+  std::optional<std::filesystem::path> capture_root;
+  if (const char *capture_directory = std::getenv("GISLAND_HIDDEN_MODE_CAPTURE_DIR");
+      capture_directory != nullptr && *capture_directory != '\0') {
+    capture_root.emplace(capture_directory);
+    std::filesystem::create_directories(*capture_root);
+    CHECK(save_window_snapshot(display, *window, *capture_root / "early-reveal.ppm"));
+  }
+  std::optional<ShapeBounds> settled_shape;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    settled_shape = input_shape_bounds(display, *window);
+    return settled_shape && settled_shape->width == 230 && settled_shape->height == 32;
+  }));
+  const auto settled_position = root_position(display, *window);
+  REQUIRE(settled_position.has_value());
+  CHECK(settled_position->y + settled_shape->y == 8);
+  if (capture_root) {
+    CHECK(save_window_snapshot(display, *window, *capture_root / "settled.ppm"));
+  }
+
+  bool hidden_again = false;
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (response && !std::get<gisland::ControlStatus>(response->value()).visible) {
+      hidden_again = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+  }
+  CHECK(hidden_again);
+  XSync(display, False);
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  CHECK(attributes.map_state != IsViewable);
+
+  REQUIRE(gisland::send_control_command(socket, gisland::OpenControl{}).has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  std::optional<ShapeBounds> expanded_shape;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    expanded_shape = input_shape_bounds(display, *window);
+    return expanded_shape && expanded_shape->height > 40;
+  }));
+  const auto position = root_position(display, *window);
+  REQUIRE(position.has_value());
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
+                               position->x + expanded_shape->x + expanded_shape->width / 2,
+                               position->y + expanded_shape->y + expanded_shape->height / 2,
+                               CurrentTime) != 0);
+  XSync(display, False);
+  std::this_thread::sleep_for(std::chrono::milliseconds{3200});
+  const auto held_status = gisland::send_control_command(socket, gisland::StatusControl{});
+  REQUIRE(held_status.has_value());
+  CHECK(std::get<gisland::ControlStatus>(held_status->value()).visible);
+  const auto close = gisland::send_control_command(socket, gisland::CloseControl{});
+  INFO("close result: " << (close ? "ok" : close.error().message));
+  REQUIRE(close.has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && !std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  XCloseDisplay(display);
+}
+
+TEST_CASE("hidden-mode session choice survives reload until configuration changes") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  TemporaryConfig config{false};
+  configure_hidden_clock(config);
+  ChildProcess child{config.home(), config.application_log()};
+  const std::string socket = (config.home() / "gisland.sock").string();
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && std::get<gisland::ControlStatus>(response->value()).hidden_mode &&
+           !std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+
+  REQUIRE(gisland::send_control_command(socket,
+                                        gisland::HiddenModeControl{gisland::HiddenModeAction::off})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && !std::get<gisland::ControlStatus>(response->value()).hidden_mode &&
+           std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  REQUIRE(gisland::send_control_command(socket, gisland::ReloadControl{}).has_value());
+  const auto after_unrelated_reload =
+      gisland::send_control_command(socket, gisland::StatusControl{});
+  REQUIRE(after_unrelated_reload.has_value());
+  CHECK_FALSE(std::get<gisland::ControlStatus>(after_unrelated_reload->value()).hidden_mode);
+  CHECK(std::get<gisland::ControlStatus>(after_unrelated_reload->value()).visible);
+
+  const std::string original_config = read_text(config.config_path());
+  write_text(config.config_path(), "not valid TOML = [\n");
+  const auto rejected_reload = gisland::send_control_command(socket, gisland::ReloadControl{});
+  REQUIRE(rejected_reload.has_value());
+  REQUIRE(std::holds_alternative<gisland::ControlError>(rejected_reload->value()));
+  CHECK(std::get<gisland::ControlError>(rejected_reload->value()).code ==
+        gisland::ControlErrorCode::reload_rejected);
+  const auto after_rejected_reload =
+      gisland::send_control_command(socket, gisland::StatusControl{});
+  REQUIRE(after_rejected_reload.has_value());
+  CHECK_FALSE(std::get<gisland::ControlStatus>(after_rejected_reload->value()).hidden_mode);
+
+  REQUIRE(gisland::send_control_command(socket,
+                                        gisland::HiddenModeControl{gisland::HiddenModeAction::on})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && !std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  std::string changed_config = original_config;
+  const auto hidden_option = changed_config.find("hidden_mode = true");
+  REQUIRE(hidden_option != std::string::npos);
+  changed_config.replace(hidden_option, std::string_view{"hidden_mode = true"}.size(),
+                         "hidden_mode = false");
+  write_text(config.config_path(), changed_config);
+  REQUIRE(gisland::send_control_command(socket, gisland::ReloadControl{}).has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && !std::get<gisland::ControlStatus>(response->value()).hidden_mode &&
+           std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+}
+
+TEST_CASE("reduced motion settles the hidden reveal and close without animation") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config{false};
+  configure_hidden_clock(config, true);
+  ChildProcess child{config.home(), config.application_log()};
+  const std::string socket = (config.home() / "gisland.sock").string();
+  std::optional<Window> window;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    return window.has_value();
+  }));
+  const auto initial = gisland::send_control_command(socket, gisland::StatusControl{});
+  REQUIRE(initial.has_value());
+  CHECK_FALSE(std::get<gisland::ControlStatus>(initial->value()).visible);
+
+  REQUIRE(gisland::send_control_command(socket,
+                                        gisland::ActivateControl{"clock", std::chrono::seconds{20}})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  std::optional<ShapeBounds> shape;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    shape = input_shape_bounds(display, *window);
+    return shape.has_value();
+  }));
+  CHECK(shape->height >= 30);
+
+  REQUIRE(gisland::send_control_command(socket, gisland::CloseControl{}).has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response && !std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  XWindowAttributes attributes{};
+  REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+  CHECK(attributes.map_state != IsViewable);
+  XCloseDisplay(display);
+}
+
 TEST_CASE("application expands on hover and animates within a fixed native canvas") {
   if (std::getenv("DISPLAY") == nullptr) {
     SKIP("requires an X11 display");
@@ -450,12 +768,6 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(display != nullptr);
   TemporaryConfig config;
   ChildProcess child{config.home(), config.application_log()};
-  constexpr int canvas_x = 406;
-  constexpr int canvas_y = -4;
-  constexpr int canvas_width = 468;
-  constexpr int canvas_height = 380;
-  constexpr int surface_x = 18;
-  constexpr int surface_y = 12;
 
   std::optional<Window> window;
   REQUIRE(wait_until([&] {
@@ -473,26 +785,25 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
     XSync(display, False);
     window_position = root_position(display, *window);
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
-           attributes.map_state == IsViewable && attributes.width == canvas_width &&
-           attributes.height == canvas_height && window_position &&
-           window_position->x == canvas_x && window_position->y == canvas_y;
+           attributes.map_state == IsViewable && attributes.width > 0 && attributes.height > 0 &&
+           window_position.has_value();
   });
   INFO("native window: " << (window_position ? window_position->x : -999) << ','
                          << (window_position ? window_position->y : -999) << ' ' << attributes.width
                          << 'x' << attributes.height << " state=" << attributes.map_state);
   REQUIRE(mapped);
   REQUIRE(window_position.has_value());
-  CHECK(attributes.width == canvas_width);
-  CHECK(attributes.height == canvas_height);
-  CHECK(window_position->x == canvas_x);
-  CHECK(window_position->y == canvas_y);
+  const int canvas_width = attributes.width;
+  const int canvas_height = attributes.height;
+  const int canvas_x = window_position->x;
+  const int canvas_y = window_position->y;
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
   XSync(display, False);
   std::optional<ShapeBounds> compact_shape;
   const bool compact = wait_until([&] {
     compact_shape = input_shape_bounds(display, *window);
     return compact_shape && compact_shape->width == 230 && compact_shape->height == 32 &&
-           compact_shape->x == surface_x + 101 && compact_shape->y == surface_y;
+           compact_shape->y >= 0;
   });
   if (compact_shape) {
     INFO("initial shape: " << compact_shape->x << ',' << compact_shape->y << ' '
@@ -501,6 +812,11 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
     INFO("initial input shape is empty");
   }
   REQUIRE(compact);
+  const int compact_x = compact_shape->x;
+  const int compact_y = compact_shape->y;
+  const int output_center_x = DisplayWidth(display, DefaultScreen(display)) / 2;
+  CHECK(window_position->y + compact_y == 8);
+  CHECK(std::abs(window_position->x + compact_x + compact_shape->width / 2 - output_center_x) <= 1);
 
   const auto status = gisland::send_control_command((config.home() / "gisland.sock").string(),
                                                     gisland::StatusControl{});
@@ -556,28 +872,35 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x + 36 &&
-           shape->y == surface_y;
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == compact_x - 65 &&
+           shape->y == compact_y;
   }));
+  const auto expanded_shape = input_shape_bounds(display, *window);
+  REQUIRE(expanded_shape.has_value());
+  const auto expanded_position = root_position(display, *window);
+  REQUIRE(expanded_position.has_value());
+  CHECK(expanded_position->y + expanded_shape->y == 8);
+  CHECK(std::abs(expanded_position->x + expanded_shape->x + expanded_shape->width / 2 -
+                 output_center_x) <= 1);
   REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
                                         gisland::CloseControl{})
               .has_value());
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 101 &&
-           shape->y == surface_y;
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == compact_x &&
+           shape->y == compact_y;
   }));
 
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
-                               window_position->x + surface_x + 216,
-                               window_position->y + surface_y + 16, CurrentTime) != 0);
+                               window_position->x + compact_x + 115,
+                               window_position->y + compact_y + 16, CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 360 && shape->height == 96 && shape->x == surface_x + 36 &&
-           shape->y == surface_y;
+    return shape && shape->width == 360 && shape->height == 96 && shape->x == compact_x - 65 &&
+           shape->y == compact_y;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   window_position = root_position(display, *window);
@@ -585,10 +908,11 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   CHECK(attributes.width == canvas_width);
   CHECK(attributes.height == canvas_height);
   CHECK(window_position->x == canvas_x);
+  CHECK(window_position->y == canvas_y);
   std::this_thread::sleep_for(std::chrono::milliseconds{800});
 
-  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), window_position->x + surface_x + 84,
-                               window_position->y + surface_y + 48, CurrentTime) != 0);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), window_position->x + compact_x - 17,
+                               window_position->y + compact_y + 36, CurrentTime) != 0);
   REQUIRE(XTestFakeButtonEvent(display, Button1, True, CurrentTime) != 0);
   XSync(display, False);
   std::this_thread::sleep_for(std::chrono::milliseconds{50});
@@ -612,8 +936,8 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   REQUIRE(wait_until([&] {
     XSync(display, False);
     const auto shape = input_shape_bounds(display, *window);
-    return shape && shape->width == 230 && shape->height == 32 && shape->x == surface_x + 101 &&
-           shape->y == surface_y;
+    return shape && shape->width == 230 && shape->height == 32 && shape->x == compact_x &&
+           shape->y == compact_y;
   }));
   REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
   window_position = root_position(display, *window);
@@ -622,6 +946,44 @@ TEST_CASE("application expands on hover and animates within a fixed native canva
   CHECK(attributes.height == canvas_height);
   CHECK(window_position->x == canvas_x);
   CHECK(window_position->y == canvas_y);
+
+  REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                        gisland::HiddenModeControl{gisland::HiddenModeAction::on})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                        gisland::StatusControl{});
+    return response && std::get<gisland::ControlStatus>(response->value()).hidden_mode &&
+           !std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    return XGetWindowAttributes(display, *window, &attributes) != 0 &&
+           attributes.map_state != IsViewable && attributes.height > canvas_height;
+  }));
+  CHECK(attributes.width > canvas_width);
+
+  REQUIRE(gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                        gisland::HiddenModeControl{gisland::HiddenModeAction::off})
+              .has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command((config.home() / "gisland.sock").string(),
+                                                        gisland::StatusControl{});
+    return response && !std::get<gisland::ControlStatus>(response->value()).hidden_mode &&
+           std::get<gisland::ControlStatus>(response->value()).visible;
+  }));
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    if (XGetWindowAttributes(display, *window, &attributes) == 0 ||
+        attributes.width != canvas_width || attributes.height != canvas_height) {
+      return false;
+    }
+    window_position = root_position(display, *window);
+    return window_position.has_value() && window_position->x == canvas_x &&
+           window_position->y == canvas_y;
+  }));
+  CHECK(attributes.width == canvas_width);
+  CHECK(attributes.height == canvas_height);
 
   XCloseDisplay(display);
 }
@@ -648,8 +1010,17 @@ TEST_CASE("application renders the distributed live clock-calendar module") {
     return XGetWindowAttributes(display, *window, &attributes) != 0 &&
            attributes.map_state == IsViewable;
   }));
+  std::optional<ShapeBounds> compact_shape;
+  REQUIRE(wait_until([&] {
+    XSync(display, False);
+    compact_shape = input_shape_bounds(display, *window);
+    return compact_shape && compact_shape->height == 32;
+  }));
+  const auto position = root_position(display, *window);
+  REQUIRE(position.has_value());
   REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display),
-                               attributes.x + (attributes.width / 2), attributes.y + 16,
+                               position->x + compact_shape->x + (compact_shape->width / 2),
+                               position->y + compact_shape->y + (compact_shape->height / 2),
                                CurrentTime) != 0);
   XSync(display, False);
   REQUIRE(wait_until([&] {
@@ -1154,26 +1525,27 @@ TEST_CASE("real control actions drive the Lua audio module through the running a
   }
 }
 
-TEST_CASE("Lua audio publication precedes deferred close without a compact fallback frame") {
+TEST_CASE("hidden audio publication survives deferred collapse without a clock fallback") {
   if (std::getenv("DISPLAY") == nullptr) {
     SKIP("requires an X11 display");
   }
   TemporaryConfig config{false};
-  configure_audio(config, R"({"volume_reads":[[20],[25]],"mute_reads":[false,false]})", true);
+  configure_audio(config, R"({"volume_reads":[[20],[25]],"mute_reads":[false,false]})", true, true);
   ChildProcess child{config.home(), config.application_log()};
   const std::string socket = (config.home() / "gisland.sock").string();
   REQUIRE(wait_until([&] { return module_running(config, "audio"); }));
-  REQUIRE(gisland::send_control_command(socket, gisland::OpenControl{}).has_value());
   REQUIRE(wait_until([&] {
-    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
-    return status &&
-           std::get<gisland::ControlStatus>(status->value()).mode == gisland::IslandMode::expanded;
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    return status.hidden_mode && !status.visible;
   }));
-
   auto action =
       std::async(std::launch::async, [&] { return run_audio_action(config, "volume-up"); });
-  REQUIRE(wait_until([&] { return std::filesystem::exists(config.home() / "close-started"); }));
-  bool publication_observed_while_expanded = false;
+  REQUIRE(wait_until([&] { return std::filesystem::exists(config.home() / "collapse-started"); }));
+  bool publication_observed_while_visible = false;
   bool closed_with_audio = false;
   std::vector<std::string> compact_owners;
   REQUIRE(wait_until([&] {
@@ -1185,13 +1557,12 @@ TEST_CASE("Lua audio publication precedes deferred close without a compact fallb
     if (status.compact) {
       compact_owners.push_back(status.compact->instance_id);
     }
-    if (status.compact && status.compact->instance_id == "audio" &&
-        status.mode == gisland::IslandMode::expanded) {
-      publication_observed_while_expanded = true;
+    if (status.visible && status.compact && status.compact->instance_id == "audio") {
+      publication_observed_while_visible = true;
     }
-    return publication_observed_while_expanded;
+    return publication_observed_while_visible;
   }));
-  write_text(config.home() / "close-release", "release\n");
+  write_text(config.home() / "collapse-release", "release\n");
   REQUIRE(wait_until([&] {
     const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
     if (!response) {
@@ -1202,14 +1573,38 @@ TEST_CASE("Lua audio publication precedes deferred close without a compact fallb
       compact_owners.push_back(status.compact->instance_id);
     }
     closed_with_audio = status.compact && status.compact->instance_id == "audio" &&
-                        status.mode == gisland::IslandMode::compact;
+                        status.mode == gisland::IslandMode::compact && status.visible;
     return closed_with_audio;
   }));
   const auto result = action.get();
   REQUIRE(WIFEXITED(result.status));
   REQUIRE(WEXITSTATUS(result.status) == 0);
-  REQUIRE(publication_observed_while_expanded);
+  REQUIRE(publication_observed_while_visible);
   REQUIRE(closed_with_audio);
+  std::this_thread::sleep_for(std::chrono::milliseconds{250});
+  bool hud_survived_collapse = false;
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    hud_survived_collapse =
+        status.visible && status.compact && status.compact->instance_id == "audio";
+    return hud_survived_collapse;
+  }));
+  bool hidden_after_audio_lease = false;
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    hidden_after_audio_lease = !status.visible;
+    return hidden_after_audio_lease;
+  }));
+  CHECK(hud_survived_collapse);
+  CHECK(hidden_after_audio_lease);
   const auto audio = std::ranges::find(compact_owners, "audio");
   REQUIRE(audio != compact_owners.end());
   CHECK(std::ranges::all_of(audio, compact_owners.end(),
@@ -1375,6 +1770,114 @@ TEST_CASE("activate-open owns keyboard focus for a live Lua launcher session") {
            focused_window() == previous;
   }));
 
+  XDestroyWindow(display, previous);
+  XCloseDisplay(display);
+}
+
+TEST_CASE("hidden launcher keeps its activation through focus-loss consultation") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  const Window root = DefaultRootWindow(display);
+  const Window previous = XCreateSimpleWindow(display, root, 40, 300, 160, 80, 0, 0, 0);
+  XMapWindow(display, previous);
+  XSetInputFocus(display, previous, RevertToPointerRoot, CurrentTime);
+  XSync(display, False);
+
+  TemporaryConfig config{false};
+  std::ostringstream config_text;
+  config_text << "monitor = \"primary\"\n"
+                 "theme = \"default\"\n"
+                 "[interaction]\n"
+                 "hidden_mode = true\n"
+                 "[defaults]\n"
+                 "compact = \"clock\"\n"
+                 "expanded = \"clock\"\n"
+                 "[[modules]]\n"
+                 "id = \"clock\"\n"
+                 "command = [\""
+              << GISLAND_FAKE_MODULE_PATH
+              << "\", \"interactive-data\"]\n"
+                 "restart = \"never\"\n"
+                 "[modules.view.compact]\n"
+                 "type = \"text\"\n"
+                 "value = { bind = \"time\" }\n"
+                 "role = \"body\"\n"
+                 "[modules.view.expanded]\n"
+                 "type = \"text\"\n"
+                 "value = { bind = \"time\" }\n"
+                 "role = \"body\"\n"
+                 "[[modules]]\n"
+                 "id = \"launcher\"\n"
+                 "command = [\""
+              << GISLAND_LUA_HOST_PATH << "\", \"" << GISLAND_LAUNCHER_LUA_PATH
+              << "\"]\nprotocol_min = \"1.10\"\nprotocol_max = \"1.10\"\n"
+                 "restart = \"never\"\n";
+  write_text(config.config_path(), config_text.str());
+  ChildProcess child{config.home(), config.application_log()};
+  const std::string socket = (config.home() / "gisland.sock").string();
+  std::optional<Window> window;
+  const bool started = wait_until([&] {
+    XSync(display, False);
+    window = find_gisland_window(display);
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return window && status && std::get<gisland::ControlStatus>(status->value()).compact;
+  });
+  INFO(read_text(config.application_log()));
+  REQUIRE(started);
+  XSetInputFocus(display, previous, RevertToPointerRoot, CurrentTime);
+  XSync(display, False);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
+  REQUIRE(
+      gisland::send_control_command(socket, gisland::ActivateOpenControl{"launcher"}).has_value());
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (!response) {
+      return false;
+    }
+    const auto &status = std::get<gisland::ControlStatus>(response->value());
+    return status.visible && status.expanded && status.expanded->instance_id == "launcher";
+  }));
+  Window focused = None;
+  int revert = 0;
+  REQUIRE(wait_until([&] {
+    XGetInputFocus(display, &focused, &revert);
+    return focused == *window;
+  }));
+  XSetInputFocus(display, previous, RevertToPointerRoot, CurrentTime);
+  XSync(display, False);
+  REQUIRE(wait_until([&] {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    return response &&
+           std::get<gisland::ControlStatus>(response->value()).mode == gisland::IslandMode::compact;
+  }));
+
+  const auto retained = gisland::send_control_command(socket, gisland::StatusControl{});
+  REQUIRE(retained.has_value());
+  const auto &retained_status = std::get<gisland::ControlStatus>(retained->value());
+  CHECK(retained_status.visible);
+  REQUIRE(retained_status.expanded.has_value());
+  CHECK(retained_status.expanded->instance_id == "launcher");
+  XGetInputFocus(display, &focused, &revert);
+  CHECK(focused == previous);
+
+  bool hidden = false;
+  bool focus_preserved = true;
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    const auto response = gisland::send_control_command(socket, gisland::StatusControl{});
+    if (response && !std::get<gisland::ControlStatus>(response->value()).visible) {
+      hidden = true;
+      break;
+    }
+    XGetInputFocus(display, &focused, &revert);
+    focus_preserved = focus_preserved && focused == previous;
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+  }
+  CHECK(hidden);
+  CHECK(focus_preserved);
   XDestroyWindow(display, previous);
   XCloseDisplay(display);
 }

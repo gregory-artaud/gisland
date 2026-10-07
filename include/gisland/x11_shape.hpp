@@ -2,6 +2,8 @@
 
 #include "gisland/island.hpp"
 
+#include <vector>
+
 namespace gisland {
 
 class RoundedWindowShape final {
@@ -16,6 +18,8 @@ public:
   [[nodiscard]] bool available() const;
   void apply(const void *native_window_handle, const IslandGeometry &geometry,
              const IslandPlacement &placement) const;
+  void apply(const void *native_window_handle, const IslandPlacement &placement,
+             const std::vector<IslandMaskRow> &mask_rows) const;
 
 private:
   void *display_;

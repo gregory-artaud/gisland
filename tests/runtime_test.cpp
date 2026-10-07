@@ -238,6 +238,14 @@ TEST_CASE("runtime removes stopped instances and emits only changed ready visibi
   REQUIRE(expanded.size() == 1);
   CHECK(expanded[0] == gisland::VisibilityUpdate{"clock", gisland::Visibility::expanded_active});
 
+  const auto hidden = runtime.visibility_updates(now, gisland::IslandMode::expanded, false);
+  REQUIRE(hidden.size() == 1);
+  CHECK(hidden[0] == gisland::VisibilityUpdate{"clock", gisland::Visibility::hidden});
+  CHECK(runtime.visibility_updates(now, gisland::IslandMode::compact, false).empty());
+  const auto reappeared = runtime.visibility_updates(now, gisland::IslandMode::expanded, true);
+  REQUIRE(reappeared.size() == 1);
+  CHECK(reappeared[0] == gisland::VisibilityUpdate{"clock", gisland::Visibility::expanded_active});
+
   REQUIRE(runtime.consume(gisland::ContextsRemovedEvent{"clock", now}).has_value());
   CHECK(runtime.active(now).context == nullptr);
   CHECK(runtime.visibility_updates(now, gisland::IslandMode::compact).empty());

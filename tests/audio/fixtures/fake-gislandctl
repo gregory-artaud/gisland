@@ -36,7 +36,7 @@ if os.environ.get("GISLAND_AUDIO_FAKE_GISLANDCTL_SLEEP"):
 if os.environ.get("GISLAND_AUDIO_FAKE_GISLANDCTL_FAIL"):
     print("fake gislandctl failure", file=sys.stderr)
     raise SystemExit(1)
-if sys.argv[1:] != ["close"]:
+if sys.argv[1:] != ["collapse"]:
     raise SystemExit(f"unexpected gislandctl command: {sys.argv[1:]!r}")
 real_gislandctl = os.environ.get("GISLAND_AUDIO_REAL_GISLANDCTL")
 if real_gislandctl:

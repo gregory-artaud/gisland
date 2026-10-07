@@ -11,9 +11,11 @@ Run `gislandctl help` or `gislandctl --help` for the installed command summary.
 | Command | Effect |
 | --- | --- |
 | `gislandctl open` | Open the expanded island. |
-| `gislandctl close` | Return to compact mode. |
+| `gislandctl close` | Hide in hidden mode; otherwise return to compact. |
+| `gislandctl collapse` | Return to compact without ending the current presentation. |
+| `gislandctl hidden-mode on\|off\|toggle` | Change the hidden-at-rest policy for this session. |
 | `gislandctl toggle` | Toggle compact/expanded mode. |
-| `gislandctl status [--json]` | Show mode, compact/expanded owners, module states, and socket. |
+| `gislandctl status [--json]` | Show mode, hidden policy, visibility, owners, module states, and socket. |
 | `gislandctl modules` | List configured module instances and their state. |
 | `gislandctl reload` | Transactionally reload configuration, theme, and module package files. |
 | `gislandctl module restart <instance>` | Gracefully replace one enabled instance. |
@@ -32,12 +34,14 @@ hours. Examples: `250ms`, `5s`, `10m`, `1h`. Fractional values such as `1.5s` ar
 ## Status and shell automation
 
 Human-readable output is intended for terminals. Scripts should use `status --json`, whose current
-schema has `format_version: 2`:
+schema has `format_version: 3`:
 
 ```json
 {
-  "format_version": 2,
+  "format_version": 3,
   "mode": "compact",
+  "hidden_mode": false,
+  "visible": true,
   "compact": {"instance_id":"clock","context_id":"clock","priority":0},
   "expanded": {"instance_id":"clock","context_id":"clock","priority":0},
   "modules": [
@@ -50,6 +54,11 @@ schema has `format_version: 2`:
 `compact` or `expanded` is `null` when that slot has no selected context. Module states are
 `disabled`, `stopped`, `starting`, `running`, `backoff`, `stopping`, or `failed`. `available` means
 the instance can currently participate in controls; it is distinct from the lifecycle state.
+
+`hidden_mode` reports the current session policy. `visible` reports whether the overlay is
+presented, including its arrival and departure animations. The compact/expanded `mode` and
+selected owners remain available while hidden. The client also accepts legacy status formats
+1 and 2, which imply `hidden_mode: false` and `visible: true`.
 
 Example with `jq`:
 
@@ -99,6 +108,38 @@ control, which avoids intermediate state in a key binding.
 `dismiss` takes a context ID, not an instance ID. Dismissal removes that context from arbitration;
 the module may publish it again later.
 
+## Hidden at rest
+
+Set the startup policy in the configuration:
+
+```toml
+[interaction]
+hidden_mode = true
+```
+
+The default is `false`. While hidden, the island leaves no marker or hover target. Use the
+existing module commands to show it directly in the requested state:
+
+```bash
+gislandctl activate clock
+gislandctl activate-open clock
+gislandctl hidden-mode toggle
+gislandctl close
+```
+
+An activation shows the selected module for three seconds without interaction. Another call
+refreshes this delay. Hover or keyboard focus holds the island open; leaving both starts a
+fresh three-second delay. `close`, Escape, and a module's close-on-activate action hide it
+directly. `collapse` only returns to compact and preserves its presentation lifetime.
+
+Automatic module events can still show the island and keep their declared lifetimes;
+persistent presentations remain until closed, withdrawn, or replaced. Arrival and departure
+use the capillary spring transition, or snap when reduced motion is enabled.
+
+`hidden-mode` changes only the current session. Restarting restores the configured policy.
+An unrelated reload preserves the session choice; changing `interaction.hidden_mode` in the
+configuration and successfully reloading applies that new choice.
+
 ## Reload and restart
 
 `reload` rereads the exact configuration path selected when gisland started, then the selected
@@ -117,8 +158,9 @@ unwatched dependency such as a Lua file loaded through `require`.
 i3 bindings are ordinary process commands:
 
 ```i3
-bindsym $mod+grave exec --no-startup-id gislandctl toggle
+bindsym $mod+grave exec --no-startup-id gislandctl activate clock
 bindsym $mod+Shift+grave exec --no-startup-id gislandctl close
+bindsym $mod+Ctrl+grave exec --no-startup-id gislandctl hidden-mode toggle
 bindsym XF86AudioMute exec --no-startup-id gislandctl action audio toggle-mute
 bindsym XF86AudioRaiseVolume exec --no-startup-id gislandctl action audio volume-up
 bindsym XF86AudioLowerVolume exec --no-startup-id gislandctl action audio volume-down
@@ -128,7 +170,7 @@ For `sxhkd`:
 
 ```text
 super + grave
-    gislandctl toggle
+    gislandctl activate clock
 
 super + shift + grave
     gislandctl close
