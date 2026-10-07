@@ -42,3 +42,9 @@ protocol_max = "1.8"
 step_percent = 5
 maximum_percent = 150
 hud_duration_ms = 1500
+
+[[modules]]
+id = "power-menu"
+module = "power-menu"
+enabled = true
+restart = "on-failure"

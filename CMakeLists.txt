@@ -574,6 +574,11 @@ configure_file(
   @ONLY
 )
 configure_file(
+  packaging/power-menu.module.toml.in
+  "${PROJECT_BINARY_DIR}/install/power-menu.module.toml"
+  @ONLY
+)
+configure_file(
   packaging/lua-example.module.toml.in
   "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
   @ONLY
@@ -633,6 +638,15 @@ install(
     assets/modules/audio/audio.lua
     assets/modules/audio/command.lua
   DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/audio"
+)
+install(
+  FILES "${PROJECT_BINARY_DIR}/install/power-menu.module.toml"
+  RENAME module.toml
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/power-menu"
+)
+install(
+  FILES assets/modules/power-menu/config.toml assets/modules/power-menu/power_menu.lua
+  DESTINATION "${GISLAND_INSTALL_DATA_SUBDIR}/modules/power-menu"
 )
 install(
   FILES "${PROJECT_BINARY_DIR}/install/lua-example.module.toml"
@@ -718,6 +732,15 @@ if(BUILD_TESTING)
         --protocol-minor 8
     )
   endif()
+  add_test(
+    NAME power_menu_contract
+    COMMAND
+      ${CMAKE_COMMAND} -E env "LUA_PATH=${GISLAND_LGI_LUA_PATH};;"
+      "LUA_CPATH=${GISLAND_LGI_LUA_CPATH};;" "${Python3_EXECUTABLE}"
+      "${PROJECT_SOURCE_DIR}/tests/power_menu/power_menu_contract.py"
+      $<TARGET_FILE:gisland-lua-host>
+      "${PROJECT_SOURCE_DIR}/assets/modules/power-menu/power_menu.lua"
+  )
   add_test(
     NAME audio_command
     COMMAND

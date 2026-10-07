@@ -157,7 +157,7 @@ TEST_CASE(
   REQUIRE(bootstrap.has_value());
   CHECK(bootstrap->config_path == std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "config.toml");
   CHECK(bootstrap->config.default_module == "clock");
-  REQUIRE(bootstrap->config.modules.size() == 4);
+  REQUIRE(bootstrap->config.modules.size() == 5);
   CHECK(bootstrap->config.modules.front().module_id == "clock-calendar");
   const auto clock_package =
       std::filesystem::path{GISLAND_TEST_ASSET_ROOT} / "modules/clock-calendar";
@@ -223,7 +223,14 @@ TEST_CASE(
   CHECK(bootstrap->config.modules[3].dependencies.entry->path ==
         std::filesystem::canonical(audio_package / "audio.lua"));
   CHECK(std::filesystem::is_regular_file(audio_package / "command.lua"));
-  REQUIRE(bootstrap->manifest_paths.size() == 4);
+  const auto &power_menu = bootstrap->config.modules[4];
+  CHECK(power_menu.module_id == "power-menu");
+  CHECK(power_menu.minimum_protocol == gisland::ProtocolVersion{1, 11});
+  CHECK(power_menu.maximum_protocol == gisland::ProtocolVersion{1, 11});
+  CHECK(power_menu.command[1] ==
+        std::filesystem::canonical(std::filesystem::path{GISLAND_TEST_ASSET_ROOT} /
+                                   "modules/power-menu/power_menu.lua"));
+  REQUIRE(bootstrap->manifest_paths.size() == 5);
   CHECK_FALSE(bootstrap->config.modules[1].view.has_value());
   const auto *clock_view =
       bootstrap->config.modules.front().view ? &*bootstrap->config.modules.front().view : nullptr;
