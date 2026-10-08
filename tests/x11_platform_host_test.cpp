@@ -142,6 +142,50 @@ TEST_CASE("X11 host publishes stable overlay properties without accepting focus"
   XFree(hints);
 }
 
+TEST_CASE("X11 host requests all workspaces and overlay state after every remap") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  X11Windows windows;
+  Window subject = windows.subject();
+  auto host = gisland::create_x11_platform_host(&subject);
+  REQUIRE(host.has_value());
+  const Window root = DefaultRootWindow(windows.display());
+  const Atom desktop = XInternAtom(windows.display(), "_NET_WM_DESKTOP", False);
+  const Atom state = XInternAtom(windows.display(), "_NET_WM_STATE", False);
+  const Atom above = XInternAtom(windows.display(), "_NET_WM_STATE_ABOVE", False);
+  const Atom sticky = XInternAtom(windows.display(), "_NET_WM_STATE_STICKY", False);
+  XSelectInput(windows.display(), root, SubstructureNotifyMask);
+  for (int cycle = 0; cycle < 2; ++cycle) {
+    XUnmapWindow(windows.display(), subject);
+    // Window managers remove these properties when a client withdraws its window.
+    XDeleteProperty(windows.display(), subject, desktop);
+    XDeleteProperty(windows.display(), subject, state);
+    XMapWindow(windows.display(), subject);
+    XSync(windows.display(), False);
+    REQUIRE((*host)->poll_events().has_value());
+    XSync(windows.display(), False);
+    bool requested_desktops = false;
+    bool requested_state = false;
+    XEvent event{};
+    while (XCheckTypedEvent(windows.display(), ClientMessage, &event) != 0) {
+      const auto &message = event.xclient;
+      if (message.window != subject || message.format != 32) {
+        continue;
+      }
+      if (message.message_type == desktop) {
+        requested_desktops =
+            static_cast<std::uint32_t>(message.data.l[0]) == 0xFFFFFFFFU && message.data.l[1] == 1;
+      } else if (message.message_type == state) {
+        requested_state = message.data.l[0] == 1 && static_cast<Atom>(message.data.l[1]) == above &&
+                          static_cast<Atom>(message.data.l[2]) == sticky && message.data.l[3] == 1;
+      }
+    }
+    CHECK(requested_desktops);
+    CHECK(requested_state);
+  }
+}
+
 TEST_CASE("X11 host resolves output and offsets its shaped input region") {
   if (std::getenv("DISPLAY") == nullptr) {
     SKIP("requires an X11 display");

@@ -332,6 +332,39 @@ std::expected<std::vector<PlatformEvent>, PlatformError> X11PlatformHost::poll_e
     if (event.type == randr_event_base_ + RRScreenChangeNotify ||
         event.type == randr_event_base_ + RRNotify) {
       events.push_back(PlatformEvent{PlatformEventKind::output_topology_changed});
+    } else if (event.type == MapNotify && event.xmap.window == window_) {
+      // Withdrawal lets the WM discard the initial hints; request them again after mapping.
+      bool sent = false;
+      const bool succeeded = checked_request(display_, [&] {
+        const Window root = DefaultRootWindow(display_);
+        XEvent state{};
+        state.xclient.type = ClientMessage;
+        state.xclient.window = window_;
+        state.xclient.message_type = XInternAtom(display_, "_NET_WM_STATE", False);
+        state.xclient.format = 32;
+        state.xclient.data.l[0] = 1;
+        state.xclient.data.l[1] =
+            static_cast<long>(XInternAtom(display_, "_NET_WM_STATE_ABOVE", False));
+        state.xclient.data.l[2] =
+            static_cast<long>(XInternAtom(display_, "_NET_WM_STATE_STICKY", False));
+        state.xclient.data.l[3] = 1;
+        XEvent desktop{};
+        desktop.xclient.type = ClientMessage;
+        desktop.xclient.window = window_;
+        desktop.xclient.message_type = XInternAtom(display_, "_NET_WM_DESKTOP", False);
+        desktop.xclient.format = 32;
+        desktop.xclient.data.l[0] = 0xFFFFFFFFL;
+        desktop.xclient.data.l[1] = 1;
+        const long mask = SubstructureRedirectMask | SubstructureNotifyMask;
+        const bool state_sent = XSendEvent(display_, root, False, mask, &state) != 0;
+        const bool desktop_sent = XSendEvent(display_, root, False, mask, &desktop) != 0;
+        sent = state_sent && desktop_sent;
+      });
+      if (!succeeded || !sent) {
+        return std::unexpected(error(PlatformOperation::poll_events,
+                                     PlatformErrorSeverity::recoverable,
+                                     "could not restore the X11 overlay workspace state"));
+      }
     } else if (event.type == FocusOut && event.xfocus.window == window_ && keyboard_focused_ &&
                event.xfocus.mode == NotifyNormal) {
       Window focused = None;
