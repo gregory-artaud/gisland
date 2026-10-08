@@ -1202,6 +1202,65 @@ TEST_CASE("application keeps compact and expanded owners independent for protoco
   XCloseDisplay(display);
 }
 
+TEST_CASE("hidden mode reveals notifications at rest and during departure") {
+  if (std::getenv("DISPLAY") == nullptr) {
+    SKIP("requires an X11 display");
+  }
+  Display *display = XOpenDisplay(nullptr);
+  REQUIRE(display != nullptr);
+  TemporaryConfig config{false};
+  write_text(config.config_path(),
+             "monitor = \"primary\"\n"
+             "theme = \"default\"\n"
+             "[defaults]\ncompact = \"clock\"\nexpanded = \"clock\"\n"
+             "[interaction]\nhidden_mode = true\n"
+             "[[modules]]\nid = \"clock\"\nmodule = \"clock-calendar\"\n"
+             "[[modules]]\nid = \"notifications\"\nmodule = \"notifications\"\n"
+             "[modules.options]\nreveal_duration_ms = 1000\n");
+  ChildProcess child{config.home(), config.application_log()};
+  const auto socket = (config.home() / "gisland.sock").string();
+  const bool modules_ready = wait_until(
+      [&] { return module_running(config, "clock") && module_running(config, "notifications"); });
+  INFO(read_text(config.application_log()));
+  REQUIRE(modules_ready);
+  REQUIRE(XTestFakeMotionEvent(display, DefaultScreen(display), 20, 400, CurrentTime) != 0);
+  XSync(display, False);
+  for (int notification = 0; notification < 3; ++notification) {
+    REQUIRE(wait_until([&] {
+      const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+      if (!status) {
+        return false;
+      }
+      const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+      return notification == 1 ? snapshot.visible && snapshot.mode == gisland::IslandMode::compact
+                               : !snapshot.visible;
+    }));
+    REQUIRE(send_notification());
+    const bool revealed = wait_until([&] {
+      const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+      if (!status) {
+        return false;
+      }
+      const auto &snapshot = std::get<gisland::ControlStatus>(status->value());
+      return snapshot.visible && snapshot.mode == gisland::IslandMode::expanded &&
+             snapshot.expanded && snapshot.expanded->instance_id == "notifications";
+    });
+    INFO(read_text(config.application_log()));
+    REQUIRE(revealed);
+    XSync(display, False);
+    const auto window = find_gisland_window(display);
+    REQUIRE(window.has_value());
+    XWindowAttributes attributes{};
+    REQUIRE(XGetWindowAttributes(display, *window, &attributes) != 0);
+    CHECK(attributes.map_state == IsViewable);
+  }
+  REQUIRE(wait_until([&] {
+    const auto status = gisland::send_control_command(socket, gisland::StatusControl{});
+    return status && !std::get<gisland::ControlStatus>(status->value()).visible;
+  }));
+  XCloseDisplay(display);
+}
+
 TEST_CASE("application renders a freedesktop notification from the shipped daemon") {
   if (std::getenv("DISPLAY") == nullptr) {
     SKIP("requires an X11 display");

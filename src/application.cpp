@@ -1345,8 +1345,14 @@ int Application::run() {
     presentation.update(now, rendered.has_value());
     presentation.reconcile(compact_key, selection.compact.revision, expanded_key,
                            selection.expanded.revision);
-    const bool retaining_hidden_departure =
-        presentation.hidden_mode() && visible && !presentation.should_present();
+    const bool selected_presentation =
+        accepted_presentation && ((compact_key == accepted_presentation->key &&
+                                   selection.compact.revision == accepted_presentation->revision) ||
+                                  (expanded_key == accepted_presentation->key &&
+                                   selection.expanded.revision == accepted_presentation->revision));
+    const bool retaining_hidden_departure = presentation.hidden_mode() && visible &&
+                                            !presentation.should_present() &&
+                                            !selected_presentation;
     const bool changed =
         !retaining_hidden_departure &&
         (selection.compact.context != nullptr || selection.expanded.context != nullptr) &&
@@ -1391,13 +1397,7 @@ int Application::run() {
             mode_controller.set_reveal(false);
           }
         }
-        if (accepted_presentation &&
-            ((selection.compact.context != nullptr &&
-              selection.compact.context->key == accepted_presentation->key &&
-              selection.compact.revision == accepted_presentation->revision) ||
-             (selection.expanded.context != nullptr &&
-              selection.expanded.context->key == accepted_presentation->key &&
-              selection.expanded.revision == accepted_presentation->revision))) {
+        if (selected_presentation) {
           presentation.reveal(accepted_presentation->key, accepted_presentation->revision,
                               accepted_presentation->expires_at);
         }
