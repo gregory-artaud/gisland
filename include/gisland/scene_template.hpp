@@ -72,6 +72,7 @@ struct TemplateRow {
   std::vector<TemplateChild> children;
   TemplateValue<std::string> alignment{std::string{"center"}};
   TemplateValue<std::string> gap{std::string{"normal"}};
+  std::optional<TransitionRegion> transition_region{};
 };
 
 struct TemplateColumn {

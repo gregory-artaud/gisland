@@ -264,6 +264,32 @@ template <typename Command>
 
 } // namespace
 
+TEST_CASE("the page region leaves its heading and the footer stationary") {
+  gisland::Row heading{texts({"Monday"})};
+  heading.transition_region = gisland::TransitionRegion::page_header;
+  gisland::Row page{{gisland::SceneNode{gisland::Column{
+      {gisland::SceneNode{std::move(heading)}, gisland::SceneNode{gisland::Text{"01", "body"}}}}}}};
+  page.transition_region = gisland::TransitionRegion::page;
+  gisland::Row title{texts({"May"}, "title")};
+  title.transition_region = gisland::TransitionRegion::fade;
+  const auto scene = gisland::SceneNode{
+      gisland::Column{{gisland::SceneNode{std::move(title)}, gisland::SceneNode{std::move(page)},
+                       gisland::SceneNode{gisland::Text{"Today", "body"}}}}};
+  const auto plan =
+      gisland::layout_scene(scene, make_theme(), gisland::ViewMode::expanded, TestGlyphMetrics{});
+  REQUIRE(plan.has_value());
+  REQUIRE(plan->fade_region);
+  REQUIRE(plan->page_region);
+  const auto &weekdays = command_at<gisland::TextDrawCommand>(*plan, 1).bounds;
+  const auto &dates = command_at<gisland::TextDrawCommand>(*plan, 2).bounds;
+  const auto &footer = command_at<gisland::TextDrawCommand>(*plan, 3).bounds;
+  CHECK(plan->fade_region->y + plan->fade_region->height <= weekdays.y);
+  CHECK(plan->page_region->y == weekdays.y + weekdays.height);
+  CHECK(plan->page_region->y <= dates.y);
+  CHECK(plan->page_region->y + plan->page_region->height >= dates.y + dates.height);
+  CHECK(plan->page_region->y + plan->page_region->height <= footer.y);
+}
+
 TEST_CASE("text layout resolves typography and compact view style") {
   const auto result =
       gisland::layout_scene(gisland::SceneNode{gisland::Text{"abc", "body"}}, make_theme(),

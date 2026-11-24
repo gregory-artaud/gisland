@@ -569,7 +569,7 @@ optional_bool(const Json &object, std::string_view field, std::string_view path)
         }
         const auto &value = transition->get_ref<const std::string &>();
         if (value != "crossfade" && value != "slide-left" && value != "slide-right" &&
-            value != "none") {
+            value != "none" && value != "page-left" && value != "page-right") {
           return std::unexpected(path_error(transition_path, "unknown content transition"));
         }
         if (!views->contains(field)) {

@@ -166,6 +166,75 @@ void draw_content(const RenderTexture2D &texture, const ContentVisual &visual,
   EndBlendMode();
 }
 
+struct PageTurn {
+  RenderTexture2D outgoing;
+  Rect page;
+  std::optional<Rect> fade;
+  ContextTransition animation;
+  int direction;
+};
+
+[[nodiscard]] Rect enclosing_rect(Rect a, Rect b) {
+  const int x = std::min(a.x, b.x);
+  const int y = std::min(a.y, b.y);
+  return {x, y, std::max(a.x + a.width, b.x + b.width) - x,
+          std::max(a.y + a.height, b.y + b.height) - y};
+}
+
+void draw_page_turn(const PageTurn &turn, const RenderTexture2D &incoming,
+                    const IslandPlacement &placement, Shader shader, int size_location,
+                    int blur_location, float opacity, bool capture_alpha) {
+  const float progress = turn.animation.visual().surface_progress;
+  const auto draw_slice = [&](const RenderTexture2D &texture, Rect rect, int offset, float alpha,
+                              Rect viewport) {
+    const int left = std::max(rect.x + offset, viewport.x);
+    const int right = std::min(rect.x + rect.width + offset, viewport.x + viewport.width);
+    if (right <= left || rect.height <= 0 || alpha <= 0.0F) {
+      return;
+    }
+    const Vector2 size{static_cast<float>(texture.texture.width),
+                       static_cast<float>(texture.texture.height)};
+    const float blur = 0.0F;
+    SetShaderValue(shader, size_location, &size, SHADER_UNIFORM_VEC2);
+    SetShaderValue(shader, blur_location, &blur, SHADER_UNIFORM_FLOAT);
+    const Rectangle source{static_cast<float>(left - offset),
+                           size.y - static_cast<float>(rect.y + rect.height),
+                           static_cast<float>(right - left), -static_cast<float>(rect.height)};
+    const Rectangle dest{placement.x + static_cast<float>(left),
+                         placement.y + static_cast<float>(rect.y), source.width, -source.height};
+    BeginShaderMode(shader);
+    DrawTexturePro(texture.texture, source, dest, {}, 0.0F, ColorAlpha(WHITE, alpha * opacity));
+    EndShaderMode();
+  };
+  const Rect surface{0, 0, incoming.texture.width, incoming.texture.height};
+  const auto stationary = [&](Rect rect) { draw_slice(incoming, rect, 0, 1.0F, surface); };
+  int y = 0;
+  const auto cutout = [&](Rect region) {
+    stationary({0, y, surface.width, region.y - y});
+    stationary({0, region.y, region.x, region.height});
+    const int right = region.x + region.width;
+    stationary({right, region.y, surface.width - right, region.height});
+    y = region.y + region.height;
+  };
+
+  rlSetBlendFactorsSeparate(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, capture_alpha ? RL_ONE : RL_ZERO,
+                            capture_alpha ? RL_ONE_MINUS_SRC_ALPHA : RL_ONE, RL_FUNC_ADD,
+                            RL_FUNC_ADD);
+  BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+  if (turn.fade) {
+    cutout(*turn.fade);
+    draw_slice(turn.outgoing, *turn.fade, 0, 1.0F - progress, *turn.fade);
+    draw_slice(incoming, *turn.fade, 0, progress, *turn.fade);
+  }
+  cutout(turn.page);
+  stationary({0, y, surface.width, surface.height - y});
+  const int distance = turn.direction * turn.page.width;
+  const int travelled = static_cast<int>(std::lround(static_cast<float>(distance) * progress));
+  draw_slice(turn.outgoing, turn.page, -travelled, 1.0F, turn.page);
+  draw_slice(incoming, turn.page, distance - travelled, 1.0F, turn.page);
+  EndBlendMode();
+}
+
 struct RevealCompositeResources {
   RenderTexture2D content{};
   RenderTexture2D mask{};
@@ -851,6 +920,14 @@ int Application::run() {
     }
   };
 
+  std::optional<PageTurn> page_turn;
+  const auto clear_page_turn = [&] {
+    if (page_turn) {
+      UnloadRenderTexture(page_turn->outgoing);
+      page_turn.reset();
+    }
+  };
+
   const auto replace_rendered = [&](RenderedContext candidate, bool preserve_expanded,
                                     const AnimationStyle &animation,
                                     ContextTransitionKind transition_kind,
@@ -874,6 +951,43 @@ int Application::run() {
       transition_duration = requested_transition && *requested_transition != ContentTransition::none
                                 ? animation.content_transition.duration
                                 : std::chrono::milliseconds{0};
+    }
+    const bool page_requested = requested_transition == ContentTransition::page_left ||
+                                requested_transition == ContentTransition::page_right;
+    const bool same_page_layout =
+        preserve_expanded && rendered && rendered->expanded && candidate.expanded &&
+        rendered->expanded_key == candidate.expanded_key &&
+        rendered->expanded->view.bounds == candidate.expanded->view.bounds &&
+        rendered->expanded->page_region == candidate.expanded->page_region;
+    const bool keep_page_turn = same_page_layout && requested_transition == ContentTransition::none;
+    if (!keep_page_turn) {
+      clear_page_turn();
+    }
+    if (page_requested) {
+      if (same_page_layout && spring.value() == 1.0F && !context_transition.active() &&
+          content_crossfade.expanded().opacity == 1.0F && rendered->expanded_content &&
+          candidate.expanded->page_region && transition_duration.count() > 0) {
+        const Rect page = *candidate.expanded->page_region;
+        std::optional<Rect> fade;
+        if (candidate.expanded->fade_region && rendered->expanded->fade_region) {
+          const Rect bounds =
+              enclosing_rect(*candidate.expanded->fade_region, *rendered->expanded->fade_region);
+          if (bounds.y + bounds.height <= page.y) {
+            fade = bounds;
+          }
+        }
+        if (page.width > 0 && page.height > 0) {
+          page_turn = PageTurn{*rendered->expanded_content,
+                               page,
+                               fade,
+                               {},
+                               requested_transition == ContentTransition::page_left ? 1 : -1};
+          page_turn->animation.start({}, {}, transition_duration,
+                                     animation.content_transition.easing);
+          rendered->expanded_content.reset();
+        }
+      }
+      transition_duration = std::chrono::milliseconds{0};
     }
     if (preserve_compact_content && rendered) {
       std::swap(candidate.compact, rendered->compact);
@@ -1162,6 +1276,7 @@ int Application::run() {
                        effective_animation(bootstrap_.theme),
                        ContextTransitionKind::full_crossfade);
     } else {
+      clear_page_turn();
       clear_outgoing();
       if (rendered) {
         unload(*rendered);
@@ -1406,6 +1521,7 @@ int Application::run() {
       }
     } else if (selection.compact.context == nullptr && selection.expanded.context == nullptr &&
                rendered) {
+      clear_page_turn();
       clear_outgoing();
       unload(*rendered);
       rendered.reset();
@@ -1752,6 +1868,12 @@ int Application::run() {
         std::cerr << redrawn.error().message << '\n';
       }
     }
+    if (page_turn) {
+      page_turn->animation.update(animation_delta);
+      if (mode != IslandMode::expanded || !page_turn->animation.active()) {
+        clear_page_turn();
+      }
+    }
     const bool context_was_active = context_transition.active();
     context_transition.update(animation_delta);
     if (!context_transition.active()) {
@@ -1827,7 +1949,11 @@ int Application::run() {
                      with_opacity(content_crossfade.compact(), incoming_opacity * reveal_opacity),
                      current, placement, blur_shader, texture_size_location, blur_radius_location,
                      context_content_alignment, transition_visual.incoming_offset_x, capture_alpha);
-        if (rendered->expanded_content) {
+        if (page_turn && rendered->expanded_content) {
+          draw_page_turn(*page_turn, *rendered->expanded_content, placement, blur_shader,
+                         texture_size_location, blur_radius_location, reveal_opacity,
+                         capture_alpha);
+        } else if (rendered->expanded_content) {
           draw_content(
               *rendered->expanded_content,
               with_opacity(content_crossfade.expanded(), incoming_opacity * reveal_opacity),
@@ -1929,6 +2055,7 @@ int Application::run() {
       },
       [&dispatcher](PendingControlToken token) { static_cast<void>(dispatcher.cancel(token)); });
   supervisor.shutdown();
+  clear_page_turn();
   clear_outgoing();
   if (rendered) {
     unload(*rendered);

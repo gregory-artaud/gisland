@@ -660,7 +660,11 @@ parse_scene_template(const toml::table &table, const std::string &path,
                                            std::move(*placeholder), std::move(*label)}};
   }
   if (*type == "row" || *type == "column") {
-    auto keys = require_keys(table, {"type", "children", "alignment", "gap"}, path, source_name);
+    auto keys =
+        *type == "row"
+            ? require_keys(table, {"type", "children", "alignment", "gap", "transition_region"},
+                           path, source_name)
+            : require_keys(table, {"type", "children", "alignment", "gap"}, path, source_name);
     auto children = parse_template_children(table, path, source_name);
     auto alignment = template_field<std::string>(table, "alignment", path + ".alignment",
                                                  source_name, std::string{"center"});
@@ -679,8 +683,22 @@ parse_scene_template(const toml::table &table, const std::string &path,
       return std::unexpected(gap.error());
     }
     if (*type == "row") {
+      std::optional<TransitionRegion> region;
+      if (const auto *value = table.get("transition_region"); value != nullptr) {
+        const auto kind = value->value_exact<std::string>();
+        if (kind == "page") {
+          region = TransitionRegion::page;
+        } else if (kind == "fade") {
+          region = TransitionRegion::fade;
+        } else if (kind == "page-header") {
+          region = TransitionRegion::page_header;
+        } else {
+          return std::unexpected(error_at(source_name, path + ".transition_region",
+                                          "expected page, fade or page-header", value));
+        }
+      }
       return SceneTemplate{
-          TemplateRow{std::move(*children), std::move(*alignment), std::move(*gap)}};
+          TemplateRow{std::move(*children), std::move(*alignment), std::move(*gap), region}};
     }
     return SceneTemplate{
         TemplateColumn{std::move(*children), std::move(*alignment), std::move(*gap)}};

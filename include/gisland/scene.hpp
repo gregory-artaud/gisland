@@ -121,6 +121,8 @@ struct TextInput {
   std::string accessible_label;
 };
 
+enum class TransitionRegion { page, fade, page_header };
+
 struct Row {
   explicit Row(std::vector<SceneNode> nodes, std::string alignment = "center",
                std::string gap = "normal");
@@ -128,6 +130,7 @@ struct Row {
   std::vector<SceneChild> children;
   std::string alignment;
   std::string gap;
+  std::optional<TransitionRegion> transition_region{};
 };
 
 struct Column {

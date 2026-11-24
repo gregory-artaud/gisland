@@ -264,6 +264,23 @@ public:
   place(const MeasuredNode &node, Rect assigned, Rect clip,
         std::vector<ContentDrawCommand> &commands,
         std::vector<InteractionTarget> &interactions) const {
+    if (const auto *row = std::get_if<Row>(&node.scene->value); row && row->transition_region) {
+      auto visible = intersect(assigned, clip, node.path);
+      if (!visible) {
+        return std::unexpected(visible.error());
+      }
+      if (*row->transition_region == TransitionRegion::page_header) {
+        page_header_bottom = std::max(page_header_bottom, visible->y + visible->height);
+      } else {
+        auto &region =
+            *row->transition_region == TransitionRegion::page ? page_region : fade_region;
+        if (region) {
+          return std::unexpected(error(LayoutErrorCode::impossible_constraints, node.path,
+                                       "duplicate transition region"));
+        }
+        region = *visible;
+      }
+    }
     return std::visit(
         [this, &node, assigned, clip, &commands, &interactions](const auto &primitive) {
           return place_primitive(node, primitive, assigned, clip, commands, interactions);
@@ -283,6 +300,10 @@ public:
         },
         node.scene->value);
   }
+
+  mutable std::optional<Rect> page_region;
+  mutable std::optional<Rect> fade_region;
+  mutable int page_header_bottom{};
 
 private:
   [[nodiscard]] static LayoutError rich_error(const RichTextError &rich, const std::string &path) {
@@ -1840,6 +1861,14 @@ layout_scene_impl(const SceneNode &scene, const Theme &theme, ViewMode mode,
   if (!placed) {
     return std::unexpected(placed.error());
   }
+  plan.page_region = builder.page_region;
+  if (plan.page_region && builder.page_header_bottom > plan.page_region->y) {
+    auto &page = *plan.page_region;
+    const int inset = std::min(page.height, builder.page_header_bottom - page.y);
+    page.y += inset;
+    page.height -= inset;
+  }
+  plan.fade_region = builder.fade_region;
   if (leading_cap != nullptr && !plan.content.empty()) {
     if (auto *image = std::get_if<ImageDrawCommand>(&plan.content.front()); image != nullptr) {
       image->clip = view_bounds;

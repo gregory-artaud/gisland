@@ -207,6 +207,8 @@ struct LayoutPlan {
   RoundedView view;
   std::vector<ContentDrawCommand> content;
   std::vector<InteractionTarget> interactions{};
+  std::optional<Rect> page_region{};
+  std::optional<Rect> fade_region{};
 };
 
 enum class LayoutErrorCode {

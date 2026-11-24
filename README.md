@@ -776,6 +776,13 @@ easing = "ease-in-out"
 duration_ms = 0
 ```
 
+Configured expanded views can request `page-left` or `page-right` to slide a single row the
+full width of its viewport. Mark that row with `transition_region = "page"`. A separate row
+above it can use `transition_region = "fade"` to crossfade a title independently. Rows inside
+the page marked `transition_region = "page-header"` stay fixed and set the top edge of the moving
+region. Page transitions apply between settled views of the same size and context. A subsequent
+`none` snapshot with the same layout can update stationary content during the transition.
+
 ## Repository Layout
 
 ```text

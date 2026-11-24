@@ -238,7 +238,9 @@ public:
             if (!gap) {
               return std::unexpected(gap.error());
             }
-            return SceneNode{Row{std::move(*children), std::move(*alignment), std::move(*gap)}};
+            Row row{std::move(*children), std::move(*alignment), std::move(*gap)};
+            row.transition_region = primitive.transition_region;
+            return SceneNode{std::move(row)};
           } else if constexpr (std::is_same_v<Primitive, TemplateColumn>) {
             auto children = instantiate_children(primitive.children, path);
             auto alignment = resolve_value(primitive.alignment, context_, path + "/alignment");

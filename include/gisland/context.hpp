@@ -25,7 +25,7 @@ struct ContextKey {
 
 enum class ViewSlot { compact, expanded };
 
-enum class ContentTransition { crossfade, slide_left, slide_right, none };
+enum class ContentTransition { crossfade, slide_left, slide_right, none, page_left, page_right };
 
 struct ViewTransitions {
   std::optional<ContentTransition> compact;

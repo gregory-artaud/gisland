@@ -917,6 +917,12 @@ parse_view_transitions(const Json &object) {
     if (name == "slide-right") {
       return std::optional{ContentTransition::slide_right};
     }
+    if (name == "page-left") {
+      return std::optional{ContentTransition::page_left};
+    }
+    if (name == "page-right") {
+      return std::optional{ContentTransition::page_right};
+    }
     if (name == "none") {
       return std::optional{ContentTransition::none};
     }

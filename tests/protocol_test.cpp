@@ -102,6 +102,18 @@ TEST_CASE("protocol preserves an explicit request for no content transition") {
   CHECK_FALSE(data.transitions.expanded.has_value());
 }
 
+TEST_CASE("data can request a directional page transition") {
+  for (const auto &[direction, expected] :
+       {std::pair{"page-left", gisland::ContentTransition::page_left},
+        std::pair{"page-right", gisland::ContentTransition::page_right}}) {
+    const auto line = std::string{R"({"type":"data","value":{},"transitions":{"expanded":")"} +
+                      direction + R"("}})";
+    const auto parsed = gisland::parse_module_message(line);
+    REQUIRE(parsed.has_value());
+    CHECK(std::get<gisland::DataMessage>(*parsed).transitions.expanded == expected);
+  }
+}
+
 TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") {
   const auto result = gisland::parse_module_message(R"({
     "type":"publish","context_id":"launcher","priority":100,"activation_only":true,
