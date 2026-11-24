@@ -917,6 +917,9 @@ parse_view_transitions(const Json &object) {
     if (name == "slide-right") {
       return std::optional{ContentTransition::slide_right};
     }
+    if (name == "none") {
+      return std::optional{ContentTransition::none};
+    }
     return std::unexpected(
         error_at(field_path("/transitions", field), "unknown content transition"));
   };

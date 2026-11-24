@@ -832,7 +832,7 @@ TEST_CASE("lua host data transitions require strict negotiated metadata",
   auto host = gisland::LuaHost::load("data-transitions.lua", R"lua(return gisland.module {
     init = function(_, metadata)
       gisland.data { plain = true }
-      gisland.data({ animated = true }, { compact = "crossfade", expanded = "slide-left" })
+      gisland.data({ animated = true }, { compact = "none", expanded = "slide-left" })
       assert(not pcall(gisland.data, { invalid = true }, nil))
       assert(not pcall(gisland.data, { invalid = true }, {}))
       assert(not pcall(gisland.data, { invalid = true }, gisland.array()))
@@ -857,7 +857,7 @@ TEST_CASE("lua host data transitions require strict negotiated metadata",
   CHECK(records[2] ==
         nlohmann::json{{"type", "data"},
                        {"value", {{"animated", true}}},
-                       {"transitions", {{"compact", "crossfade"}, {"expanded", "slide-left"}}}});
+                       {"transitions", {{"compact", "none"}, {"expanded", "slide-left"}}}});
 }
 
 TEST_CASE("lua host rejects requested data transitions when they were not negotiated",

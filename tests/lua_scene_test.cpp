@@ -324,15 +324,14 @@ TEST_CASE("lua publish accepts strict content transitions", "[lua_scene]") {
         compact = gisland.ui.spacer {},
         expanded = gisland.ui.spacer {},
       },
-      transitions = { compact = "crossfade", expanded = "slide-right" },
+      transitions = { compact = "none", expanded = "slide-right" },
     }
   end })lua",
                                             {"content-transitions"}, 9);
 
   REQUIRE(result.has_value());
   REQUIRE(records.size() == 2);
-  CHECK(records[1].at("transitions") ==
-        Json{{"compact", "crossfade"}, {"expanded", "slide-right"}});
+  CHECK(records[1].at("transitions") == Json{{"compact", "none"}, {"expanded", "slide-right"}});
 }
 
 TEST_CASE("lua publish rejects malformed content transitions", "[lua_scene]") {

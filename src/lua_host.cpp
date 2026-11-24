@@ -901,7 +901,8 @@ private:
       std::size_t value_size = 0;
       const char *value_data = lua_tolstring(state, -1, &value_size);
       const std::string value{value_data, value_size};
-      if (value != "crossfade" && value != "slide-left" && value != "slide-right") {
+      if (value != "crossfade" && value != "slide-left" && value != "slide-right" &&
+          value != "none") {
         lua_pop(state, 2);
         return std::unexpected("unsupported gisland.data transition '" + value + "'");
       }

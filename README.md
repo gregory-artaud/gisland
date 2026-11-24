@@ -759,8 +759,9 @@ attach a semantic transition independently to either updated view:
 }
 ```
 
-The closed catalogue is `crossfade`, `slide-left`, and `slide-right`. Omitting `transitions` keeps
-the default crossfade. Modules choose only the semantic type; the theme owns duration, horizontal
+The catalogue is `crossfade`, `slide-left`, `slide-right`, and `none`. Use `none` to replace a
+view immediately, for example when updating a clock every second. Omitting `transitions` keeps
+the default crossfade. For animated transitions, the theme owns duration, horizontal
 distance, easing, and reduced-motion duration. The core captures, interpolates, and clips outgoing
 and incoming content. Set `GISLAND_REDUCED_MOTION=1` (or `true`) to select the theme's
 reduced-motion values.

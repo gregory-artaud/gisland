@@ -93,6 +93,15 @@ TEST_CASE("protocol 1.9 parses independent content transitions") {
         gisland::ContentTransition::slide_right);
 }
 
+TEST_CASE("protocol preserves an explicit request for no content transition") {
+  const auto result = gisland::parse_module_message(
+      R"({"type":"data","value":{"time":"12:34:56"},"transitions":{"compact":"none"}})");
+  REQUIRE(result.has_value());
+  const auto &data = std::get<gisland::DataMessage>(*result);
+  CHECK(data.transitions.compact == gisland::ContentTransition::none);
+  CHECK_FALSE(data.transitions.expanded.has_value());
+}
+
 TEST_CASE("protocol 1.10 parses text input expanded styles and close behavior") {
   const auto result = gisland::parse_module_message(R"({
     "type":"publish","context_id":"launcher","priority":100,"activation_only":true,

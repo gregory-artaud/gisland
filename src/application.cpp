@@ -869,10 +869,12 @@ int Application::run() {
     const bool layout_only = use_layout_only_transition(
         keyboard_session, expanded_updated, rendered ? rendered->expanded_key : std::nullopt,
         candidate.expanded_key, requested_transition);
-    auto transition_duration = has_declared_transition
-                                   ? (requested_transition ? animation.content_transition.duration
-                                                           : std::chrono::milliseconds{0})
-                                   : animation.context_change_ms;
+    auto transition_duration = animation.context_change_ms;
+    if (has_declared_transition) {
+      transition_duration = requested_transition && *requested_transition != ContentTransition::none
+                                ? animation.content_transition.duration
+                                : std::chrono::milliseconds{0};
+    }
     if (preserve_compact_content && rendered) {
       std::swap(candidate.compact, rendered->compact);
       std::swap(candidate.compact_images, rendered->compact_images);
